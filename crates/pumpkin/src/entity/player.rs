@@ -355,7 +355,7 @@ fn read_root_vehicle(nbt: &NbtCompound) -> Option<Uuid> {
     ))
 }
 
-pub const DATA_VERSION: i32 = 4903; // 26.2
+pub const DATA_VERSION: i32 = 4671; // 1.21.11
 
 /// Food exhaustion applied for every block a player mines.
 ///

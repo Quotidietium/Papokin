@@ -167,7 +167,7 @@ impl TextComponent {
     /// A legacy Minecraft formatted string with `§` color and style codes.
     #[must_use]
     pub fn to_legacy_string(&self, locale: Locale) -> String {
-        self.to_legacy_string_for_version(&crate::version::JavaMinecraftVersion::V_26_3, locale)
+        self.to_legacy_string_for_version(&crate::version::JavaMinecraftVersion::V_1_21_11, locale)
     }
 
     /// Serializes this component into a Java legacy formatted string for a specific Minecraft version.
@@ -198,7 +198,7 @@ impl TextComponent {
     #[must_use]
     pub fn to_legacy_string_with_code(&self, code_symbol: char, locale: Locale) -> String {
         self.to_legacy_string_with_code_for_version(
-            &crate::version::JavaMinecraftVersion::V_26_3,
+            &crate::version::JavaMinecraftVersion::V_1_21_11,
             code_symbol,
             locale,
         )

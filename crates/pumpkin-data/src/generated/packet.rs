@@ -1,7 +1,7 @@
 /* This file is generated. Do not edit manually. */
 use pumpkin_util::version::JavaMinecraftVersion;
 pub const CURRENT_MC_VERSION: JavaMinecraftVersion =
-    pumpkin_util::version::JavaMinecraftVersion::V_26_3;
+    pumpkin_util::version::JavaMinecraftVersion::V_1_21_11;
 pub const LOWEST_SUPPORTED_MC_VERSION: JavaMinecraftVersion = JavaMinecraftVersion::V_1_7_2;
 #[derive(Clone, Copy, Debug)]
 pub struct PacketId {
@@ -117,7 +117,7 @@ impl PacketId {
             pumpkin_util::version::JavaMinecraftVersion::V_26_1 => self.v26_1,
             pumpkin_util::version::JavaMinecraftVersion::V_26_2 => self.v26_2,
             pumpkin_util::version::JavaMinecraftVersion::V_26_3 => self.v26_3,
-            _ => self.v26_3,
+            _ => self.v1_21_11,
         }
     }
 }

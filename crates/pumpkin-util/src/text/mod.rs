@@ -101,7 +101,7 @@ impl TextComponentBase {
     /// Converts this component to an NBT compound tag for the latest Minecraft version.
     #[must_use]
     pub fn to_nbt_compound(&self) -> pumpkin_nbt::NbtCompound {
-        self.to_nbt_compound_for_version(&JavaMinecraftVersion::V_26_3)
+        self.to_nbt_compound_for_version(&JavaMinecraftVersion::V_1_21_11)
     }
 
     /// Converts this component to an NBT compound tag for a specific Minecraft version.
@@ -1594,7 +1594,7 @@ impl TextComponent {
     /// A boxed byte slice containing the NBT-encoded component.
     #[must_use]
     pub fn encode(&self) -> Box<[u8]> {
-        self.encode_for_version(&JavaMinecraftVersion::V_26_3)
+        self.encode_for_version(&JavaMinecraftVersion::V_1_21_11)
     }
 
     /// Encodes this component into a byte array using NBT serialization for a specific Minecraft version.
