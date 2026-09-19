@@ -386,7 +386,9 @@ impl Level {
                 let _ = tx.send(failed_count);
             });
 
-        match timeout(Duration::from_secs(3), rx).await {
+        // Saving a large world can take a while; abandoning the join early
+        // would lose whatever those threads have not flushed yet.
+        match timeout(Duration::from_secs(60), rx).await {
             Ok(Ok(failed_count)) => {
                 if failed_count > 0 {
                     warn!(

@@ -76,10 +76,15 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLo
         if Arc::strong_count(loader) > 1 {
             return false;
         }
-        loader
-            .internal
-            .get()
-            .is_none_or(|arc| Arc::strong_count(arc) == 1)
+        loader.internal.get().is_none_or(|arc| {
+            Arc::strong_count(arc) == 1
+                // A serializer holding unwritten data (e.g. after a failed
+                // write) must never be evicted: dropping it would silently
+                // lose that data. Being lock-busy counts as pending.
+                && arc
+                    .try_read()
+                    .is_ok_and(|serializer| !serializer.has_pending_writes())
+        })
     }
 
     /// Returns the serializer, initialising it from disk on the first call.
@@ -105,7 +110,8 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLo
                     );
                     return Ok(S::default());
                 }
-                let value = run_blocking(move || S::read(bytes.into()))
+                let path = self.path.clone();
+                let value = run_blocking(move || S::read_at(bytes.into(), &path))
                     .await
                     .map_err(|_| {
                         ChunkReadingError::IoError(std::io::Error::other(
@@ -365,10 +371,16 @@ where
                         let was_dirty = chunk.is_dirty();
                         chunk.mark_dirty(false);
 
-                        if was_dirty {
-                            writer
-                                .update_chunk(chunk.clone(), &self.chunk_config)
-                                .await?;
+                        if was_dirty
+                            && let Err(err) =
+                                writer.update_chunk(chunk.clone(), &self.chunk_config).await
+                        {
+                            // Handing the chunk to the serializer failed:
+                            // re-mark it dirty so the next save round
+                            // retries instead of silently dropping the
+                            // changes.
+                            chunk.mark_dirty(true);
+                            return Err(err);
                         }
                     }
                     // Write-lock released here — flush can proceed under a read-lock.
