@@ -195,14 +195,17 @@ mod tests {
 
     /// Walks every section and collects the block palette entries (skipping
     /// the packed data, whose bytes must not be mistaken for palette ids).
+    /// Returns `(block palettes, biome palettes)` per section.
     fn collect_block_palettes(
         sections: &[u8],
         num_sections: usize,
         has_liquid_count: bool,
-    ) -> Vec<Vec<i32>> {
+    ) -> (Vec<Vec<i32>>, Vec<Vec<i32>>) {
         let mut pos = 0;
         let mut palettes = Vec::with_capacity(num_sections);
+        let mut biome_palettes = Vec::with_capacity(num_sections);
         for _ in 0..num_sections {
+            let mut biome_palette = Vec::new();
             pos += 2; // non-air count
             if has_liquid_count {
                 pos += 2;
@@ -227,14 +230,14 @@ mod tests {
             pos += 1;
             let biome_words = match biome_bits {
                 0 => {
-                    read_var_int(sections, &mut pos);
+                    biome_palette.push(read_var_int(sections, &mut pos));
                     0
                 }
                 b => {
                     if b <= 3 {
                         let len = read_var_int(sections, &mut pos);
                         for _ in 0..len {
-                            read_var_int(sections, &mut pos);
+                            biome_palette.push(read_var_int(sections, &mut pos));
                         }
                     }
                     64usize.div_ceil(64 / b)
@@ -243,13 +246,14 @@ mod tests {
             pos += biome_words * 8;
 
             palettes.push(palette);
+            biome_palettes.push(biome_palette);
         }
         assert_eq!(
             pos,
             sections.len(),
             "parser must consume the section buffer exactly"
         );
-        palettes
+        (palettes, biome_palettes)
     }
 
     #[test]
@@ -294,9 +298,9 @@ mod tests {
         let native_buf = serialize(JavaMinecraftVersion::V_26_3);
         let old_buf = serialize(JavaMinecraftVersion::V_1_21_11);
 
-        let native_palettes =
+        let (native_palettes, _) =
             collect_block_palettes(extract_section_buffer(&native_buf), num_sections, true);
-        let old_palettes =
+        let (old_palettes, _) =
             collect_block_palettes(extract_section_buffer(&old_buf), num_sections, false);
 
         assert!(
@@ -316,6 +320,69 @@ mod tests {
                 .iter()
                 .any(|palette| palette.contains(&i32::from(raw))),
             "raw 26.3 id {raw} must never leak into a 1.21.11 palette"
+        );
+    }
+
+    #[test]
+    fn chunk_data_remaps_biomes_for_1_21_11() {
+        // Regression test for the biome half of the same problem: chunk biome
+        // palettes reference the server's dataset id space, but the client
+        // resolves them against the registry data it received at configuration
+        // time. 57 of 65 biomes sit at different indices in 1.21.11, and the
+        // two 26.x-only biomes do not exist there at all — a raw id is at best
+        // a silently wrong biome and at worst an out-of-range palette entry.
+        use pumpkin_data::biome::Biome;
+        use pumpkin_data::sync_id_remap::BIOME_SYNC_REMAP_V_26_3_TO_V_1_21_11;
+
+        let forest = u16::from(Biome::FOREST.id);
+        let expected = BIOME_SYNC_REMAP_V_26_3_TO_V_1_21_11[usize::from(forest)];
+        assert_ne!(forest, expected, "forest must shift between versions");
+
+        let chunk = ChunkData::empty(0, 0);
+        let min_y = chunk.section.min_y;
+        chunk.section.set_relative_biome(
+            0,
+            usize::try_from((64 - min_y) / 4).unwrap(),
+            0,
+            Biome::FOREST.id,
+        );
+        let num_sections = chunk.section.block_sections.read().unwrap().len();
+        let packet = CChunkData(&chunk);
+
+        let serialize = |version: JavaMinecraftVersion| {
+            let mut buf = Vec::new();
+            packet.write_packet_data(&mut buf, &version).unwrap();
+            buf
+        };
+
+        let (_, native_biomes) = collect_block_palettes(
+            extract_section_buffer(&serialize(JavaMinecraftVersion::V_26_3)),
+            num_sections,
+            true,
+        );
+        let (_, old_biomes) = collect_block_palettes(
+            extract_section_buffer(&serialize(JavaMinecraftVersion::V_1_21_11)),
+            num_sections,
+            false,
+        );
+
+        assert!(
+            native_biomes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(forest))),
+            "native (26.3) connections must receive the raw dataset biome id"
+        );
+        assert!(
+            old_biomes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(expected))),
+            "1.21.11 connections must receive the synced id {expected} (raw {forest})"
+        );
+        assert!(
+            !old_biomes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(forest))),
+            "raw dataset biome id {forest} must never leak into a 1.21.11 palette"
         );
     }
 }

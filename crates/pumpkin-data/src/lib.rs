@@ -268,6 +268,14 @@ pub mod block_properties;
 #[path = "generated/block_state_remap.rs"]
 pub mod block_state_remap;
 
+/// Remaps ids of *synced* (dynamic) registries — biome, damage type, etc. —
+/// from the bundled dataset's id space to the id space each client version
+/// actually receives at configuration time. Unlike the hardcoded registries
+/// above, these ids are defined by the registry data the server itself sends.
+#[rustfmt::skip]
+#[path = "generated/sync_id_remap.rs"]
+pub mod sync_id_remap;
+
 #[cfg(feature = "item_id_remap")]
 #[rustfmt::skip]
 #[path = "generated/item_id_remap.rs"]
@@ -478,3 +486,79 @@ pub mod block_transformer;
 #[rustfmt::skip]
 #[path = "generated/trial_spawner.rs"]
 pub mod trial_spawner;
+
+#[cfg(test)]
+mod sync_id_remap_tests {
+    use crate::biome::Biome;
+    use crate::damage::DamageType;
+    use crate::sync_id_remap::{
+        BIOME_SYNC_REMAP_V_26_3_TO_V_1_21_11, DAMAGE_TYPE_SYNC_REMAP_V_26_3_TO_V_1_21_11,
+        remap_biome_id_for_version, remap_damage_type_id_for_version,
+    };
+    use pumpkin_util::version::JavaMinecraftVersion;
+
+    /// Sorted index of the entry in the 1.21.11 datapack folder — i.e. the id
+    /// the 1.21.11 client assigns it when the server syncs the registry.
+    #[test]
+    fn biome_sync_remap_matches_1_21_11_registry() {
+        let v = JavaMinecraftVersion::V_1_21_11;
+
+        // Native-version connections stay in the dataset id space.
+        assert_eq!(
+            remap_biome_id_for_version(u16::from(Biome::PLAINS.id), JavaMinecraftVersion::V_26_3),
+            u16::from(Biome::PLAINS.id)
+        );
+        // Shared biomes translate to their 1.21.11 synced index.
+        assert_eq!(
+            remap_biome_id_for_version(u16::from(Biome::PLAINS.id), v),
+            40
+        );
+        assert_eq!(
+            remap_biome_id_for_version(u16::from(Biome::FOREST.id), v),
+            21
+        );
+        // 26.x-only biomes fall back to the closest 1.21.11 biome.
+        assert_eq!(
+            remap_biome_id_for_version(u16::from(Biome::DAPPLED_FOREST.id), v),
+            21
+        );
+        assert_eq!(
+            remap_biome_id_for_version(u16::from(Biome::SULFUR_CAVES.id), v),
+            15
+        );
+        // No entry may exceed the 1.21.11 registry's size (65 biomes), or the
+        // client would fail its palette lookup.
+        assert!(
+            BIOME_SYNC_REMAP_V_26_3_TO_V_1_21_11
+                .iter()
+                .all(|&id| id < 65)
+        );
+    }
+
+    #[test]
+    fn damage_type_sync_remap_matches_1_21_11_registry() {
+        let v = JavaMinecraftVersion::V_1_21_11;
+
+        assert_eq!(
+            remap_damage_type_id_for_version(
+                u16::from(DamageType::GENERIC.id),
+                JavaMinecraftVersion::V_26_3
+            ),
+            u16::from(DamageType::GENERIC.id)
+        );
+        // Entries before the 26.x-only `sulfur_cube_hot` keep their index.
+        assert_eq!(
+            remap_damage_type_id_for_version(u16::from(DamageType::HOT_FLOOR.id), v),
+            u16::from(DamageType::HOT_FLOOR.id)
+        );
+        assert_eq!(
+            remap_damage_type_id_for_version(u16::from(DamageType::SULFUR_CUBE_HOT.id), v),
+            20 // hot_floor
+        );
+        assert!(
+            DAMAGE_TYPE_SYNC_REMAP_V_26_3_TO_V_1_21_11
+                .iter()
+                .all(|&id| id < 50)
+        );
+    }
+}

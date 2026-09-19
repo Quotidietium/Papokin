@@ -1,6 +1,7 @@
 use super::util::write_compound_nbt;
 use pumpkin_data::NATIVE_DATA_VERSION;
 use pumpkin_data::block_state_remap::remap_block_state_for_version;
+use pumpkin_data::sync_id_remap::remap_biome_id_for_version;
 use pumpkin_protocol::codec::bit_set::BitSet;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::ser::NetworkWriteExt;
@@ -160,7 +161,49 @@ pub fn write_chunk_data(
                 }
             }
 
-            let biome_network = biome_palette.convert_network();
+            let mut biome_network = biome_palette.convert_network();
+            // Biomes are a synced registry: the client resolves palette ids
+            // against the registry data this server sent it at configuration
+            // time, whose id space drifts from the dataset's once versions
+            // add entries (see `sync_id_remap`).
+            if version < &NATIVE_DATA_VERSION {
+                match &mut biome_network.palette {
+                    NetworkPalette::Single(registry_id) => {
+                        *registry_id = u8::try_from(remap_biome_id_for_version(
+                            u16::from(*registry_id),
+                            *version,
+                        ))
+                        .unwrap_or(0);
+                    }
+                    NetworkPalette::Indirect(palette) => {
+                        for registry_id in palette.iter_mut() {
+                            *registry_id = u8::try_from(remap_biome_id_for_version(
+                                u16::from(*registry_id),
+                                *version,
+                            ))
+                            .unwrap_or(0);
+                        }
+                    }
+                    NetworkPalette::Direct => {
+                        let bits_per_entry = usize::from(biome_network.bits_per_entry);
+                        let values_per_i64 = 64 / bits_per_entry;
+                        let id_mask = (1u64 << bits_per_entry) - 1;
+
+                        for packed_word in &mut biome_network.packed_data {
+                            let mut remapped_word = 0u64;
+                            let packed_word_u64 = *packed_word as u64;
+                            for index in 0..values_per_i64 {
+                                let shift = index * bits_per_entry;
+                                let biome_id = ((packed_word_u64 >> shift) & id_mask) as u8;
+                                let remapped_id =
+                                    remap_biome_id_for_version(u16::from(biome_id), *version);
+                                remapped_word |= u64::from(remapped_id as u8) << shift;
+                            }
+                            *packed_word = remapped_word as i64;
+                        }
+                    }
+                }
+            }
             blocks_and_biomes_buf.write_u8(biome_network.bits_per_entry)?;
 
             match biome_network.palette {

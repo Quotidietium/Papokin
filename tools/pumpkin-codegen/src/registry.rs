@@ -9,6 +9,41 @@ use crate::version::JavaMinecraftVersion;
 /// The newest protocol version whose registry data is used as the fallback for unknown versions.
 const LATEST_VERSION: JavaMinecraftVersion = JavaMinecraftVersion::V_26_3;
 
+pub(crate) static SYNCED_REGISTRIES: &[&str] = &[
+    "worldgen/biome",
+    "chat_type",
+    "trim_pattern",
+    "trim_material",
+    "wolf_variant",
+    "wolf_sound_variant",
+    "pig_variant",
+    "pig_sound_variant",
+    "frog_variant",
+    "cat_variant",
+    "cat_sound_variant",
+    "cow_variant",
+    "cow_sound_variant",
+    "chicken_variant",
+    "chicken_sound_variant",
+    "zombie_nautilus_variant",
+    "painting_variant",
+    "dimension_type",
+    "damage_type",
+    "jukebox_song",
+    "banner_pattern",
+    "instrument",
+    "enchantment",
+    "timeline",
+    "dialog",
+    "world_clock",
+    "test_environment",
+    "test_instance",
+    "sulfur_cube_archetype",
+    "decorated_pot_pattern",
+    "block_transformer",
+    "worldgen/block_state_provider",
+];
+
 /// Generates the `TokenStream` for the `Registry` and `StaticRegistry` structs, version-keyed
 /// static registry data, and the `Registry::get_synced` method.
 pub(crate) fn build() -> TokenStream {
@@ -62,41 +97,6 @@ pub(crate) fn build() -> TokenStream {
         (JavaMinecraftVersion::V_26_1, "V_26_1"),
         (JavaMinecraftVersion::V_26_2, "V_26_2"),
         (JavaMinecraftVersion::V_26_3, "V_26_3"),
-    ];
-
-    const SYNCED_REGISTRIES: &[&str] = &[
-        "worldgen/biome",
-        "chat_type",
-        "trim_pattern",
-        "trim_material",
-        "wolf_variant",
-        "wolf_sound_variant",
-        "pig_variant",
-        "pig_sound_variant",
-        "frog_variant",
-        "cat_variant",
-        "cat_sound_variant",
-        "cow_variant",
-        "cow_sound_variant",
-        "chicken_variant",
-        "chicken_sound_variant",
-        "zombie_nautilus_variant",
-        "painting_variant",
-        "dimension_type",
-        "damage_type",
-        "jukebox_song",
-        "banner_pattern",
-        "instrument",
-        "enchantment",
-        "timeline",
-        "dialog",
-        "world_clock",
-        "test_environment",
-        "test_instance",
-        "sulfur_cube_archetype",
-        "decorated_pot_pattern",
-        "block_transformer",
-        "worldgen/block_state_provider",
     ];
 
     let process_version = |ver_folder: &str| -> TokenStream {

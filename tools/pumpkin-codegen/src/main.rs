@@ -81,6 +81,7 @@ mod sound_category;
 mod spawn_egg;
 mod statistic;
 mod structures;
+mod sync_id_remap;
 mod tag;
 mod tracked_data;
 mod translations;
@@ -118,6 +119,7 @@ pub fn main() {
         (game_event::build, "game_event.rs"),
         (game_rules::build, "game_rules.rs"),
         (registry::build, "registry.rs"),
+        (sync_id_remap::build, "sync_id_remap.rs"),
         (dimension::build, "dimension.rs"),
         (translations::build, "translation.rs"),
         (jukebox_song::build, "jukebox_song.rs"),
