@@ -160,3 +160,6 @@ world_nether/
 world_the_end/
 patchbukkit/
 minecraft-sources*/
+
+# Local release packaging output
+dist/
