@@ -34,6 +34,44 @@ pub mod anvil;
 pub mod linear;
 pub mod pump;
 
+/// Root keys of the chunk NBT that Pumpkin reads and rewrites itself.
+///
+/// Everything else is preserved verbatim through
+/// [`crate::chunk::PreservedChunkData`] and written back unchanged.
+/// `Heightmaps` is deliberately absent: the full original compound is kept
+/// and the managed entries are merged back into it on save.
+const MANAGED_ROOT_KEYS: &[&str] = &[
+    "DataVersion",
+    "xPos",
+    "zPos",
+    "yPos",
+    "Status",
+    "sections",
+    "block_ticks",
+    "fluid_ticks",
+    "block_entities",
+    "isLightOn",
+    "InhabitedTime",
+    "PumpkinCustomData",
+    "BukkitValues",
+];
+
+/// Canonical NBT name of a chunk status.
+const fn status_to_str(status: ChunkStatus) -> &'static str {
+    match status {
+        ChunkStatus::Empty => "minecraft:empty",
+        ChunkStatus::StructureStarts => "minecraft:structure_starts",
+        ChunkStatus::StructureReferences => "minecraft:structure_references",
+        ChunkStatus::Biomes => "minecraft:biomes",
+        ChunkStatus::Terrain => "minecraft:terrain",
+        ChunkStatus::Features => "minecraft:features",
+        ChunkStatus::InitializeLight => "minecraft:initialize_light",
+        ChunkStatus::Light => "minecraft:light",
+        ChunkStatus::Spawn => "minecraft:spawn",
+        ChunkStatus::Full => "minecraft:full",
+    }
+}
+
 impl SingleChunkDataSerializer for ChunkData {
     #[inline]
     fn from_bytes(bytes: &Bytes, pos: Vector2<i32>) -> Result<Self, ChunkReadingError> {
@@ -388,6 +426,40 @@ impl ChunkData {
             .or_else(|| root_tag.get_compound("BukkitValues"))
             .cloned()
             .unwrap_or_default();
+        // Paper/Papo worlds store their persistent data under `BukkitValues`;
+        // it must be written back under the same name or Papo loses it.
+        let custom_data_tag = if root_tag.get_compound("PumpkinCustomData").is_some() {
+            "PumpkinCustomData"
+        } else if root_tag.get_compound("BukkitValues").is_some() {
+            "BukkitValues"
+        } else {
+            "PumpkinCustomData"
+        };
+
+        // Every root key Pumpkin does not manage is preserved verbatim and
+        // written back unchanged, so a save never drops foreign chunk data
+        // (structures, blending_data, LastUpdate, unmodelled heightmaps, ...).
+        let mut preserved_fields = NbtCompound::new();
+        for (key, tag) in &root_tag.child_tags {
+            if !MANAGED_ROOT_KEYS.contains(&&**key) {
+                preserved_fields.child_tags.insert(key.clone(), tag.clone());
+            }
+        }
+
+        // Legacy status names (noise/surface/carvers) all parse to `Terrain`;
+        // remember the exact string to write back while the status is
+        // unchanged.
+        let original_status =
+            (status_str != status_to_str(status)).then(|| (status_str.to_string(), status));
+
+        let preserved_data = (!preserved_fields.is_empty()
+            || original_status.is_some()
+            || custom_data_tag != "PumpkinCustomData")
+            .then_some(super::PreservedChunkData {
+                fields: preserved_fields,
+                custom_data_tag,
+                original_status,
+            });
 
         Ok(Self {
             section,
@@ -405,6 +477,7 @@ impl ChunkData {
             blending_data: None,
             inhabited_time: AtomicU64::new(root_tag.get_long("InhabitedTime").unwrap_or(0) as u64),
             custom_data: std::sync::Mutex::new(custom_data),
+            preserved_data: std::sync::Mutex::new(preserved_data),
         })
     }
 
@@ -452,27 +525,39 @@ impl ChunkData {
 
         let min_section_y = (self.section.min_y >> 4) as i8;
 
-        let mut root_compound = NbtCompound::new();
+        // Start from the preserved foreign fields so they survive the save;
+        // every managed key is put afterwards and overwrites a stale copy.
+        let preserved = self
+            .preserved_data
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut root_compound = preserved
+            .as_ref()
+            .map_or_else(NbtCompound::new, |p| p.fields.clone());
         root_compound.put_int("DataVersion", WORLD_DATA_VERSION);
         root_compound.put_int("xPos", self.x);
         root_compound.put_int("zPos", self.z);
         root_compound.put_int("yPos", section_coords::block_to_section(self.section.min_y));
 
-        let status_str = match self.status {
-            ChunkStatus::Empty => "minecraft:empty",
-            ChunkStatus::StructureStarts => "minecraft:structure_starts",
-            ChunkStatus::StructureReferences => "minecraft:structure_references",
-            ChunkStatus::Biomes => "minecraft:biomes",
-            ChunkStatus::Terrain => "minecraft:terrain",
-            ChunkStatus::Features => "minecraft:features",
-            ChunkStatus::InitializeLight => "minecraft:initialize_light",
-            ChunkStatus::Light => "minecraft:light",
-            ChunkStatus::Spawn => "minecraft:spawn",
-            ChunkStatus::Full => "minecraft:full",
-        };
-        root_compound.put_string("Status", status_str.to_string());
+        // Keep the exact original spelling of legacy status names (e.g.
+        // `minecraft:noise`) while the status has not advanced.
+        let status_str = preserved
+            .as_ref()
+            .and_then(|p| p.original_status.as_ref())
+            .filter(|(_, original_status)| *original_status == self.status)
+            .map_or_else(
+                || status_to_str(self.status).to_string(),
+                |(original, _)| original.clone(),
+            );
+        root_compound.put_string("Status", status_str);
 
-        let mut heightmaps_compound = NbtCompound::new();
+        // Merge the managed heightmaps into the preserved compound, keeping
+        // any unmodelled entries (OCEAN_FLOOR, WORLD_SURFACE_WG, ...) intact.
+        let mut heightmaps_compound = match root_compound.child_tags.remove("Heightmaps") {
+            Some(pumpkin_nbt::tag::NbtTag::Compound(compound)) => compound,
+            _ => NbtCompound::new(),
+        };
         if let Some(ref arr) = heightmap_lock.world_surface {
             heightmaps_compound.put("WORLD_SURFACE", NbtTag::LongArray(arr.to_vec()));
         }
@@ -606,7 +691,12 @@ impl ChunkData {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !custom_data.is_empty() {
-            root_compound.put_compound("PumpkinCustomData", custom_data.clone());
+            // Write the custom data back under the tag it was read from, so
+            // Paper/Papo worlds keep their `BukkitValues` PDC intact.
+            let tag_name = preserved
+                .as_ref()
+                .map_or("PumpkinCustomData", |p| p.custom_data_tag);
+            root_compound.put_compound(tag_name, custom_data.clone());
         }
 
         let nbt = pumpkin_nbt::Nbt::from(root_compound);
@@ -980,5 +1070,89 @@ mod tests {
                 .unwrap()
                 .id
         );
+    }
+
+    #[test]
+    fn foreign_chunk_fields_survive_round_trip() {
+        // A Papo/Paper-style chunk carrying keys Pumpkin has no model for:
+        // they must come back byte-identical after a load/save round-trip.
+        let mut root = NbtCompound::new();
+        root.put_int("xPos", 5);
+        root.put_int("zPos", -3);
+        root.put_int("yPos", -4);
+        // Legacy status name that parses to `Terrain`.
+        root.put_string("Status", "minecraft:noise".to_string());
+        root.put_long("LastUpdate", 123_456);
+        let mut structures = NbtCompound::new();
+        let mut starts = NbtCompound::new();
+        let mut fortress = NbtCompound::new();
+        fortress.put_string("id", "minecraft:fortress".to_string());
+        starts.put_compound("minecraft:fortress", fortress);
+        structures.put_compound("starts", starts);
+        root.put_compound("structures", structures);
+        let mut blending = NbtCompound::new();
+        blending.put_int("min_section_x", 5);
+        root.put_compound("blending_data", blending);
+        let mut heightmaps = NbtCompound::new();
+        heightmaps.put("OCEAN_FLOOR", NbtTag::LongArray(vec![7; 37]));
+        heightmaps.put("WORLD_SURFACE", NbtTag::LongArray(vec![9; 37]));
+        root.put_compound("Heightmaps", heightmaps);
+        let mut bukkit = NbtCompound::new();
+        bukkit.put("papo-key", NbtTag::String("papo-value".to_string().into()));
+        root.put_compound("BukkitValues", bukkit);
+        root.put_long("InhabitedTime", 77);
+        root.put_bool("isLightOn", true);
+
+        let bytes = pumpkin_nbt::Nbt::from(root).write_unnamed();
+        let chunk = ChunkData::internal_from_bytes(&bytes, Vector2::new(5, -3)).expect("parse");
+        let out = chunk.internal_to_bytes();
+
+        // `internal_to_bytes` writes a named root with an empty name.
+        let mut cursor = std::io::Cursor::new(out.as_ref());
+        let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+            pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+        );
+        let nbt = pumpkin_nbt::Nbt::read(&mut reader).expect("reparse output");
+        let root = &nbt.root_tag;
+
+        assert_eq!(root.get_long("LastUpdate"), Some(123_456));
+        assert_eq!(root.get_long("InhabitedTime"), Some(77));
+        assert!(root.get_compound("structures").is_some_and(|structures| {
+            structures
+                .get_compound("starts")
+                .is_some_and(|starts| starts.get_compound("minecraft:fortress").is_some())
+        }));
+        assert!(
+            root.get_compound("blending_data")
+                .is_some_and(|blending| blending.get_int("min_section_x") == Some(5))
+        );
+        assert!(root.get_compound("Heightmaps").is_some_and(|heightmaps| {
+            heightmaps
+                .get_long_array("OCEAN_FLOOR")
+                .is_some_and(|arr| arr.iter().all(|&value| value == 7))
+        }));
+        // The legacy status spelling survives while the status is unchanged.
+        assert_eq!(root.get_string("Status"), Some("minecraft:noise"));
+        // PDC stays under `BukkitValues`, not `PumpkinCustomData`.
+        assert!(
+            root.get_compound("BukkitValues")
+                .is_some_and(|bukkit| bukkit.get_string("papo-key") == Some("papo-value"))
+        );
+        assert!(!root.has("PumpkinCustomData"));
+
+        // A second round-trip must be stable.
+        let chunk = ChunkData::internal_from_bytes(&out, Vector2::new(5, -3)).expect("reparse");
+        let out2 = chunk.internal_to_bytes();
+        let mut cursor = std::io::Cursor::new(out2.as_ref());
+        let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+            pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+        );
+        let nbt2 = pumpkin_nbt::Nbt::read(&mut reader).expect("reparse again");
+        assert_eq!(
+            nbt2.root_tag.child_tags.len(),
+            nbt.root_tag.child_tags.len()
+        );
+        assert_eq!(nbt2.get_long("LastUpdate"), Some(123_456));
+        assert_eq!(nbt2.get_string("Status"), Some("minecraft:noise"));
     }
 }

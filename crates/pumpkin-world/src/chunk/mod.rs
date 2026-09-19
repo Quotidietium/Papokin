@@ -82,6 +82,28 @@ pub struct ChunkData {
     pub dirty: AtomicBool,
     pub inhabited_time: AtomicU64,
     pub custom_data: std::sync::Mutex<NbtCompound>,
+    /// Chunk NBT fields Pumpkin does not model, kept so a load/save round-trip
+    /// never drops data the world was saved with.
+    pub preserved_data: std::sync::Mutex<Option<PreservedChunkData>>,
+}
+
+/// Round-trip preservation data for a chunk read from disk.
+///
+/// Vanilla and Paper/Papo worlds contain chunk fields Pumpkin has no model for
+/// (`structures`, `blending_data`, `LastUpdate`, unmodelled heightmaps, ...).
+/// They are stored here verbatim and written back unchanged, so saving a
+/// foreign world never destroys data.
+#[derive(Clone)]
+pub struct PreservedChunkData {
+    /// Root keys not managed by Pumpkin, with their original values.
+    pub fields: NbtCompound,
+    /// Tag name the custom data compound was read from and must be written
+    /// back to (`PumpkinCustomData`, or `BukkitValues` on Paper/Papo worlds).
+    pub custom_data_tag: &'static str,
+    /// Original `Status` string when it differs from the canonical name of the
+    /// parsed status (e.g. `minecraft:noise`), written back verbatim while the
+    /// status enum has not advanced.
+    pub original_status: Option<(String, ChunkStatus)>,
 }
 
 pub struct ChunkEntityData {
@@ -618,6 +640,7 @@ impl ChunkData {
             dirty: std::sync::atomic::AtomicBool::new(false),
             inhabited_time: std::sync::atomic::AtomicU64::new(0),
             custom_data: std::sync::Mutex::new(NbtCompound::new()),
+            preserved_data: std::sync::Mutex::new(None),
         }
     }
 
