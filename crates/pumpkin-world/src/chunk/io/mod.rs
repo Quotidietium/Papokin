@@ -20,6 +20,7 @@ where
 ///
 /// It can be the data loaded successfully, the data not found or an error
 /// with the chunk coordinates and the error that occurred.
+#[derive(Debug)]
 pub enum LoadedData<D: Send, Err: error::Error> {
     /// The chunk data was loaded successfully
     Loaded(D),
@@ -118,6 +119,25 @@ pub trait ChunkSerializer: Send + Sync + Default + 'static {
 
     /// Create a new instance from bytes
     fn read(r: Bytes) -> Result<Self, ChunkReadingError>;
+
+    /// Whether the serializer holds chunks that have not been written to disk
+    /// yet (e.g. after a failed write).
+    ///
+    /// Evicting a serializer in this state would silently drop that data, so
+    /// the file manager keeps it cached and retries the write.
+    fn has_pending_writes(&self) -> bool {
+        false
+    }
+
+    /// Create a new instance from bytes, knowing the file they were read from.
+    ///
+    /// Formats with sidecar files relative to the region file (vanilla external
+    /// `c.<x>.<z>.mcc` chunks, Paper oversized sidecars) resolve them from
+    /// `path`. The default implementation ignores the path.
+    fn read_at(r: Bytes, path: &std::path::Path) -> Result<Self, ChunkReadingError> {
+        let _ = path;
+        Self::read(r)
+    }
 
     /// Add the chunk data to the serializer
     fn update_chunk(
