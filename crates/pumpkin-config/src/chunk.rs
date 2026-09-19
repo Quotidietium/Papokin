@@ -46,8 +46,10 @@ pub struct ChunkCompression {
 
 impl Default for ChunkCompression {
     fn default() -> Self {
+        // ZLib matches the vanilla/Papo default, keeping newly written region
+        // files byte-compatible with stock servers.
         Self {
-            algorithm: Compression::LZ4,
+            algorithm: Compression::ZLib,
             level: 6,
         }
     }
