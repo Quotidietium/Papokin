@@ -22,8 +22,8 @@ const HEADER_SIZE: usize = SECTOR_SIZE * 2; // Location table + timestamp table
 /// Compression type for MCA format
 const COMPRESSION_ZLIB: u8 = 2;
 
-// Data version for 1.21
-const DATA_VERSION: i32 = 3955;
+// Data version for 1.21.11
+const DATA_VERSION: i32 = 4671;
 
 /// A single Point of Interest entry (serializable)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,27 +321,30 @@ impl PoiRegion {
             }
         }
 
-        // Write file
+        // Assemble the whole file in memory and swap it in atomically, so a
+        // crash mid-write can never leave a torn POI file behind.
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut file = std::fs::File::create(path)?;
-
-        // Write location table
+        let mut file_bytes = Vec::with_capacity(HEADER_SIZE + sector_data.len() * SECTOR_SIZE);
         for loc in &location_table {
-            file.write_all(&loc.to_be_bytes())?;
+            file_bytes.extend_from_slice(&loc.to_be_bytes());
         }
-
-        // Write timestamp table
         for ts in &timestamp_table {
-            file.write_all(&ts.to_be_bytes())?;
+            file_bytes.extend_from_slice(&ts.to_be_bytes());
+        }
+        for data in &sector_data {
+            file_bytes.extend_from_slice(data);
         }
 
-        // Write chunk data
-        for data in &sector_data {
-            file.write_all(data)?;
-        }
+        let tmp_path = path.with_extension("tmp_poi");
+        let mut file = std::fs::File::create(&tmp_path)?;
+        file.write_all(&file_bytes)?;
+        file.flush()?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp_path, path)?;
 
         self.dirty = false;
         self.dirty_chunks.clear();

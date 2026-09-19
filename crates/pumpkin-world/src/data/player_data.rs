@@ -1,6 +1,6 @@
 use pumpkin_nbt::compound::NbtCompound;
 use std::fs::{File, create_dir_all};
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -137,21 +137,42 @@ impl PlayerDataStorage {
             return Err(PlayerDataError::Io(e));
         }
 
-        // Create the file and write directly with GZip compression
-        match File::create(&path) {
-            Ok(file) => {
-                if let Err(e) = pumpkin_nbt::nbt_compress::write_gzip_compound_tag(data, file) {
-                    error!("Failed to write compressed player data for {uuid}: {e}");
-                    Err(PlayerDataError::Nbt(e.to_string()))
-                } else {
-                    debug!("Saved player data for {uuid} to disk");
-                    Ok(())
-                }
-            }
-            Err(e) => {
-                error!("Failed to create player data file for {uuid}: {e}");
-                Err(PlayerDataError::Io(e))
-            }
+        // Write to a temp file first and swap it in atomically, so a crash
+        // mid-write can never destroy the previous save. The old file is
+        // kept as a `.dat_old` backup, like vanilla does.
+        let tmp_path = path.with_extension("dat_new");
+
+        let write_result: Result<(), PlayerDataError> = (|| {
+            let file = File::create(&tmp_path)?;
+            let mut writer = io::BufWriter::new(file);
+            pumpkin_nbt::nbt_compress::write_gzip_compound_tag(data, &mut writer)
+                .map_err(|e| PlayerDataError::Nbt(e.to_string()))?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            error!("Failed to write compressed player data for {uuid}: {e}");
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
         }
+
+        // Keep the previous save as a backup, like vanilla's `.dat_old`.
+        if path.exists() {
+            let old_path = path.with_extension("dat_old");
+            let _ = std::fs::remove_file(&old_path);
+            let _ = std::fs::rename(&path, &old_path);
+        }
+
+        if let Err(e) = std::fs::rename(&tmp_path, &path) {
+            // e.g. the destination is locked on Windows: fall back to an
+            // in-place copy rather than losing the new data.
+            error!("Failed to move new player data into place for {uuid}: {e}");
+            std::fs::copy(&tmp_path, &path)?;
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+
+        debug!("Saved player data for {uuid} to disk");
+        Ok(())
     }
 }

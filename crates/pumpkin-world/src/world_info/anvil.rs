@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::ErrorKind,
+    io::{ErrorKind, Write as _},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -438,13 +438,31 @@ impl WorldInfoWriter for AnvilLevelInfo {
         level_data_to_nbt(&level_data, &mut data_comp);
         root.put_compound(LEVEL_DATA_TAG, data_comp);
 
-        write_gzip_compound_tag(root, File::create(&path_new)?)
+        // First run: the world folder may not exist yet (`read_world_info`
+        // returned `InfoNotFound` moments ago); creating it here is what
+        // makes the initial `level.dat` write succeed.
+        std::fs::create_dir_all(level_folder)?;
+
+        // Write to `level.dat_new`, fsync, then swap in atomically; a crash
+        // mid-write can never leave a torn `level.dat` behind.
+        let new_file = File::create(&path_new)?;
+        let mut writer = std::io::BufWriter::new(new_file);
+        write_gzip_compound_tag(root, &mut writer)
             .map_err(|e| WorldInfoError::SerializationError(e.to_string()))?;
+        writer
+            .flush()
+            .map_err(|e| WorldInfoError::SerializationError(e.to_string()))?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|e| WorldInfoError::SerializationError(e.to_string()))?;
+        drop(writer);
 
         if path.exists() {
             let _ = std::fs::copy(&path, &path_old);
         }
-        let _ = std::fs::rename(&path_new, &path);
+        std::fs::rename(&path_new, &path)
+            .map_err(|e| WorldInfoError::SerializationError(e.to_string()))?;
 
         let data_version = level_data.data_version;
 
