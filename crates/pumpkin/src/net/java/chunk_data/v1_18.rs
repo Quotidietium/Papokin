@@ -1,6 +1,6 @@
 use super::util::write_compound_nbt;
+use pumpkin_data::NATIVE_DATA_VERSION;
 use pumpkin_data::block_state_remap::remap_block_state_for_version;
-use pumpkin_data::packet::CURRENT_MC_VERSION;
 use pumpkin_protocol::codec::bit_set::BitSet;
 use pumpkin_protocol::codec::var_int::VarInt;
 use pumpkin_protocol::ser::NetworkWriteExt;
@@ -96,7 +96,10 @@ pub fn write_chunk_data(
             }
 
             let mut block_network = block_palette.convert_network();
-            if version < &CURRENT_MC_VERSION {
+            // Registry IDs are only wire-compatible when the connection runs
+            // the dataset's native version; anything older (e.g. 1.21.11 on a
+            // 26.3 dataset) must be translated down.
+            if version < &NATIVE_DATA_VERSION {
                 match &mut block_network.palette {
                     NetworkPalette::Single(registry_id) => {
                         *registry_id = remap_block_state_for_version(*registry_id, *version);

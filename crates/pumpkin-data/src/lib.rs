@@ -11,6 +11,15 @@
     clippy::panic
 )]
 
+/// The Minecraft version of the bundled dataset (blocks, items, entities...).
+///
+/// Connections older than this need their registry IDs remapped on the wire.
+/// This is deliberately independent of `packet::CURRENT_MC_VERSION` (the
+/// protocol target): the protocol can move to a different version while the
+/// generated dataset — and therefore every remap table — still speaks 26.3.
+pub const NATIVE_DATA_VERSION: pumpkin_util::version::JavaMinecraftVersion =
+    pumpkin_util::version::JavaMinecraftVersion::V_26_3;
+
 #[rustfmt::skip]
 #[path = "generated/chunk_view_lut.rs"]
 pub mod chunk_view_lut;

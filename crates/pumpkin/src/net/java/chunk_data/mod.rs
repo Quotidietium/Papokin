@@ -60,6 +60,7 @@ impl ClientPacket for CChunkData<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pumpkin_data::block_state_remap::BLOCK_STATE_REMAP_V_26_3_TO_V_1_21_11;
     use pumpkin_world::chunk::ChunkData;
 
     #[test]
@@ -84,6 +85,7 @@ mod tests {
             JavaMinecraftVersion::V_1_20_2,
             JavaMinecraftVersion::V_1_21_4,
             JavaMinecraftVersion::V_1_21_5,
+            JavaMinecraftVersion::V_1_21_11,
             JavaMinecraftVersion::V_26_1,
             JavaMinecraftVersion::V_26_2,
             JavaMinecraftVersion::V_26_3,
@@ -142,6 +144,7 @@ mod tests {
             JavaMinecraftVersion::V_1_20_2,
             JavaMinecraftVersion::V_1_21_4,
             JavaMinecraftVersion::V_1_21_5,
+            JavaMinecraftVersion::V_1_21_11,
             JavaMinecraftVersion::V_26_1,
             JavaMinecraftVersion::V_26_2,
             JavaMinecraftVersion::V_26_3,
@@ -160,5 +163,159 @@ mod tests {
                 "Serialized buffer must not be empty for version {version:?}"
             );
         }
+    }
+
+    /// Reads one VarInt (LEB128) starting at `pos`, advancing it.
+    fn read_var_int(buf: &[u8], pos: &mut usize) -> i32 {
+        let mut value = 0u32;
+        for i in 0..5 {
+            let byte = buf[*pos];
+            *pos += 1;
+            value |= u32::from(byte & 0x7F) << (i * 7);
+            if byte & 0x80 == 0 {
+                return value as i32;
+            }
+        }
+        panic!("unterminated varint in test buffer");
+    }
+
+    /// Extracts the section buffer from a `level_chunk_with_light` payload
+    /// written for a version using the 1.21.5+ indexed heightmap format.
+    fn extract_section_buffer(buf: &[u8]) -> &[u8] {
+        let mut pos = 8; // chunk x + z
+        let heightmap_count = read_var_int(buf, &mut pos);
+        for _ in 0..heightmap_count {
+            let _index = read_var_int(buf, &mut pos);
+            let len = read_var_int(buf, &mut pos);
+            pos += len as usize * 8;
+        }
+        let sections_len = read_var_int(buf, &mut pos) as usize;
+        &buf[pos..pos + sections_len]
+    }
+
+    /// Walks every section and collects the block palette entries (skipping
+    /// the packed data, whose bytes must not be mistaken for palette ids).
+    fn collect_block_palettes(
+        sections: &[u8],
+        num_sections: usize,
+        has_liquid_count: bool,
+    ) -> Vec<Vec<i32>> {
+        let mut pos = 0;
+        let mut palettes = Vec::with_capacity(num_sections);
+        for _ in 0..num_sections {
+            pos += 2; // non-air count
+            if has_liquid_count {
+                pos += 2;
+            }
+
+            let bits = usize::from(sections[pos]);
+            pos += 1;
+            let palette = match bits {
+                0 => vec![read_var_int(sections, &mut pos)],
+                b if b <= 8 => {
+                    let len = read_var_int(sections, &mut pos);
+                    (0..len).map(|_| read_var_int(sections, &mut pos)).collect()
+                }
+                _ => Vec::new(), // direct palette: raw ids, nothing to collect
+            };
+            if bits > 0 {
+                pos += 4096usize.div_ceil(64 / bits) * 8;
+            }
+
+            // Biome half of the section: skip palette and packed data.
+            let biome_bits = usize::from(sections[pos]);
+            pos += 1;
+            let biome_words = match biome_bits {
+                0 => {
+                    read_var_int(sections, &mut pos);
+                    0
+                }
+                b => {
+                    if b <= 3 {
+                        let len = read_var_int(sections, &mut pos);
+                        for _ in 0..len {
+                            read_var_int(sections, &mut pos);
+                        }
+                    }
+                    64usize.div_ceil(64 / b)
+                }
+            };
+            pos += biome_words * 8;
+
+            palettes.push(palette);
+        }
+        assert_eq!(
+            pos,
+            sections.len(),
+            "parser must consume the section buffer exactly"
+        );
+        palettes
+    }
+
+    #[test]
+    fn chunk_data_remaps_block_states_for_1_21_11() {
+        // Regression test for the 1.21.11 disconnect ("No value with id ..."):
+        // block-state ids come from the dataset's native registry (26.3) and
+        // must be translated down to the connection's protocol version. If
+        // the gate in `v1_18::write_chunk_data` ever compares against the
+        // protocol target instead of the dataset version again, the raw 26.3
+        // id leaks onto the wire and 1.21.11 clients disconnect.
+        let air_native = pumpkin_data::Block::AIR.default_state.id.as_u16();
+        let air_1_21_11 = BLOCK_STATE_REMAP_V_26_3_TO_V_1_21_11[usize::from(air_native)];
+
+        // Pick a state whose id differs between 26.3 and 1.21.11, and whose
+        // raw/translated ids cannot collide with the air entries that fill
+        // every other section's palette.
+        let (raw, translated) = BLOCK_STATE_REMAP_V_26_3_TO_V_1_21_11
+            .iter()
+            .enumerate()
+            .map(|(id, &translated)| (id as u16, translated))
+            .find(|&(id, translated)| {
+                id != air_native
+                    && id != air_1_21_11
+                    && translated != id
+                    && translated != air_1_21_11
+            })
+            .expect("26.3 and 1.21.11 must have differing state ids");
+
+        let chunk = ChunkData::empty(0, 0);
+        chunk
+            .section
+            .set_block_absolute_y(0, 64, 0, pumpkin_data::BlockStateId::new_or_air(raw));
+        let num_sections = chunk.section.block_sections.read().unwrap().len();
+        let packet = CChunkData(&chunk);
+
+        let serialize = |version: JavaMinecraftVersion| {
+            let mut buf = Vec::new();
+            packet.write_packet_data(&mut buf, &version).unwrap();
+            buf
+        };
+
+        let native_buf = serialize(JavaMinecraftVersion::V_26_3);
+        let old_buf = serialize(JavaMinecraftVersion::V_1_21_11);
+
+        let native_palettes =
+            collect_block_palettes(extract_section_buffer(&native_buf), num_sections, true);
+        let old_palettes =
+            collect_block_palettes(extract_section_buffer(&old_buf), num_sections, false);
+
+        assert!(
+            native_palettes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(raw))),
+            "native (26.3) connections must receive the raw dataset id"
+        );
+        assert!(
+            old_palettes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(translated))),
+            "1.21.11 connections must receive the translated id {translated} (raw {raw})"
+        );
+        assert!(
+            !old_palettes
+                .iter()
+                .any(|palette| palette.contains(&i32::from(raw))),
+            "raw 26.3 id {raw} must never leak into a 1.21.11 palette"
+        );
     }
 }
