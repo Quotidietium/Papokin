@@ -1,6 +1,5 @@
 use bytes::{Buf, BufMut, Bytes};
 use flate2::read::{GzDecoder, GzEncoder, ZlibDecoder, ZlibEncoder};
-use itertools::Itertools;
 use lz4_java_wrc::Context;
 use pumpkin_config::chunk::AnvilChunkConfig;
 use pumpkin_util::math::vector2::Vector2;
@@ -15,7 +14,7 @@ use tokio::{
     io::{AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufWriter},
     sync::Mutex,
 };
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::chunk::{
     ChunkParsingError, ChunkReadingError, ChunkSerializingError, ChunkWritingError,
@@ -37,8 +36,21 @@ pub const CHUNK_COUNT: usize = REGION_SIZE * REGION_SIZE;
 /// The number of bytes in a sector (4 KiB)
 const SECTOR_BYTES: usize = 4096;
 
-// 26.2
-pub const WORLD_DATA_VERSION: i32 = 4903;
+/// The maximum sector count representable in the one-byte count field of a
+/// location entry. Chunks that would need more sectors are stored as external
+/// chunks (`.mcc`), exactly like vanilla, so the field can never overflow.
+const MAX_IN_FILE_SECTORS: u32 = 255;
+
+/// Flag OR'ed into the compression version byte of chunks whose payload lives
+/// in an external `c.<x>.<z>.mcc` file (vanilla external chunk mechanism).
+const EXTERNAL_FLAG: u8 = 0x80;
+
+/// Keys of the oversized compounds merged back on load (Paper
+/// `Allow Saving of Oversized Chunks` compatibility).
+const OVERSIZED_MERGE_KEYS: [&str; 3] = ["Entities", "block_entities", "TileEntities"];
+
+// 1.21.11
+pub const WORLD_DATA_VERSION: i32 = 4671;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -74,6 +86,10 @@ pub struct AnvilChunkData {
     compression: Option<Compression>,
     // Length is always the length of this + compression byte (1) so we dont need to save a length
     compressed_data: Bytes,
+    /// The payload lives in an external `c.<x>.<z>.mcc` file; the region file
+    /// only holds the five byte header. When such a chunk was read from disk,
+    /// the payload is filled in by [`AnvilChunkFile::read_at`].
+    external: bool,
 }
 
 enum WriteAction {
@@ -228,6 +244,10 @@ impl AnvilChunkData {
     /// Raw size of serialized chunk
     #[inline]
     const fn raw_write_size(&self) -> usize {
+        if self.external {
+            // Only the five byte header goes into the region file
+            return 4 + 1;
+        }
         // 4 bytes for the *length* and 1 byte for the *compression* method
         self.compressed_data.len() + 4 + 1
     }
@@ -239,10 +259,21 @@ impl AnvilChunkData {
         sector_count * SECTOR_BYTES
     }
 
+    /// Number of sectors this chunk occupies inside the region file. External
+    /// chunks only occupy a single sector holding their five byte header.
     #[inline]
     const fn sector_count(&self) -> u32 {
+        if self.external {
+            return 1;
+        }
         let total_size = self.raw_write_size();
         total_size.div_ceil(SECTOR_BYTES) as u32
+    }
+
+    /// Whether the payload is too large to be stored inside the region file.
+    #[inline]
+    const fn is_oversized(&self) -> bool {
+        !self.external && self.sector_count() > MAX_IN_FILE_SECTORS
     }
 
     fn from_bytes(bytes: Bytes) -> Result<Self, ChunkReadingError> {
@@ -258,6 +289,21 @@ impl AnvilChunkData {
             ));
         };
 
+        let compression_method = bytes.get_u8();
+        let external = compression_method & EXTERNAL_FLAG != 0;
+        let compression = Compression::from_byte(compression_method & !EXTERNAL_FLAG)
+            .map_err(|()| ChunkReadingError::Compression(CompressionError::UnknownCompression))?;
+
+        if external {
+            // The payload lives in an external file; the region file only
+            // stores the five byte header. Nothing to slice here.
+            return Ok(Self {
+                compression,
+                compressed_data: Bytes::new(),
+                external: true,
+            });
+        }
+
         if length > bytes.len() {
             return Err(ChunkReadingError::ParsingError(
                 ChunkParsingError::ErrorDeserializingChunk(format!(
@@ -268,29 +314,34 @@ impl AnvilChunkData {
             ));
         }
 
-        let compression_method = bytes.get_u8();
-        let compression = Compression::from_byte(compression_method)
-            .map_err(|()| ChunkReadingError::Compression(CompressionError::UnknownCompression))?;
-
         Ok(Self {
             compression,
             // If this has padding, we need to trim it
             compressed_data: bytes.slice(..length),
+            external: false,
         })
     }
 
     async fn write(&self, w: &mut (impl AsyncWrite + Unpin + Send)) -> Result<(), std::io::Error> {
         let padded_size = self.padded_size();
 
+        // The declared length always covers the payload plus the compression
+        // byte, even when the payload itself lives in an external file.
         w.write_u32((self.compressed_data.remaining() + 1) as u32)
             .await?;
-        w.write_u8(
-            self.compression
-                .map_or(Compression::NO_COMPRESSION_ID, |c| c as u8),
-        )
-        .await?;
+        let version_byte = self
+            .compression
+            .map_or(Compression::NO_COMPRESSION_ID, |c| c as u8);
+        let version_byte = if self.external {
+            version_byte | EXTERNAL_FLAG
+        } else {
+            version_byte
+        };
+        w.write_u8(version_byte).await?;
 
-        w.write_all(&self.compressed_data).await?;
+        if !self.external {
+            w.write_all(&self.compressed_data).await?;
+        }
 
         let padding_len = padded_size - self.raw_write_size();
         if padding_len > 0 {
@@ -337,8 +388,116 @@ impl AnvilChunkData {
         Ok(Self {
             compression: Some(compression),
             compressed_data: compressed_data.into(),
+            external: false,
         })
     }
+}
+
+/// Parses the region coordinates out of a `r.<x>.<z>.mca` file name.
+fn region_coords_from_path(path: &Path) -> Option<(i32, i32)> {
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(".mca")?;
+    let mut parts = stem.split('.');
+    if parts.next()? != "r" {
+        return None;
+    }
+    let x: i32 = parts.next()?.parse().ok()?;
+    let z: i32 = parts.next()?.parse().ok()?;
+    Some((x, z))
+}
+
+/// Path of the vanilla external chunk file for an absolute chunk position.
+fn external_chunk_path(region_path: &Path, abs_x: i32, abs_z: i32) -> PathBuf {
+    region_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("c.{abs_x}.{abs_z}.mcc"))
+}
+
+/// Path of the Paper oversized-chunk sidecar file for an absolute chunk
+/// position (`Allow Saving of Oversized Chunks`).
+fn paper_oversized_chunk_path(region_path: &Path, abs_x: i32, abs_z: i32) -> Option<PathBuf> {
+    let name = region_path.file_name()?.to_str()?.strip_suffix(".mca")?;
+    Some(
+        region_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{name}_oversized_{abs_x}_{abs_z}.nbt")),
+    )
+}
+
+/// Path of the Paper oversized-chunk bitmap sidecar for a whole region.
+fn paper_oversized_meta_path(region_path: &Path) -> Option<PathBuf> {
+    let name = region_path.file_name()?.to_str()?.strip_suffix(".mca")?;
+    Some(
+        region_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{name}.oversized.nbt")),
+    )
+}
+
+/// Reads the Paper oversized bitmap, returning `[bool; CHUNK_COUNT]`.
+fn read_paper_oversized_meta(region_path: &Path) -> [bool; CHUNK_COUNT] {
+    let mut flags = [false; CHUNK_COUNT];
+    let Some(meta_path) = paper_oversized_meta_path(region_path) else {
+        return flags;
+    };
+    match std::fs::read(&meta_path) {
+        Ok(bytes) => {
+            for (index, flag) in flags.iter_mut().enumerate() {
+                *flag = bytes.get(index).is_some_and(|byte| *byte == 1);
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            warn!(
+                "Failed to read oversized meta file {}: {err}",
+                meta_path.display()
+            );
+        }
+    }
+    flags
+}
+
+/// Merges the oversized sidecar compound into the base chunk NBT.
+fn merge_paper_oversized(
+    base_nbt: &mut pumpkin_nbt::NbtCompound,
+    oversized: &pumpkin_nbt::NbtCompound,
+) {
+    for key in OVERSIZED_MERGE_KEYS {
+        let Some(extra) = oversized.get_list(key) else {
+            continue;
+        };
+        if extra.is_empty() {
+            continue;
+        }
+        let extra = extra.to_vec();
+        match base_nbt.get_list(key) {
+            Some(existing)
+                if matches!(extra.first(), Some(pumpkin_nbt::tag::NbtTag::Compound(_))) =>
+            {
+                let mut merged = existing.to_vec();
+                merged.extend(extra);
+                base_nbt.put_list(key, merged);
+            }
+            _ => {
+                base_nbt.put_list(key, extra);
+            }
+        }
+    }
+}
+
+/// Atomically writes `bytes` to `path` through a temp file. `sync_all` is
+/// issued before the rename so the data is on disk once this returns.
+async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
+    let temp_path = path.with_extension("tmp_atomic");
+    let mut file = tokio::fs::File::create(&temp_path).await?;
+    file.write_all(bytes).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+    tokio::fs::rename(&temp_path, path).await
 }
 
 impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
@@ -354,6 +513,231 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
         let local_z = z & SUBREGION_AND;
         let index = (local_z << SUBREGION_BITS) + local_x;
         index as usize
+    }
+
+    /// Absolute chunk coordinates for a chunk index inside the region the given
+    /// path points to.
+    fn absolute_chunk_pos(region_path: &Path, index: usize) -> Option<(i32, i32)> {
+        let (region_x, region_z) = region_coords_from_path(region_path)?;
+        let local_x = (index % REGION_SIZE) as i32;
+        let local_z = (index / REGION_SIZE) as i32;
+        Some((
+            region_x * REGION_SIZE as i32 + local_x,
+            region_z * REGION_SIZE as i32 + local_z,
+        ))
+    }
+
+    /// Reads an external `.mcc` payload for a chunk, if present.
+    fn read_external_payload(region_path: &Path, index: usize) -> Option<Bytes> {
+        let (abs_x, abs_z) = Self::absolute_chunk_pos(region_path, index)?;
+        match std::fs::read(external_chunk_path(region_path, abs_x, abs_z)) {
+            Ok(data) => Some(data.into()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                warn!("Failed to read external chunk file for chunk {abs_x}/{abs_z}: {err}");
+                None
+            }
+        }
+    }
+
+    /// Fills the payloads of chunks read as external from their `.mcc` files.
+    /// Missing files leave the payload empty, which surfaces as a per-chunk
+    /// error instead of failing the whole region.
+    fn fill_external_payloads(&mut self, region_path: &Path) {
+        for (index, metadata) in self.chunks_data.iter_mut().enumerate() {
+            let Some(metadata) = metadata else {
+                continue;
+            };
+            if metadata.serialized_data.external
+                && metadata.serialized_data.compressed_data.is_empty()
+            {
+                if let Some(payload) = Self::read_external_payload(region_path, index) {
+                    metadata.serialized_data.compressed_data = payload;
+                } else {
+                    warn!(
+                        "External chunk file for index {index} of {} is missing; the chunk \
+                         cannot be loaded",
+                        region_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// Applies the Paper oversized sidecar data to a freshly parsed region, if
+    /// any. Chunks flagged oversized get their entity data merged back into the
+    /// base payload so the rest of the pipeline sees one normal chunk.
+    fn apply_paper_oversized(&mut self, region_path: &Path) {
+        let flags = read_paper_oversized_meta(region_path);
+        if !flags.iter().any(|flag| *flag) {
+            return;
+        }
+
+        for (index, flagged) in flags.into_iter().enumerate() {
+            if !flagged {
+                continue;
+            }
+            let Some(metadata) = self.chunks_data[index].as_mut() else {
+                continue;
+            };
+            let Some((abs_x, abs_z)) = Self::absolute_chunk_pos(region_path, index) else {
+                continue;
+            };
+            let Some(oversized_path) = paper_oversized_chunk_path(region_path, abs_x, abs_z) else {
+                continue;
+            };
+
+            let oversized_nbt = std::fs::read(&oversized_path).and_then(|compressed| {
+                // The sidecar is a zlib compressed named-root NBT document; the
+                // streaming decoder cannot seek, so decode it in memory first.
+                let mut decoded = Vec::new();
+                ZlibDecoder::new(&compressed[..])
+                    .read_to_end(&mut decoded)
+                    .map_err(std::io::Error::other)?;
+                let mut cursor = std::io::Cursor::new(decoded);
+                let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+                    pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+                );
+                pumpkin_nbt::Nbt::read(&mut reader)
+                    .map_err(|err| {
+                        std::io::Error::other(format!("failed to parse oversized NBT: {err}"))
+                    })
+                    .map(|nbt| nbt.root_tag)
+            });
+            let oversized_nbt = match oversized_nbt {
+                Ok(nbt) => nbt,
+                Err(err) => {
+                    warn!(
+                        "Failed to read oversized chunk data {} for chunk {abs_x}/{abs_z}: {err}",
+                        oversized_path.display()
+                    );
+                    continue;
+                }
+            };
+
+            // Decompress the base payload, merge the oversized compound and
+            // store the merged raw payload back.
+            let merged = metadata
+                .serialized_data
+                .compression
+                .and_then(|compression| {
+                    compression
+                        .decompress_data(&metadata.serialized_data.compressed_data)
+                        .ok()
+                        .map(|bytes| Bytes::from(bytes.into_vec()))
+                });
+            let Some(base_bytes) = merged else {
+                continue;
+            };
+
+            let mut cursor = std::io::Cursor::new(base_bytes.as_ref());
+            let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+                pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+            );
+            let Ok(pumpkin_nbt::Nbt {
+                root_tag: mut base_nbt,
+                ..
+            }) = pumpkin_nbt::Nbt::read_unnamed(&mut reader)
+            else {
+                continue;
+            };
+
+            merge_paper_oversized(&mut base_nbt, &oversized_nbt);
+
+            metadata.serialized_data = AnvilChunkData {
+                compression: None,
+                compressed_data: pumpkin_nbt::Nbt::from(base_nbt).write_unnamed(),
+                external: false,
+            };
+        }
+    }
+
+    /// Writes the external payloads of all external chunks and cleans up stale
+    /// external files of chunks that are stored inline again.
+    async fn write_external_payloads(&self, region_path: &Path) -> Result<(), std::io::Error> {
+        for (index, metadata) in self.chunks_data.iter().enumerate() {
+            let Some(metadata) = metadata else {
+                continue;
+            };
+            let Some((abs_x, abs_z)) = Self::absolute_chunk_pos(region_path, index) else {
+                continue;
+            };
+            let external_path = external_chunk_path(region_path, abs_x, abs_z);
+
+            if metadata.serialized_data.external
+                && !metadata.serialized_data.compressed_data.is_empty()
+            {
+                atomic_write(&external_path, &metadata.serialized_data.compressed_data).await?;
+            } else if !metadata.serialized_data.external {
+                // The chunk is stored inline; a leftover external file from an
+                // earlier save would be ignored by readers, but remove it to
+                // avoid confusion and wasted disk space.
+                match tokio::fs::remove_file(&external_path).await {
+                    Ok(()) => {}
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => {
+                        warn!(
+                            "Failed to remove stale external chunk file {}: {err}",
+                            external_path.display()
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the Paper oversized sidecars for chunks now stored inline.
+    /// Called after a successful write so the oversized data can never shadow
+    /// the freshly saved chunk when read back by Paper/Papo.
+    async fn cleanup_paper_oversized(&self, region_path: &Path) {
+        let Some(meta_path) = paper_oversized_meta_path(region_path) else {
+            return;
+        };
+        if !meta_path.exists() {
+            return;
+        }
+
+        for index in 0..CHUNK_COUNT {
+            if let Some((abs_x, abs_z)) = Self::absolute_chunk_pos(region_path, index)
+                && let Some(path) = paper_oversized_chunk_path(region_path, abs_x, abs_z)
+                && let Err(err) = tokio::fs::remove_file(&path).await
+                && err.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(
+                    "Failed to remove oversized chunk file {}: {err}",
+                    path.display()
+                );
+            }
+        }
+
+        if let Err(err) = tokio::fs::remove_file(&meta_path).await
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(
+                "Failed to remove oversized meta file {}: {err}",
+                meta_path.display()
+            );
+        }
+    }
+
+    /// Assigns every present chunk a fresh sequential sector offset, matching
+    /// the exact layout [`Self::write_all`] produces. Must be called whenever
+    /// the write action escalates to `All`, so that the in-memory offsets never
+    /// describe a file layout that no longer exists.
+    ///
+    /// Takes the two fields directly (instead of `&mut self`) so callers can
+    /// hold the `write_action` lock while renumbering.
+    fn renumber_sectors(
+        chunks_data: &mut [Option<AnvilChunkMetadata>; CHUNK_COUNT],
+        end_sector: &mut u32,
+    ) {
+        let mut next_sector = 2;
+        for metadata in chunks_data.iter_mut().flatten() {
+            metadata.file_sector_offset = next_sector;
+            next_sector += metadata.serialized_data.sector_count();
+        }
+        *end_sector = next_sector;
     }
 
     async fn write_indices<I>(&self, path: &Path, indices: I) -> Result<(), std::io::Error>
@@ -378,6 +762,10 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
         for metadata in &self.chunks_data {
             if let Some(chunk) = metadata {
                 let sector_count = chunk.serialized_data.sector_count();
+                debug_assert!(
+                    sector_count <= MAX_IN_FILE_SECTORS,
+                    "external chunks occupy exactly one sector"
+                );
                 header.put_u32((chunk.file_sector_offset << 8) | sector_count);
             } else {
                 header.put_u32(0);
@@ -442,10 +830,19 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
             chunk.serialized_data.write(&mut write).await?;
         }
 
-        write.flush().await
+        write.flush().await?;
+        write.get_ref().sync_all().await?;
+
+        // External payloads need to be persisted too; chunks that became
+        // inline get their stale external files removed.
+        self.write_external_payloads(path).await?;
+
+        Ok(())
     }
 
-    /// Write entire file, disregarding saved offsets
+    /// Write entire file, disregarding saved offsets. This is the safe default:
+    /// the file is built from scratch next to the original and atomically
+    /// swapped in, so a crash mid-write can never produce a torn region file.
     async fn write_all(&self, path: &Path) -> Result<(), std::io::Error> {
         let temp_path = path.with_extension("tmp");
         trace!("Writing tmp file to disk: {temp_path:?}");
@@ -461,6 +858,10 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
         for metadata in &self.chunks_data {
             if let Some(chunk) = metadata {
                 let sector_count = chunk.serialized_data.sector_count();
+                debug_assert!(
+                    sector_count <= MAX_IN_FILE_SECTORS,
+                    "chunks larger than {MAX_IN_FILE_SECTORS} sectors must be external"
+                );
                 header.put_u32((current_sector << 8) | sector_count);
                 current_sector += sector_count;
             } else {
@@ -486,7 +887,32 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
         }
 
         write.flush().await?;
+        write.get_ref().sync_all().await?;
+
+        // The assigned layout must match what `renumber_sectors` recorded; if
+        // it does not, an in-place follow-up write would corrupt the file.
+        // The whole statement is cfg-gated: `debug_assert_eq!` still
+        // name-resolves its arguments when debug assertions are off.
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            current_sector,
+            2 + self
+                .chunks_data
+                .iter()
+                .flatten()
+                .map(|metadata| metadata.serialized_data.sector_count())
+                .sum::<u32>()
+        );
+
+        // External payloads are written (atomically) before the region file is
+        // swapped in, so a successful rename implies a complete save.
+        self.write_external_payloads(path).await?;
+
         tokio::fs::rename(temp_path, path).await?;
+
+        // With every chunk stored inside the region file again, the Paper
+        // oversized sidecars must go or they would shadow the new data.
+        self.cleanup_paper_oversized(path).await;
         Ok(())
     }
 }
@@ -510,7 +936,7 @@ pub trait SingleChunkDataSerializer: Send + Sync + Sized + Dirtiable + 'static {
     fn position(&self) -> (i32, i32);
 }
 
-impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<S> {
+impl<S: SingleChunkDataSerializer> ChunkSerializer for AnvilChunkFile<S> {
     type Data = S;
     type WriteBackend = PathBuf;
 
@@ -518,6 +944,13 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
 
     fn should_write(&self, is_watched: bool) -> bool {
         !is_watched
+    }
+
+    fn has_pending_writes(&self) -> bool {
+        // Locked means a write is in flight right now; be conservative.
+        self.write_action
+            .try_lock()
+            .map_or(true, |action| !matches!(&*action, WriteAction::Pass))
     }
 
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
@@ -540,19 +973,38 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
         }?;
 
         // If we still are in memory after this, we don't need to write again!
+        // On failure the `?` above returns early and the action is kept, so the
+        // next write retries instead of silently dropping the data.
         *write_action = WriteAction::Pass;
         Ok(())
+    }
+
+    /// Parses a region file. External chunk payloads are read from their
+    /// `c.<x>.<z>.mcc` sidecars and Paper oversized sidecars are merged back
+    /// in, based on `path`.
+    fn read_at(r: Bytes, path: &Path) -> Result<Self, ChunkReadingError> {
+        let mut file = Self::read(r)?;
+        file.fill_external_payloads(path);
+        file.apply_paper_oversized(path);
+        Ok(file)
     }
 
     fn read(r: Bytes) -> Result<Self, ChunkReadingError> {
         let mut raw_file_bytes = r;
 
+        // A file smaller than the 8 KiB header cannot contain chunk data; the
+        // header must have been torn by a crash. Treat it as empty instead of
+        // failing the whole region.
         if raw_file_bytes.is_empty() {
             return Ok(Self::default());
         }
 
         if raw_file_bytes.len() < SECTOR_BYTES * 2 {
-            return Err(ChunkReadingError::InvalidHeader);
+            warn!(
+                "Region file of {} bytes is smaller than its 8 KiB header; treating as empty",
+                raw_file_bytes.len()
+            );
+            return Ok(Self::default());
         }
 
         let headers = raw_file_bytes.split_to(SECTOR_BYTES * 2);
@@ -565,9 +1017,8 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
             let timestamp = timestamp_bytes.get_u32();
             let location = location_bytes.get_u32();
 
-            let sector_count = (location & 0xFF) as usize;
+            let mut sector_count = (location & 0xFF) as usize;
             let sector_offset = (location >> 8) as usize;
-            let end_offset = sector_offset + sector_count;
 
             // If the sector offset or count is 0, the chunk is not present (we should not parse empty chunks).
             // Sector 1 is the timestamp table, so a chunk cannot start there either.
@@ -575,9 +1026,23 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
                 continue;
             }
 
-            if end_offset > last_offset {
-                last_offset = end_offset;
+            // Spigot extension: the chunk needed more sectors than the one-byte
+            // count field can express; the real sector count is derived from
+            // the length prefix stored at the chunk's offset.
+            if sector_count == MAX_IN_FILE_SECTORS as usize {
+                let length_offset = (sector_offset - 2) * SECTOR_BYTES;
+                let Some(declared_length) = raw_file_bytes
+                    .get(length_offset..length_offset + 4)
+                    .and_then(|length| <[u8; 4]>::try_from(length).ok())
+                    .map(u32::from_be_bytes)
+                else {
+                    warn!("Region entry {i} marked as 255 sectors but out of bounds; dropping it");
+                    continue;
+                };
+                sector_count = (declared_length as usize + 4) / SECTOR_BYTES + 1;
             }
+
+            let end_offset = sector_offset + sector_count;
 
             // We always subtract 2 for the first two sectors for the timestamp and location tables
             // that we walked earlier
@@ -585,19 +1050,29 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
             let bytes_count = sector_count * SECTOR_BYTES;
 
             if bytes_offset + bytes_count > raw_file_bytes.len() {
-                return Err(ChunkReadingError::ParsingError(
-                    ChunkParsingError::ErrorDeserializingChunk(format!(
-                        "Not enough bytes available for the chunk {} ({} vs {})",
-                        i,
-                        bytes_count,
-                        raw_file_bytes.len().saturating_sub(bytes_offset)
-                    )),
-                ));
+                // Header self-heal: a corrupt entry must not take the whole
+                // region file down; drop the entry and keep the others.
+                warn!(
+                    "Region entry {i} (sectors {sector_offset}..{end_offset}) is out of bounds \
+                     ({} bytes); dropping it",
+                    raw_file_bytes.len()
+                );
+                continue;
             }
 
-            let serialized_data = AnvilChunkData::from_bytes(
+            let serialized_data = match AnvilChunkData::from_bytes(
                 raw_file_bytes.slice(bytes_offset..bytes_offset + bytes_count),
-            )?;
+            ) {
+                Ok(data) => data,
+                Err(err) => {
+                    warn!("Region entry {i} failed to parse ({err:?}); dropping it");
+                    continue;
+                }
+            };
+
+            if end_offset > last_offset {
+                last_offset = end_offset;
+            }
 
             chunk_file.chunks_data[i] = Some(AnvilChunkMetadata {
                 serialized_data,
@@ -610,7 +1085,6 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
         Ok(chunk_file)
     }
 
-    #[expect(clippy::too_many_lines)]
     async fn update_chunk(
         &mut self,
         chunk: Arc<Self::Data>,
@@ -627,13 +1101,20 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
             .as_ref()
             .and_then(|chunk_data| chunk_data.serialized_data.compression);
         let chunk_config_snapshot = chunk_config.clone();
-        let new_chunk_data = run_blocking(move || {
+        let mut new_chunk_data = run_blocking(move || {
             AnvilChunkData::from_chunk(&*chunk, compression_type, &chunk_config_snapshot)
         })
         .await
         .map_err(|_| {
             ChunkWritingError::IoError(std::io::Error::other("chunk serialization task failed"))
         })??;
+
+        // Chunks whose payload exceeds the 255 sector limit of the location
+        // table go to an external `c.<x>.<z>.mcc` file, exactly like vanilla.
+        // The one-byte sector count can never overflow this way.
+        if new_chunk_data.is_oversized() {
+            new_chunk_data.external = true;
+        }
 
         let mut write_action = self.write_action.lock().await;
         if !chunk_config.write_in_place {
@@ -643,12 +1124,14 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
         match &*write_action {
             WriteAction::All => {
                 trace!("Write action is all: setting chunk in place");
-                // Doesn't matter, just add the data
                 self.chunks_data[index] = Some(AnvilChunkMetadata {
                     serialized_data: new_chunk_data,
                     timestamp: epoch,
                     file_sector_offset: 0,
                 });
+                // Keep the in-memory offsets in sync with the layout the full
+                // rewrite produces, so later in-place writes stay valid.
+                Self::renumber_sectors(&mut self.chunks_data, &mut self.end_sector);
             }
             _ => {
                 match self.chunks_data[index].as_ref() {
@@ -678,7 +1161,9 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
                                 old_chunk.file_sector_offset,
                                 new_chunk_data.sector_count()
                             );
-                            // We can just add it
+                            // We can just add it (this also covers external
+                            // chunks: same-size means only the `.mcc` payload
+                            // and the header byte change)
                             self.chunks_data[index] = Some(AnvilChunkMetadata {
                                 serialized_data: new_chunk_data,
                                 timestamp: epoch,
@@ -686,100 +1171,21 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
                             });
                             write_action.maybe_update_chunk_index(index);
                         } else {
-                            // Walk back the end of the list; seeing if there's something that can fit
-                            // in our spot. Here we play a game between is it worth it to do all
-                            // this swapping. I figure if we don't find it after 64 chunks, just
-                            // re-write the whole file instead
-                            // The number is a guestimation and no rigorious thought when into it.
-                            // The more we leapfrog like this, there is a higher
-                            // (abiet still small) of these chunks being corrupted if we are doing a
-                            // write operation when there is an un-clean shutdown
-                            //
-                            // Writing all is "safer" in the sense that no chunks will corrupt,
-                            // but will still roll back the entire region if
-                            // there is an unclean shutdown
-
-                            let mut chunks = self
-                                .chunks_data
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(index, chunk)| {
-                                    chunk.as_ref().map(|chunk| (index, chunk))
-                                })
-                                .collect::<Vec<_>>();
-                            chunks.sort_by_key(|chunk| chunk.1.file_sector_offset);
-
-                            let mut chunks_to_shift = chunks
-                                .into_iter()
-                                .rev()
-                                .take(64)
-                                .take_while_inclusive(|chunk| {
-                                    chunk.1.serialized_data.sector_count()
-                                        != old_chunk.serialized_data.sector_count()
-                                })
-                                .collect::<Vec<_>>();
-
-                            if chunks_to_shift.last().is_none_or(|chunk| chunk.0 == index) {
-                                trace!(
-                                    "Unable to find a chunk to swap with; falling back to serialize all",
-                                );
-
-                                // give up...
-                                *write_action = WriteAction::All;
-                                self.chunks_data[index] = Some(AnvilChunkMetadata {
-                                    serialized_data: new_chunk_data,
-                                    timestamp: epoch,
-                                    file_sector_offset: 0,
-                                });
-                            } else if let Some(swap) = chunks_to_shift.pop() {
-                                // swap last element of the chunks to shift (the first because we
-                                // reversed it) and shift the rest down
-                                let indices_to_shift = chunks_to_shift
-                                    .iter()
-                                    .map(|(index, _)| index)
-                                    .copied()
-                                    .collect::<Vec<_>>();
-                                let swapped_sectors = swap.1.serialized_data.sector_count();
-                                let new_sectors = new_chunk_data.sector_count();
-                                let swapped_index = swap.0;
-                                let old_offset = old_chunk.file_sector_offset;
-                                self.chunks_data[index] = Some(AnvilChunkMetadata {
-                                    serialized_data: new_chunk_data,
-                                    timestamp: epoch,
-                                    file_sector_offset: swap.1.file_sector_offset,
-                                });
-                                write_action.maybe_update_chunk_index(index);
-
-                                if let Some(swapped) = self.chunks_data[swapped_index].as_mut() {
-                                    swapped.file_sector_offset = old_offset;
-                                }
-                                write_action.maybe_update_chunk_index(swapped_index);
-
-                                // Then offset everything else
-
-                                // If positive, now larger -> shift right, else shift left
-                                let offset = new_sectors as i64 - swapped_sectors as i64;
-
-                                trace!(
-                                    "Swapping {index} with {swapped_index}, shifting all chunks {swapped_index} and after by {offset}"
-                                );
-
-                                for shift_index in indices_to_shift {
-                                    if let Some(chunk_data) = self.chunks_data[shift_index].as_mut()
-                                    {
-                                        let new_offset =
-                                            chunk_data.file_sector_offset as i64 + offset;
-                                        chunk_data.file_sector_offset = new_offset as u32;
-                                        write_action.maybe_update_chunk_index(shift_index);
-                                    }
-                                }
-
-                                // If the shift is negative then there will be trailing data, but i
-                                // think that's fine
-
-                                let new_end = self.end_sector as i64 + offset;
-                                self.end_sector = new_end as u32;
-                            }
+                            // The chunk changed size. Re-shuffling sectors in
+                            // place leaves a window where a crash corrupts
+                            // neighbouring chunks, so fall back to the atomic
+                            // full rewrite instead.
+                            trace!(
+                                "Chunk {} changed size, falling back to atomic full rewrite",
+                                index
+                            );
+                            *write_action = WriteAction::All;
+                            self.chunks_data[index] = Some(AnvilChunkMetadata {
+                                serialized_data: new_chunk_data,
+                                timestamp: epoch,
+                                file_sector_offset: 0,
+                            });
+                            Self::renumber_sectors(&mut self.chunks_data, &mut self.end_sector);
                         }
                     }
                 }
@@ -831,584 +1237,476 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for AnvilChunkFile<
     }
 }
 
-/*
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use pumpkin_config::chunk::ChunkCompression;
+    use pumpkin_nbt::tag::NbtTag;
 
-    use pumpkin_config::{AdvancedConfiguration, advanced_config, override_config_for_testing};
-    use pumpkin_data::BlockDirection;
-    use pumpkin_util::math::position::BlockPos;
-    use pumpkin_util::math::vector2::Vector2;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use temp_dir::TempDir;
-    use tokio::sync::RwLock;
-
-    use crate::chunk::ChunkData;
-    use crate::chunk::format::anvil::{AnvilChunkFile, SingleChunkDataSerializer};
-    use crate::chunk::io::file_manager::{ChunkFileManager, PathFromLevelFolder};
-    use crate::chunk::io::{FileIO, LoadedData};
-    use crate::dimension::Dimension;
-    use crate::generation::{Seed, get_world_gen};
-    use crate::level::{Level, LevelFolder, SyncChunk};
-    use crate::world::{BlockAccessor, BlockRegistryExt};
-
-    struct BlockRegistry;
-
-    impl BlockRegistryExt for BlockRegistry {
-        fn can_place_at(
-            &self,
-            _block: &pumpkin_data::Block,
-            _block_accessor: &dyn BlockAccessor,
-            _block_pos: &BlockPos,
-            _face: BlockDirection,
-        ) -> bool {
-            true
+    fn config_with(write_in_place: bool) -> AnvilChunkConfig {
+        AnvilChunkConfig {
+            compression: ChunkCompression::default(),
+            write_in_place,
         }
     }
 
-    async fn get_chunks<S>(
-        saver: &ChunkFileManager<AnvilChunkFile<S>>,
-        folder: &LevelFolder,
-        chunks: &[(Vector2<i32>, SyncChunk)],
-    ) -> Box<[Arc<RwLock<S>>]>
-    where
-        S: SingleChunkDataSerializer + PathFromLevelFolder + 'static,
-    {
-        let mut read_chunks = Vec::new();
-        let (send, mut recv) = tokio::sync::mpsc::channel(1);
+    /// A tiny chunk payload carrier for serializer-level tests. It also records
+    /// which non-payload keys survived a round-trip, to observe merges.
+    struct MockChunk {
+        x: i32,
+        z: i32,
+        payload: Vec<u8>,
+        extra_keys: Vec<String>,
+        dirty: std::sync::atomic::AtomicBool,
+    }
 
-        let chunk_pos = chunks.iter().map(|(at, _)| *at).collect::<Vec<_>>();
-        let spawn = saver.fetch_chunks(folder, &chunk_pos, send);
-        let collect = async {
-            while let Some(data) = recv.recv().await {
-                read_chunks.push(data);
+    impl Clone for MockChunk {
+        fn clone(&self) -> Self {
+            Self {
+                x: self.x,
+                z: self.z,
+                payload: self.payload.clone(),
+                extra_keys: self.extra_keys.clone(),
+                dirty: std::sync::atomic::AtomicBool::new(
+                    self.dirty.load(std::sync::atomic::Ordering::Relaxed),
+                ),
             }
-        };
+        }
+    }
 
-        tokio::join!(spawn, collect);
+    impl std::fmt::Debug for MockChunk {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockChunk")
+                .field("x", &self.x)
+                .field("z", &self.z)
+                .field("payload_len", &self.payload.len())
+                .field("extra_keys", &self.extra_keys)
+                .finish_non_exhaustive()
+        }
+    }
 
-        let read_chunks = read_chunks
-            .into_iter()
-            .map(|chunk| match chunk {
-                LoadedData::Loaded(chunk) => chunk,
-                LoadedData::Missing(_) => panic!("Missing chunk"),
-                LoadedData::Error((position, error)) => {
-                    panic!("Error reading chunk at {position:?} | Error: {error:?}")
-                }
+    impl MockChunk {
+        fn new(x: i32, z: i32, payload: Vec<u8>) -> Arc<Self> {
+            Arc::new(Self {
+                x,
+                z,
+                payload,
+                extra_keys: Vec::new(),
+                dirty: std::sync::atomic::AtomicBool::new(true),
             })
-            .collect::<Vec<_>>();
-
-        read_chunks.into_boxed_slice()
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn not_existing() {
-        let region_path = PathBuf::from("not_existing");
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-
-        let mut chunks = Vec::new();
-        let (send, mut recv) = tokio::sync::mpsc::channel(1);
-
-        chunk_saver
-            .fetch_chunks(
-                &LevelFolder {
-                    root_folder: PathBuf::from(""),
-                    region_folder: region_path,
-                    entities_folder: PathBuf::from(""),
-                },
-                &[Vector2::new(0, 0)],
-                send,
-            )
-            .await;
-
-        while let Some(data) = recv.recv().await {
-            chunks.push(data);
-        }
-
-        assert!(chunks.len() == 1 && matches!(chunks[0], LoadedData::Missing(_)));
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn write_in_place() {
-        let mut config = AdvancedConfiguration::default();
-        config.chunk.write_in_place = true;
-        override_config_for_testing(config);
-        assert!(advanced_config().chunk.write_in_place);
-
-        let _ = env_logger::try_init();
-
-        let generator = get_world_gen(Seed(0), Dimension::Overworld, false, Vec::new(), String::new());
-
-        let temp_dir = TempDir::new().unwrap();
-        let level_folder = LevelFolder {
-            root_folder: temp_dir.path().to_path_buf(),
-            region_folder: temp_dir.path().join("region"),
-            entities_folder: PathBuf::from("entities"),
-        };
-        fs::create_dir(&level_folder.region_folder).expect("couldn't create region folder");
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let block_registry = Arc::new(BlockRegistry);
-
-        // Generate chunks
-        let mut chunks = vec![];
-        let level = Arc::new(Level::from_root_folder(
-            temp_dir.path().to_path_buf(),
-            block_registry.clone(),
-            0,
-            Dimension::Overworld,
-        ));
-        for x in -5..5 {
-            for y in -5..5 {
-                let position = Vector2::new(x, y);
-                let chunk = generator.generate_chunk(&level, block_registry.as_ref(), &position);
-                chunks.push((position, Arc::new(RwLock::new(chunk))));
-            }
-        }
-
-        // TEST APPEND TO END
-
-        chunk_saver
-            .save_chunks(&level_folder, chunks.clone())
-            .await
-            .expect("Failed to write chunk");
-
-        // Create a new manager to ensure nothing is cached
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let read_chunks = get_chunks(&chunk_saver, &level_folder, &chunks).await;
-
-        for (_, chunk) in &chunks {
-            let chunk = chunk.read().await;
-            for read_chunk in read_chunks.iter() {
-                let read_chunk = read_chunk.read().await;
-                if read_chunk.position == chunk.position {
-                    let original = chunk.section.dump_blocks();
-                    let read = read_chunk.section.dump_blocks();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    let original = chunk.section.dump_biomes();
-                    let read = read_chunk.section.dump_biomes();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-                    break;
-                }
-            }
-        }
-
-        // TEST WRITE IN PLACE
-
-        // Idk what blocks these are, they just have to be different
-        let mut chunk = chunks.first().unwrap().1.write().await;
-        chunk.section.set_relative_block(0, 0, 0, 1000);
-        // Mark dirty so we actually write it
-        chunk.dirty = true;
-        drop(chunk);
-        let mut chunk = chunks.last().unwrap().1.write().await;
-        chunk.section.set_relative_block(0, 0, 0, 1000);
-        // Mark dirty so we actually write it
-        chunk.dirty = true;
-        drop(chunk);
-
-        chunk_saver
-            .save_chunks(&level_folder, chunks.clone())
-            .await
-            .expect("Failed to write chunk");
-
-        // Create a new manager to ensure nothing is cached
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let read_chunks = get_chunks(&chunk_saver, &level_folder, &chunks).await;
-
-        for (_, chunk) in &chunks {
-            let chunk = chunk.read().await;
-            for read_chunk in read_chunks.iter() {
-                let read_chunk = read_chunk.read().await;
-                if read_chunk.position == chunk.position {
-                    let original = chunk.section.dump_blocks();
-                    let read = read_chunk.section.dump_blocks();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    let original = chunk.section.dump_biomes();
-                    let read = read_chunk.section.dump_biomes();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    break;
-                }
-            }
-        }
-
-        // TEST SWAP SHIFT
-
-        // Make a big chunk
-        let mut chunk = chunks.first().unwrap().1.write().await;
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..4 {
-                    let block_id = 16 * 16 * y + 16 * z + x;
-                    chunk.section.set_relative_block(x, y, z, block_id as u16);
-                }
-            }
-        }
-        // Mark dirty so we actually write it
-        chunk.dirty = true;
-        drop(chunk);
-        let mut chunk = chunks[2].1.write().await;
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..4 {
-                    let block_id = 16 * 16 * y + 16 * z + x;
-                    chunk.section.set_relative_block(x, y, z, block_id as u16);
-                }
-            }
-        }
-        // Mark dirty so we actually write it
-        chunk.dirty = true;
-        drop(chunk);
-
-        chunk_saver
-            .save_chunks(&level_folder, chunks.clone())
-            .await
-            .expect("Failed to write chunk");
-
-        // Create a new manager to ensure nothing is cached
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let read_chunks = get_chunks(&chunk_saver, &level_folder, &chunks).await;
-
-        for (_, chunk) in &chunks {
-            let chunk = chunk.read().await;
-            for read_chunk in read_chunks.iter() {
-                let read_chunk = read_chunk.read().await;
-                if read_chunk.position == chunk.position {
-                    let original = chunk.section.dump_blocks();
-                    let read = read_chunk.section.dump_blocks();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    let original = chunk.section.dump_biomes();
-                    let read = read_chunk.section.dump_biomes();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    break;
-                }
-            }
-        }
-
-        // TEST DEFAULT TO WRITE ALL
-
-        // Make an even bigger chunk
-        let mut chunk = chunks.last().unwrap().1.write().await;
-        for x in 0..16 {
-            for z in 0..16 {
-                for y in 0..16 {
-                    let block_id = 16 * 16 * y + 16 * z + x;
-                    chunk.section.set_relative_block(x, y, z, block_id as u16);
-                }
-            }
-        }
-        // Mark dirty so we actually write it
-        chunk.dirty = true;
-        drop(chunk);
-
-        chunk_saver
-            .save_chunks(&level_folder, chunks.clone())
-            .await
-            .expect("Failed to write chunk");
-
-        // Create a new manager to ensure nothing is cached
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let read_chunks = get_chunks(&chunk_saver, &level_folder, &chunks).await;
-
-        for (_, chunk) in &chunks {
-            let chunk = chunk.read().await;
-            for read_chunk in read_chunks.iter() {
-                let read_chunk = read_chunk.read().await;
-                if read_chunk.position == chunk.position {
-                    let original = chunk.section.dump_blocks();
-                    let read = read_chunk.section.dump_blocks();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-
-                    let original = chunk.section.dump_biomes();
-                    let read = read_chunk.section.dump_biomes();
-
-                    original
-                        .into_iter()
-                        .zip(read)
-                        .enumerate()
-                        .for_each(|(i, (o, r))| {
-                            if o != r {
-                                panic!("Data miss-match expected {o}, got {r} ({i})");
-                            }
-                        });
-                    break;
-                }
-            }
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn write_bulk() {
-        let mut config = AdvancedConfiguration::default();
-        config.chunk.write_in_place = false;
-        override_config_for_testing(config);
-        assert!(!advanced_config().chunk.write_in_place);
+    impl Dirtiable for MockChunk {
+        fn is_dirty(&self) -> bool {
+            self.dirty.load(std::sync::atomic::Ordering::Relaxed)
+        }
+        fn mark_dirty(&self, flag: bool) {
+            self.dirty.store(flag, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 
-        let _ = env_logger::try_init();
-
-        let generator = get_world_gen(Seed(0), Dimension::Overworld, false, Vec::new(), String::new());
-
-        let temp_dir = TempDir::new().unwrap();
-        let level_folder = LevelFolder {
-            root_folder: temp_dir.path().to_path_buf(),
-            region_folder: temp_dir.path().join("region"),
-            entities_folder: PathBuf::from("entities"),
-        };
-        fs::create_dir(&level_folder.region_folder).expect("couldn't create region folder");
-        let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-        let block_registry = Arc::new(BlockRegistry);
-
-        // Generate chunks
-        let mut chunks = vec![];
-        let level = Arc::new(Level::from_root_folder(
-            temp_dir.path().to_path_buf(),
-            block_registry.clone(),
-            0,
-            Dimension::Overworld,
-        ));
-        for x in -5..5 {
-            for y in -5..5 {
-                let position = Vector2::new(x, y);
-                let chunk = generator.generate_chunk(&level, block_registry.as_ref(), &position);
-                chunks.push((position, Arc::new(RwLock::new(chunk))));
+    impl SingleChunkDataSerializer for MockChunk {
+        fn to_bytes(&self) -> Result<Bytes, ChunkSerializingError> {
+            let mut root = pumpkin_nbt::NbtCompound::new();
+            root.put_int("x", self.x);
+            root.put_int("z", self.z);
+            // Split the payload: `pumpkin-nbt` refuses to read arrays larger
+            // than `MAX_ARRAY_LENGTH` (512_000) elements.
+            for (part_index, part) in self.payload.chunks(500_000).enumerate() {
+                root.put(
+                    &format!("payload_{part_index}"),
+                    NbtTag::ByteArray(part.iter().map(|&b| b as i8).collect()),
+                );
             }
+            Ok(pumpkin_nbt::Nbt::from(root).write_unnamed())
         }
 
-        for _ in 0..5 {
-            // Mark the chunks as dirty so we save them again
-            for (_, chunk) in &chunks {
-                let mut chunk = chunk.write().await;
-                chunk.dirty = true;
-            }
-
-            chunk_saver
-                .save_chunks(&level_folder, chunks.clone())
-                .await
-                .expect("Failed to write chunk");
-
-            // Create a new manager to ensure nothing is cached
-            let chunk_saver = ChunkFileManager::<AnvilChunkFile<ChunkData>>::default();
-            let read_chunks = get_chunks(&chunk_saver, &level_folder, &chunks).await;
-
-            for (_, chunk) in &chunks {
-                let chunk = chunk.read().await;
-                for read_chunk in read_chunks.iter() {
-                    let read_chunk = read_chunk.read().await;
-                    if read_chunk.position == chunk.position {
-                        let original = chunk.section.dump_blocks();
-                        let read = read_chunk.section.dump_blocks();
-
-                        original
-                            .into_iter()
-                            .zip(read)
-                            .enumerate()
-                            .for_each(|(i, (o, r))| {
-                                if o != r {
-                                    panic!("Data miss-match expected {o}, got {r} ({i})");
-                                }
-                            });
-
-                        let original = chunk.section.dump_biomes();
-                        let read = read_chunk.section.dump_biomes();
-
-                        original
-                            .into_iter()
-                            .zip(read)
-                            .enumerate()
-                            .for_each(|(i, (o, r))| {
-                                if o != r {
-                                    panic!("Data miss-match expected {o}, got {r} ({i})");
-                                }
-                            });
-                        break;
+        fn from_bytes(bytes: &Bytes, pos: Vector2<i32>) -> Result<Self, ChunkReadingError> {
+            let mut cursor = std::io::Cursor::new(bytes.as_ref());
+            let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+                pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+            );
+            let nbt = pumpkin_nbt::Nbt::read_unnamed(&mut reader).map_err(|e| {
+                ChunkReadingError::ParsingError(ChunkParsingError::ErrorDeserializingChunk(
+                    e.to_string(),
+                ))
+            })?;
+            let mut parts: Vec<(usize, Vec<u8>)> = nbt
+                .root_tag
+                .child_tags
+                .iter()
+                .filter_map(|(name, tag)| {
+                    let index = name.strip_prefix("payload_")?.parse().ok()?;
+                    match tag {
+                        NbtTag::ByteArray(arr) => {
+                            Some((index, arr.iter().map(|&b| b as u8).collect()))
+                        }
+                        _ => None,
                     }
+                })
+                .collect();
+            parts.sort_by_key(|(index, _)| *index);
+            let payload = parts.into_iter().flat_map(|(_, part)| part).collect();
+            let extra_keys = nbt
+                .root_tag
+                .child_tags
+                .keys()
+                .map(std::string::ToString::to_string)
+                .filter(|key| key != "x" && key != "z" && !key.starts_with("payload_"))
+                .collect();
+            Ok(Self {
+                x: pos.x,
+                z: pos.y,
+                payload,
+                extra_keys,
+                dirty: std::sync::atomic::AtomicBool::new(false),
+            })
+        }
+
+        fn position(&self) -> (i32, i32) {
+            (self.x, self.z)
+        }
+    }
+
+    fn zlib_wrap(payload: &[u8]) -> Vec<u8> {
+        let mut encoder = ZlibEncoder::new(payload, flate2::Compression::new(6));
+        let mut out = Vec::new();
+        encoder.read_to_end(&mut out).expect("zlib encode failed");
+        out
+    }
+
+    fn mock_nbt_bytes(payload: &[u8]) -> Vec<u8> {
+        let mut root = pumpkin_nbt::NbtCompound::new();
+        root.put_int("x", 0);
+        root.put_int("z", 0);
+        root.put(
+            "payload_0",
+            NbtTag::ByteArray(payload.iter().map(|&b| b as i8).collect()),
+        );
+        pumpkin_nbt::Nbt::from(root).write_unnamed().to_vec()
+    }
+
+    /// Builds a raw region file: header + one chunk per spec.
+    /// `entries`: (index, timestamp, sector-aligned record incl. 5-byte header)
+    fn build_region(entries: &[(usize, u32, Vec<u8>)]) -> Vec<u8> {
+        let mut location = vec![0u8; SECTOR_BYTES];
+        let mut timestamps = vec![0u8; SECTOR_BYTES];
+        let mut data = Vec::new();
+        let mut next_sector: u32 = 2;
+
+        for (index, timestamp, record) in entries {
+            let count = record.len().div_ceil(SECTOR_BYTES) as u32;
+            location[*index * 4..*index * 4 + 4]
+                .copy_from_slice(&((next_sector << 8) | count).to_be_bytes());
+            timestamps[*index * 4..*index * 4 + 4].copy_from_slice(&timestamp.to_be_bytes());
+            data.extend_from_slice(record);
+            data.extend(std::iter::repeat_n(
+                0u8,
+                count as usize * SECTOR_BYTES - record.len(),
+            ));
+            next_sector += count;
+        }
+
+        let mut file = Vec::new();
+        file.extend_from_slice(&location);
+        file.extend_from_slice(&timestamps);
+        file.extend_from_slice(&data);
+        file
+    }
+
+    fn chunk_record(compression: Option<u8>, payload: &[u8]) -> Vec<u8> {
+        let mut record = Vec::with_capacity(payload.len() + 5);
+        record.extend_from_slice(&((payload.len() + 1) as u32).to_be_bytes());
+        record.push(compression.unwrap_or(Compression::NO_COMPRESSION_ID));
+        record.extend_from_slice(payload);
+        record
+    }
+
+    fn load_all(
+        region: &AnvilChunkFile<MockChunk>,
+        positions: Vec<Vector2<i32>>,
+    ) -> Vec<LoadedData<MockChunk, ChunkReadingError>> {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(positions.len().max(1));
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(async move {
+                region.get_chunks(positions, tx).await;
+                let mut results = Vec::new();
+                while let Some(item) = rx.recv().await {
+                    results.push(item);
                 }
+                results
+            })
+    }
+
+    #[test]
+    fn read_accepts_spigot_255_extension() {
+        // The chunk needs more sectors than the one-byte count field can
+        // express; the count byte is saturated at 255 and readers must
+        // recompute the real count from the length prefix.
+        let payload = zlib_wrap(&mock_nbt_bytes(&vec![0xAB; 300 * 1024]));
+        let record = chunk_record(Some(Compression::ZLib as u8), &payload);
+        let mut file = build_region(&[(0, 42, record)]);
+        // Saturate the count byte for entry 0 (offset stays sector 2).
+        file[0..4].copy_from_slice(&((2u32 << 8) | 255).to_be_bytes());
+
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read(file.into()).expect("parse ok");
+        let results = load_all(&region, vec![Vector2::new(0, 0)]);
+        match &results[0] {
+            LoadedData::Loaded(chunk) => {
+                assert_eq!(chunk.payload.len(), 300 * 1024);
+                assert!(chunk.payload.iter().all(|&b| b == 0xAB));
+            }
+            other => panic!("expected loaded chunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_heals_out_of_bounds_entries() {
+        // Entry claims sectors far beyond the file: it must be dropped without
+        // failing the whole region, and the second entry must still be there.
+        let good_payload = zlib_wrap(&mock_nbt_bytes(b"good"));
+        let good = chunk_record(Some(Compression::ZLib as u8), &good_payload);
+        let mut file = build_region(&[(5, 1, good)]);
+        // Entry 0 points outside the file.
+        file[0..4].copy_from_slice(&((9000u32 << 8) | 3).to_be_bytes());
+
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read(file.into()).expect("parse ok");
+        let results = load_all(&region, vec![Vector2::new(5, 0), Vector2::new(0, 0)]);
+        assert!(
+            results
+                .iter()
+                .any(|item| matches!(item, LoadedData::Missing(pos) if pos.x == 0))
+        );
+        assert!(
+            results
+                .iter()
+                .any(|item| matches!(item, LoadedData::Loaded(c) if c.payload == b"good"))
+        );
+    }
+
+    #[test]
+    fn torn_header_is_treated_as_empty() {
+        let file = vec![0u8; 100];
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read(file.into()).expect("parse ok");
+        let results = load_all(&region, vec![Vector2::new(0, 0)]);
+        assert!(matches!(results[0], LoadedData::Missing(_)));
+    }
+
+    #[test]
+    fn external_entry_with_missing_mcc_is_per_chunk_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let region_path = temp.path().join("r.0.0.mca");
+
+        // Entry 0 with external flag set but no `.mcc` file next to it.
+        let header = chunk_record(Some(Compression::ZLib as u8 | 0x80), b"");
+        let file = build_region(&[(0, 7, header)]);
+
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read_at(file.into(), &region_path)
+                .expect("parse ok");
+        let results = load_all(&region, vec![Vector2::new(0, 0)]);
+        assert!(matches!(results[0], LoadedData::Error(_)));
+    }
+
+    #[test]
+    fn paper_oversized_data_is_merged_on_read() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let region_path = temp.path().join("r.0.0.mca");
+
+        // Base chunk 0/0 without entities, stored zlib inline.
+        let base_payload = zlib_wrap(&mock_nbt_bytes(b"base"));
+        let record = chunk_record(Some(Compression::ZLib as u8), &base_payload);
+        let file = build_region(&[(0, 1, record)]);
+        std::fs::write(&region_path, &file).expect("write region");
+
+        // Oversized sidecar holding the extracted entity data.
+        let mut root = pumpkin_nbt::NbtCompound::new();
+        let mut entity = pumpkin_nbt::NbtCompound::new();
+        entity.put_string("id", "minecraft:zombie".to_string());
+        root.put_list("Entities", vec![NbtTag::Compound(entity)]);
+        let sidecar = pumpkin_nbt::Nbt::new(String::new(), root);
+        let sidecar_path = temp.path().join("r.0.0_oversized_0_0.nbt");
+        std::fs::write(&sidecar_path, zlib_wrap(&sidecar.write())).expect("write sidecar");
+
+        // Bitmap marking chunk 0 as oversized.
+        let mut meta = vec![0u8; CHUNK_COUNT];
+        meta[0] = 1;
+        std::fs::write(temp.path().join("r.0.0.oversized.nbt"), meta).expect("write meta");
+
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read_at(file.into(), &region_path)
+                .expect("parse ok");
+        let results = load_all(&region, vec![Vector2::new(0, 0)]);
+        match &results[0] {
+            LoadedData::Loaded(chunk) => {
+                assert_eq!(chunk.payload, b"base");
+                assert!(chunk.extra_keys.iter().any(|key| key == "Entities"));
+            }
+            other => panic!("expected loaded chunk, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_chunk_written_as_external_never_overflows_location_table() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let region_path = temp.path().join("r.0.0.mca");
+
+        // Payload large enough to need more than 255 sectors (~1 MiB) once
+        // compressed: incompressible xorshift bytes, not a repeated pattern.
+        let mut payload = Vec::with_capacity(1200 * 1024);
+        let mut state: u64 = 0x0051_7CC1_B7C7_1F15;
+        for _ in 0..1200 * 1024 {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            payload.push(state as u8);
+        }
+        let chunk = MockChunk::new(3, 4, payload.clone());
+        let mut region: AnvilChunkFile<MockChunk> = AnvilChunkFile::default();
+        region
+            .update_chunk(chunk, &config_with(true))
+            .await
+            .expect("update ok");
+
+        region.write(&region_path).await.expect("write ok");
+
+        // The location entry must stay representable: count == 1 sector, and
+        // the header byte at that offset must carry the external flag.
+        let bytes = tokio::fs::read(&region_path).await.expect("read back");
+        let entry_index = AnvilChunkFile::<MockChunk>::get_chunk_index(3, 4);
+        let entry_slice = &bytes[entry_index * 4..entry_index * 4 + 4];
+        let entry = u32::from_be_bytes(entry_slice.try_into().expect("entry 4 bytes"));
+        let (offset, count) = (entry >> 8, entry & 0xFF);
+        assert_eq!(count, 1, "external chunks occupy a single header sector");
+        let header_byte = bytes[offset as usize * SECTOR_BYTES + 4];
+        assert_ne!(
+            header_byte & EXTERNAL_FLAG,
+            0,
+            "header byte must carry the external flag"
+        );
+        assert!(Compression::from_byte(header_byte & !EXTERNAL_FLAG).is_ok());
+
+        // The external payload file must exist.
+        assert!(temp.path().join("c.3.4.mcc").exists());
+
+        // Round trip: read_at must load the chunk from the external file.
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read_at(bytes.into(), &region_path)
+                .expect("parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        region.get_chunks(vec![Vector2::new(3, 4)], tx).await;
+        while let Some(item) = rx.recv().await {
+            match item {
+                LoadedData::Loaded(chunk) => assert_eq!(chunk.payload, payload),
+                other => panic!("expected loaded chunk, got {other:?}"),
             }
         }
     }
 
-    // TODO
-    /*
-    #[test]
-    fn load_java_chunk() {
-        let temp_dir = TempDir::new().unwrap();
-        let level_folder = LevelFolder {
-            root_folder: temp_dir.path().to_path_buf(),
-            region_folder: temp_dir.path().join("region"),
-        };
+    #[tokio::test]
+    async fn atomic_rewrite_round_trip() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let region_path = temp.path().join("r.0.0.mca");
 
-        fs::create_dir(&level_folder.region_folder).unwrap();
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join(file!())
-                .parent()
-                .unwrap()
-                .join("../../assets/r.0.0.mca"),
-            level_folder.region_folder.join("r.0.0.mca"),
-        )
-        .unwrap();
+        let mut region: AnvilChunkFile<MockChunk> = AnvilChunkFile::default();
+        region
+            .update_chunk(MockChunk::new(0, 0, b"hello".to_vec()), &config_with(false))
+            .await
+            .expect("update 1");
+        region
+            .update_chunk(
+                MockChunk::new(31, 31, b"world".to_vec()),
+                &config_with(false),
+            )
+            .await
+            .expect("update 2");
+        region.write(&region_path).await.expect("write");
 
-        let mut actually_tested = false;
-        for x in 0..(1 << 5) {
-            for z in 0..(1 << 5) {
-                let result = AnvilChunkFormat {}.read_chunk(&level_folder, &Vector2 { x, z });
-
-                match result {
-                    Ok(_) => actually_tested = true,
-                    Err(ChunkReadingError::ParsingError(ChunkParsingError::ChunkNotGenerated)) => {}
-                    Err(ChunkReadingError::ChunkNotExist) => {}
-                    Err(e) => panic!("{:?}", e),
-                }
-
-                println!("=========== OK ===========");
+        let raw = tokio::fs::read(&region_path).await.expect("read");
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read_at(raw.into(), &region_path)
+                .expect("parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        region
+            .get_chunks(vec![Vector2::new(0, 0), Vector2::new(31, 31)], tx)
+            .await;
+        let mut loaded = 0;
+        while let Some(item) = rx.recv().await {
+            if let LoadedData::Loaded(chunk) = item {
+                assert!(chunk.payload == b"hello" || chunk.payload == b"world");
+                loaded += 1;
             }
         }
+        assert_eq!(loaded, 2);
 
-        assert!(actually_tested);
-    }
-    */
-}
- */
-#[cfg(test)]
-mod tests {
-    use super::{AnvilChunkFile, Compression, CompressionError, SECTOR_BYTES};
-    use crate::chunk::ChunkData;
-    use crate::chunk::io::ChunkSerializer;
-    use bytes::{BufMut, Bytes, BytesMut};
-
-    /// A region file whose first location entry is `location`, whose other
-    /// 1023 entries are absent, and whose single payload sector starts with
-    /// `declared_len` followed by the "no compression" marker.
-    fn region_with_first_location(location: u32, declared_len: u32) -> Bytes {
-        let mut buf = BytesMut::with_capacity(SECTOR_BYTES * 3);
-        buf.put_u32(location);
-        buf.put_bytes(0, SECTOR_BYTES - 4);
-        buf.put_bytes(0, SECTOR_BYTES);
-
-        buf.put_u32(declared_len);
-        buf.put_u8(3);
-        buf.put_bytes(0, SECTOR_BYTES - 5);
-
-        buf.freeze()
+        // No leftover temp files.
+        let mut entries = tokio::fs::read_dir(temp.path()).await.expect("readdir");
+        while let Some(entry) = entries.next_entry().await.expect("entry") {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let extension = std::path::Path::new(&name)
+                .extension()
+                .map(|ext| ext.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            assert!(
+                extension != "tmp" && extension != "tmp_atomic",
+                "leftover temp file {name}"
+            );
+        }
     }
 
-    #[test]
-    fn a_chunk_pointing_into_the_header_is_skipped() {
-        // Sectors 0 and 1 hold the location and timestamp tables, so a chunk
-        // cannot start before sector 2. Offset 0 is already skipped; offset 1
-        // is just as impossible and used to be subtracted from anyway.
-        let file = AnvilChunkFile::<ChunkData>::read(region_with_first_location((1 << 8) | 1, 1))
-            .expect("one bad location entry should not fail the whole region");
+    #[tokio::test]
+    async fn in_place_write_survives_full_rewrite_followup() {
+        // Regression for the stale-offset hazard: after an atomic full rewrite
+        // (All), a follow-up same-size in-place write must still land on the
+        // correct sector, not on the old file layout.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let region_path = temp.path().join("r.0.0.mca");
 
-        assert!(file.chunks_data[0].is_none());
-    }
+        let mut region: AnvilChunkFile<MockChunk> = AnvilChunkFile::default();
+        // First save: default (atomic All) path.
+        region
+            .update_chunk(MockChunk::new(2, 2, b"first".to_vec()), &config_with(false))
+            .await
+            .expect("update 1");
+        region.write(&region_path).await.expect("write 1");
 
-    #[test]
-    fn a_chunk_at_the_first_free_sector_is_read() {
-        // The control for the test above: sector 2 is the first legal one, and
-        // a chunk there must not be skipped.
-        let file = AnvilChunkFile::<ChunkData>::read(region_with_first_location((2 << 8) | 1, 1))
-            .expect("a chunk at the first free sector is well formed");
+        // Second save: in-place mode, same size payload.
+        region
+            .update_chunk(MockChunk::new(2, 2, b"secnd".to_vec()), &config_with(true))
+            .await
+            .expect("update 2");
+        region.write(&region_path).await.expect("write 2");
 
-        assert!(file.chunks_data[0].is_some());
-    }
-
-    #[test]
-    fn a_chunk_declaring_no_length_is_an_error_not_a_panic() {
-        // The length covers the compression byte, so the smallest legal value
-        // is 1 and the byte count is that minus one. Zero came from a file, so
-        // it has to be rejected rather than subtracted from.
-        let file = AnvilChunkFile::<ChunkData>::read(region_with_first_location((2 << 8) | 1, 0));
-
-        assert!(file.is_err());
+        let raw = tokio::fs::read(&region_path).await.expect("read");
+        let region =
+            <AnvilChunkFile<MockChunk> as ChunkSerializer>::read_at(raw.into(), &region_path)
+                .expect("parse");
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        region.get_chunks(vec![Vector2::new(2, 2)], tx).await;
+        while let Some(item) = rx.recv().await {
+            match item {
+                LoadedData::Loaded(chunk) => assert_eq!(chunk.payload, b"secnd"),
+                other => panic!("expected loaded chunk, got {other:?}"),
+            }
+        }
     }
 
     #[test]
-    fn custom_compression_returns_unknown_compression_error() {
-        assert!(matches!(
-            Compression::Custom.compress_data(b"chunk data", 6),
-            Err(CompressionError::UnknownCompression)
-        ));
-    }
-
-    #[test]
-    fn custom_decompression_returns_unknown_compression_error() {
-        assert!(matches!(
-            Compression::Custom.decompress_data(b"chunk data"),
-            Err(CompressionError::UnknownCompression)
-        ));
+    fn compression_round_trip_all_variants() {
+        for compression in [Compression::GZip, Compression::ZLib, Compression::LZ4] {
+            let data = b"the quick brown fox jumps over the lazy dog".repeat(64);
+            let compressed = compression
+                .compress_data(&data, 6)
+                .expect("compress failed");
+            let decompressed = compression
+                .decompress_data(&compressed)
+                .expect("decompress failed");
+            assert_eq!(decompressed.as_ref(), data.as_slice(), "{compression:?}");
+        }
     }
 }
