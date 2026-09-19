@@ -163,3 +163,4 @@ minecraft-sources*/
 
 # Local release packaging output
 dist/
+/REF
