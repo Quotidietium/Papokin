@@ -70,6 +70,13 @@ interface scheduler {
 
     /// Cancels a scheduled task if it hasn't finished yet.
     ///
+    /// Cancellation is immediate: wall-clock (async) tasks are woken from
+    /// their current sleep rather than left to run to the next due point.
+    /// The guest-side handler registration is released along with the task
+    /// (one-shot handlers are also released automatically after their first
+    /// invocation). Disabling or unloading a plugin cancels all of its
+    /// remaining tasks the same way.
+    ///
     /// * `task-id`: The ID of the task to cancel.
     cancel-task: func(task-id: u32);
 }
