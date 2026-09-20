@@ -118,6 +118,8 @@ cp target/wasm32-wasip2/debug/my_plugin.wasm <服务器>/plugins/
 
 启动服务器即加载；日志里插件的 `tracing` 输出会自动附带 `plugin.target` / `plugin.module` 字段。
 
+开发期可在服务器配置开启 `plugins.hot_reload = true`：宿主监听 `plugins/` 目录的 `.wasm` 变更（扩展名大小写不敏感），对变更文件单独 unload → load，不影响其他插件。一次保存产生的连串文件事件会按 500ms 静默窗口去抖合并，同一路径只重载一次。
+
 ---
 
 ## 三、插件生命周期与元数据
@@ -229,7 +231,7 @@ WIT `scheduler` 接口（7 个函数）。SDK 两条入口：
 | `schedule_async_repeating_task(ms, period, handler)` | 墙钟毫秒 | 异步执行器上周期执行 |
 | `Entity::schedule_entity_delayed_task(ticks, handler)` | 游戏刻 | **绑定实体**：实体消失则静默跳过 |
 | `Entity::schedule_entity_repeating_task(ticks, period, handler)` | 游戏刻 | 同上；实体消失时永久停止 |
-| `cancel_task(task_id)` | — | 取消任意以上任务 |
+| `cancel_task(task_id)` | — | 取消任意以上任务（**立即生效**，见下） |
 
 ```rust
 use pumpkin_plugin_api::scheduler::{SchedulerExt, cancel_task};
@@ -258,6 +260,12 @@ entity.schedule_entity_repeating_task(10, 10, |_server| {
 ```
 
 > 注意：handler 可能被**重入**，捕获的可变状态需用线程安全内部可变性（`Mutex`/`Atomic*`）。同步任务回调发生在 tick 循环，不得阻塞；耗时工作请用 async 族。
+
+**取消与停用语义**：
+
+- `cancel_task` 对墙钟异步任务是**即时的**——正在进行的睡眠会被立即唤醒中断，不会拖到下一个触发点；tick 任务则在下一 tick 前从队列摘除。
+- 取消任务会连带释放 guest 侧注册的 handler；一次性任务的 handler 在首次触发后也自动释放（长跑不留残渣）。
+- 插件 disable / unload 时，其名下全部任务（tick + 异步）按上述方式立即取消。
 
 ---
 
@@ -374,6 +382,7 @@ assert!(config.contains("hello") && config.contains("[bonus]"));
 - 配置落盘位置：`plugins/data/<插件名>/config.toml`（由宿主构造路径，绕过沙箱 FS 权限）。
 - 升级插件新增默认键 → 自动出现在合并结果；用户改过的值 → 永不丢失。
 - `save_config(content)` 直接覆写（需合法 TOML）。
+- 所有落盘写入均为**原子写**（临时文件 + rename，含 `load_config` 的合并回写）：服务器崩溃或断电不会留下截断的 config.toml。
 
 ---
 
@@ -524,22 +533,25 @@ mob.add_ai_goal(priority_u8, builtin_goal);   // 添加内建目标
 mob.clear_ai_goals();                          // 清空
 ```
 
-**自定义目标**：SDK 提供 `AiGoal` trait（`ai.rs`），回调均以共享引用调用（可重入，可变状态用内部可变性）：
+**自定义目标**：实现 SDK 的 `AiGoal` trait（`ai.rs`），用 `AiGoalManager::register` 注册得到 `goal_id`，再挂到 Mob。回调均以共享引用调用（可重入，可变状态用内部可变性）：
 
 ```rust
-use pumpkin_plugin_api::ai::AiGoal;
+use pumpkin_plugin_api::ai::{AiGoal, AiGoalManager};
 
 struct MyGoal;
 impl AiGoal for MyGoal {
-    fn can_start(&self, server: Server, entity: Entity) -> bool { false }
-    fn should_continue(&self, server: Server, entity: Entity) -> bool { false }
+    fn can_start(&self, server: Server, entity: Entity) -> bool { true }
+    fn should_continue(&self, server: Server, entity: Entity) -> bool { true }
     fn start(&self, server: Server, entity: Entity) {}
     fn tick(&self, server: Server, entity: Entity) {}   // 活跃期间每 tick
     fn stop(&self, server: Server, entity: Entity) {}
 }
+
+let goal_id = AiGoalManager::register(MyGoal);
+mob.add_custom_ai_goal(priority_u8, goal_id);   // 挂载自定义目标
 ```
 
-> **已知 SDK 缺口（诚实声明）**：`Mob` 资源有 `add_custom_ai_goal(priority, goal_id)` 挂载点，但 SDK 目前**没有公开的 `AiGoal` 注册函数**来获得 `goal_id`（注册表 `AI_GOAL_HANDLERS` 为 crate 内部）。宿主回调链路（`handle-ai-goal-*` 导出）已就绪；补一个公开注册函数即可启用，见 note/11 遗留项。
+宿主侧 `can_start`/`should_continue` 已接线到 guest 导出（目标选择器按 tick 评估）；回调失败（实体已消失、插件已卸载、guest trap）一律按 `false` 处理——目标不启动或立即停止，不会卡死选择器。
 
 ---
 
@@ -646,7 +658,6 @@ E2E tick-event flowing (20 ticks observed)
 ### 16.4 已知边界（诚实清单）
 
 - **9 个事件无 fire 点**（vanilla 机制缺失）：见 §4.3 与 note/11 §三。
-- **自定义 AI 目标无公开注册入口**：trait 与宿主回调链路已就绪，缺公开注册函数（§十二）。
-- EntityScheduler 的触发/跳过路径、join/chat 优先级实机排序需真实玩家/mob 验证（无头环境拿不到 `Entity` 资源；WIT 无世界级实体枚举/生成接口）。
+- EntityScheduler 的触发/跳过路径、join/chat 优先级实机排序需真实玩家/mob 验证（无头环境拿不到 `Entity` 资源；WIT 无世界级实体枚举/生成接口）。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
 - ChunkSave 事件低于插件边界（保存决策在 `pumpkin-world` 内部）。
 - 实体查询只能经事件/邻域等途径获得实体资源（§11.2 边界说明）。

@@ -21,9 +21,9 @@
 | [07-存档系统对比-Pumpkin-vs-Papo.md](07-存档系统对比-Pumpkin-vs-Papo.md) | 与 REF/Papo（Paper fork）的存档系统逐维对比：触发节奏、写盘管线、格式、实体语义、失败/关停、配置面、互操作性 | 双侧保存架构对比图 |
 | [08-存档格式深挖-Pumpkin-vs-Papo.md](08-存档格式深挖-Pumpkin-vs-Papo.md) | 磁盘字节层对比：MCA 逐字节差异、压缩策略、Linear V2/Pump 格式解剖、区块 NBT 逐字段表、实体/POI/level.dat/玩家格式、互操作矩阵、格式风险清单 | 磁盘布局树、Linear V2 结构图 |
 | [09-存档系统重写实现记录.md](09-存档系统重写实现记录.md) | 实现记录：MC 版本切至 1.21.11；Papo 兼容 RegionFile（255 扩展/.mcc/oversized/头自愈/原子写/扇区溢出防护）、区块 NBT 全字段保留、玩家/level.dat/POI 原子写、保存管线防丢；230 测试全绿 | — |
-| [10-插件系统对比-Pumpkin-vs-Papo.md](10-插件系统对比-Pumpkin-vs-Papo.md) | 与 REF/Papo（Paper fork）的插件系统逐维对比：WASM 能力沙箱 vs JVM 信任模型、加载/生命周期/类加载、事件分发（含 EventPriority 未排序缺口）、权限双语义、命令/调度/IPC、沙箱与供应链、配置面、互鉴清单 | 双侧架构对比图、事件分发对比图 |
-| [11-插件API强化实现记录-Papo机制级覆盖.md](11-插件API强化实现记录-Papo机制级覆盖.md) | 实现记录：EventPriority+ignoreCancelled 分发、异步任务、依赖分级、ServicesManager、插件消息通道、config 深合并、命令 fallback 前缀、permissions.toml、Startup 引导阶段、事件 fire 点补缺 47 处（含不可接线清单）；API 版本 2→3；e2e wasm 插件 7 标记全绿 | — |
-| [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署）、生命周期与依赖、事件系统（273 类型/优先级/取消语义）、调度器（含 EntityScheduler）、命令、双层权限、配置、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（含已知注册缺口）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
+| [10-插件系统对比-Pumpkin-vs-Papo.md](10-插件系统对比-Pumpkin-vs-Papo.md) | 与 REF/Papo（Paper fork）的插件系统逐维对比：WASM 能力沙箱 vs JVM 信任模型、加载/生命周期/类加载、事件分发、权限双语义、命令/调度/IPC、沙箱与供应链、配置面、互鉴清单（成文时点快照；清单 6 项当日已落地，见 11） | 双侧架构对比图、事件分发对比图 |
+| [11-插件API强化实现记录-Papo机制级覆盖.md](11-插件API强化实现记录-Papo机制级覆盖.md) | 实现记录：EventPriority+ignoreCancelled 分发、异步任务、依赖分级、ServicesManager、插件消息通道、config 深合并、命令 fallback 前缀、permissions.toml、Startup 引导阶段、事件 fire 点补缺 47 处（含不可接线清单）；API 版本 2→3；e2e wasm 插件 7 标记全绿；§七为后续两轮代码审计的稳定性修复清单 | — |
+| [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署/热重载）、生命周期与依赖、事件系统（273 类型/优先级/取消语义）、调度器（含 EntityScheduler 与即时取消语义）、命令、双层权限、配置（原子写）、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（内建 + AiGoalManager 自定义注册）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
 
 ## 核心发现（十件事）
 

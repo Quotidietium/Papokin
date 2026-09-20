@@ -4,6 +4,8 @@
 > **引用约定**：
 > - Pumpkin 侧：`相对路径:行号`，以仓库根为根，行号为 master @ 3eee993d1 实际行号。WIT 契约位于 `crates/pumpkin-plugin-wit/v0.1/`（下称 **[WIT]**）。
 > - Papo 侧：相对 `REF/Papo-Java-0.80.0-src/` 的路径行号。`paper-server/src/main/java/**` 为直提交生效源码；`patches/sources/**` 为 vanilla 补丁（行号为补丁内行号）；**[00XX]** 指 `paper-server/patches/features/00XX-*.patch`（Papo 特性补丁，行号为补丁内行号）。
+>
+> **时效说明**：本笔记为成文时点的对比快照（Pumpkin 侧行号锚定上述 commit，后续改动不回流）。§12「Pumpkin 可向 Papo 学」的 6 项在成文当日**已全部落地**，实现记录见 [11-插件API强化实现记录](11-插件API强化实现记录-Papo机制级覆盖.md)；插件 API 的当前权威参考见 [12-插件API文档](12-插件API文档.md)。
 
 ## 0. 一句话结论
 
@@ -162,7 +164,7 @@ flowchart LR
 | 任务异常 | call_guest 错误 → 日志 | 日志 + `ServerSchedulerException` 事件，不影响后续任务（`CraftScheduler.java:475-487`） |
 | 卸载清理 | `TaskScheduler::disable_plugin` 按插件清任务（`server/scheduler.rs:129`） | disable 时统一取消主/异步/Entity 任务（`PaperPluginInstanceManager.java:268-276`） |
 
-**缺口**：Pumpkin 没有"异步任务"类别——插件若在任务回调里做 IO，会占着 tick 线程域（除非自己在回调里 spawn）。Papo 的异步任务池 + EntityScheduler 是成熟度差距最明显的一处。
+**缺口（成文时点；当日已补异步任务族 + 实体绑定任务，见笔记 11 ⑵⑫）**：Pumpkin 没有"异步任务"类别——插件若在任务回调里做 IO，会占着 tick 线程域（除非自己在回调里 spawn）。Papo 的异步任务池 + EntityScheduler 是成熟度差距最明显的一处。
 
 ## 8. 插件间通信
 
@@ -219,12 +221,12 @@ flowchart LR
 
 ### Pumpkin 可向 Papo 学（按价值排序）
 
-1. **让 EventPriority 真正参与排序**：5 级优先级已注册、已存储，但 `get_priority()` 无调用点——blocking/non-blocking 两段内实际按注册顺序执行。补一处 `sort_by_key` 即可获得与 Bukkit 一致的语义（注意 Pumpkin 的枚举序 Highest 在前，与 Bukkit LOWEST-first 相反，排序时需统一方向）。
-2. **事件级 ignoreCancelled**：注册时无此选项，取消检查完全由触发方决定；高优先级"抢救"模式（LOWEST 取消、HIGHEST 兜底）目前表达不出来。
-3. **异步任务类别**：插件任务全在 tick 域执行，IO 型任务会拖慢 tick；至少提供 `schedule-async-task` 跑在 tokio 池（沙箱回调本就 async，成本极低）。
-4. **依赖边语义**：拓扑排序只认 depends；`load-after/load-before`（顺序边）与 `provides`（多实现同一逻辑名）在插件市场生态起步前补上成本最低。
-5. **onLoad/onEnable 异常分级**：Papo "load 失败仍 enable、enable 失败才截停"的分级经受过十年考验；Pumpkin on-load 返回 Err 的处置粒度可对照校准。
-6. **服务器级权限声明文件**（permissions.yml 等价物）：服主集中覆写权限默认值的传统运维入口。
+1. **让 EventPriority 真正参与排序**：5 级优先级已注册、已存储，但 `get_priority()` 无调用点——blocking/non-blocking 两段内实际按注册顺序执行。补一处 `sort_by_key` 即可获得与 Bukkit 一致的语义（注意 Pumpkin 的枚举序 Highest 在前，与 Bukkit LOWEST-first 相反，排序时需统一方向）。（✅ 成文当日落地：笔记 11 ⑴）
+2. **事件级 ignoreCancelled**：注册时无此选项，取消检查完全由触发方决定；高优先级"抢救"模式（LOWEST 取消、HIGHEST 兜底）目前表达不出来。（✅ 笔记 11 ⑴）
+3. **异步任务类别**：插件任务全在 tick 域执行，IO 型任务会拖慢 tick；至少提供 `schedule-async-task` 跑在 tokio 池（沙箱回调本就 async，成本极低）。（✅ 笔记 11 ⑵）
+4. **依赖边语义**：拓扑排序只认 depends；`load-after/load-before`（顺序边）与 `provides`（多实现同一逻辑名）在插件市场生态起步前补上成本最低。（✅ 笔记 11 ⑶）
+5. **onLoad/onEnable 异常分级**：Papo "load 失败仍 enable、enable 失败才截停"的分级经受过十年考验；Pumpkin on-load 返回 Err 的处置粒度可对照校准。（✅ 笔记 11 ⑷）
+6. **服务器级权限声明文件**（permissions.yml 等价物）：服主集中覆写权限默认值的传统运维入口。（✅ 笔记 11 ⑼）
 
 ### Papo 可向 Pumpkin 学（多为范式级，JVM 内不可行，列出以明确差异本质）
 

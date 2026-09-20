@@ -10,7 +10,7 @@
 | # | 机制（Papo 对应物） | 实现位置 | 状态 |
 |---|---|---|---|
 | ⑴ | EventPriority 排序分发 + `ignoreCancelled`（Bukkit HandlerList/EventPriority） | `plugin/mod.rs` `fire()`：每事件按 `order_handlers()` 稳定排序（Lowest 先、Highest 后），blocking 全部先行于 non-blocking；`should_invoke()` 按 `cancelled_state()` 跳过 `ignoreCancelled` handler | ✅ 单测 4 个 |
-| ⑵ | 异步任务（Bukkit async scheduler，墙钟） | `server/scheduler.rs` 重写：`schedule_async_delayed_task` / `schedule_async_repeating_task`（毫秒，tokio future + AtomicBool 取消标记） | ✅ e2e `async-task-fired` |
+| ⑵ | 异步任务（Bukkit async scheduler，墙钟） | `server/scheduler.rs` 重写：`schedule_async_delayed_task` / `schedule_async_repeating_task`（毫秒，tokio future；取消机制初版为 AtomicBool 标记，审计轮改为 CancellationToken 立即唤醒，见 §七） | ✅ e2e `async-task-fired` |
 | ⑶ | 依赖分级（plugin.yml 的 hard-dep / soft-dep / loadbefore / provide） | `load_plugins`：`provides_map`（首提供者胜出+告警）、`load_after` 软边、`load_before` 反向折叠、硬缺失→传递性跳过（不动点循环）；topo 排序不变 | ✅ 编译+原测试 |
 | ⑷ | 启用失败分级（Paper onEnable 失败 → 停用不卸载） | `spawn_plugin_initialization`：enable 失败 → 注销 handlers/commands、`is_active=false`、状态 `Disabled(...)`；仅 load 失败才整体卸载 | ✅ 编译 |
 | ⑸ | ServicesManager（名字注册表 + 跨插件调用） | `plugin/mod.rs`：`service_registry`（service/plugin/priority/sequence，upsert、优先级+序号排序）；WIT `services` 接口；**发现窗口**：`is_plugin_loading`（Loading 态即可被发现，修掉 on_enable 自发现 None 的 bug） | ✅ e2e `service-registered-and-discovered` |
@@ -93,3 +93,24 @@ E2E tick-event flowing (20 ticks observed)                  ← 事件分发链�
 2. 不可接线清单里的 9 个事件，随对应 vanilla 机制补齐后按同模式加 fire 点即可（WIT/Payload/分发均已就绪）。
 3. `EntityRemoveEvent` 若要落地，建议先在实体移除路径统一收敛一个带 cause 的内部入口。
 4. PlayerPreLogin 代理分支：待 Velocity/Vine 阶段可拿到 uuid 后补一发同步事件（可选）。
+
+## 七、第二轮：代码审计与稳定性修订（2026-09-20，同日稍后）
+
+补强交付后对插件系统做了两轮全量代码审计（稳定性 / 安全性 / 长跑健壮性），运行时执行器、加载器、资源管理深读无缺陷；以下为修复清单，插件可见行为变化已同步进笔记 12 对应章节。
+
+**第一波（调度器 / SDK 资源生命周期 / guest 可控面）**
+
+1. **异步任务取消即时化**：AtomicBool 轮询标记 → `CancellationToken`（`AsyncTaskEntry { cancel, plugin: Weak<WasmPlugin> }`）。修复前 guest 睡 1 小时，disable/cancel 只能等睡眠自然结束、store 内存一直被占；现在立即唤醒释放。`cancelled_tasks` 集合在 disable 时顺带清空（防长跑泄漏）。
+2. **`wait_for_plugin` / `wait_for_all_plugins` 丢失唤醒修复**：`Notified::enable()` 先于状态重读，消除通知到达早于 await 的悬挂窗口。
+3. **AiGoal 公开注册 + 宿主接线**：SDK 增 `AiGoalManager::register`（GeneratorManager 同款模式）；宿主 `CustomWasmGoal` 的 `can_start`/`should_continue` 此前**硬编码 false**（自定义 AI 目标功能整体处于死亡状态），已接线到 guest 导出，回调失败一律按 false 处理。
+4. **SDK 任务处理器表泄漏**：`TASK_HANDLERS` 只增不减 → 一次性任务触发即移除、`cancel_task` 连带清理；实体任务被宿主静默终止时无 WIT 回调，残留项为已知边界（笔记 12 §16.4）。
+5. **guest 可触发的 panic 收敛**：两处 `send_packet` 宿主函数的包序列化（宏生成代码）包 `catch_unwind`，畸形包不再能打崩宿主任务。
+6. **Event derive 跨模块同名防护**：`get_name` 改用 `std::any::type_name`（含模块路径），杜绝不同模块同名事件类型的向下转型混淆。
+
+**第二波（加载器 / 运维面）**
+
+7. **热重载去抖**：notify 一次保存产生连串事件，原先每个事件都触发完整 unload + JIT 重载（大插件单次 ~155s）并堵死 notify 线程；改为 500ms 静默窗口按路径去重合并，扩展名判断大小写不敏感。
+8. **JIT 缓存写失败降级**：`load_component` 的 `.cwasm` 缓存写失败（并发加载者持锁等）从致命错误降为告警——编译产物已在内存，缓存只是加速。
+9. **config.toml 原子写**：`load_config` 合并回写与 `save_config` 统一走 `write_config_atomic`（tmp + rename），崩溃不留截断配置。
+
+**门禁**（两波收尾均复跑）：`cargo fmt` 清洁；`cargo clippy --workspace --all-targets` 0 错误；`cargo test --workspace` 992 通过 / 0 失败；e2e 实跑 7 标记全绿 ×2（第二次覆盖了新的原子配置写路径）。
