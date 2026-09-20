@@ -165,7 +165,7 @@ mod tests {
         }
     }
 
-    /// Reads one VarInt (LEB128) starting at `pos`, advancing it.
+    /// Reads one `VarInt` (LEB128) starting at `pos`, advancing it.
     fn read_var_int(buf: &[u8], pos: &mut usize) -> i32 {
         let mut value = 0u32;
         for i in 0..5 {
@@ -221,8 +221,8 @@ mod tests {
                 }
                 _ => Vec::new(), // direct palette: raw ids, nothing to collect
             };
-            if bits > 0 {
-                pos += 4096usize.div_ceil(64 / bits) * 8;
+            if let Some(word_bits) = 64usize.checked_div(bits) {
+                pos += 4096usize.div_ceil(word_bits) * 8;
             }
 
             // Biome half of the section: skip palette and packed data.

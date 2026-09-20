@@ -16,6 +16,7 @@ pub use pumpkin_data::chunk::{
     Parameter, ParameterPoint, ParameterRange, TargetPoint, quantize_coord, unquantize_coord,
 };
 
+// clippy 1.98 false positive: the initializer is already a `const` block.
 thread_local! {
     /// A shortcut; check if last used biome is what we should use.
     ///
@@ -23,6 +24,7 @@ thread_local! {
     /// this leaf and only accepts strictly closer nodes, so a leaf cached from one dimension's
     /// tree would otherwise beat every node of another's and be returned unchanged. Vanilla
     /// stores `lastResult` on the `RTree` itself rather than sharing one across all of them.
+    #[allow(clippy::missing_const_for_thread_local)]
     static LAST_RESULT_NODE: RefCell<Option<(&'static BiomeTree, &'static BiomeTree)>> =
         const { RefCell::new(None) };
 }

@@ -72,10 +72,8 @@ const FALLBACKS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 /// Default stand-in per registry when a missing id has no explicit fallback.
-const DEFAULT_FALLBACKS: &[(&str, &str)] = &[
-    ("worldgen/biome", "plains"),
-    ("damage_type", "generic"),
-];
+const DEFAULT_FALLBACKS: &[(&str, &str)] =
+    &[("worldgen/biome", "plains"), ("damage_type", "generic")];
 
 /// Registry path → snake_case identifier fragment used for generated names
 /// (`worldgen/biome` → `biome`).
@@ -95,7 +93,11 @@ fn sorted_entry_names(version_folder: &str, registry: &str) -> Option<Vec<String
         .ok()?
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
-        .filter_map(|e| e.path().file_stem().map(|stem| stem.to_string_lossy().into_owned()))
+        .filter_map(|e| {
+            e.path()
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
         .collect();
     names.sort();
     Some(names)

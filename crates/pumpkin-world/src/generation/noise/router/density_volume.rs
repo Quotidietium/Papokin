@@ -7,7 +7,9 @@ const BUFFER_SIZE_INCREMENT: usize = 16;
 const MAX_REUSE_SIZE_FACTOR: usize = 2;
 const MAX_POOLED_BUFFERS: usize = 1024;
 
+// clippy 1.98 false positive: the initializer is already a `const` block.
 thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
     static DENSITY_BUFFER_POOL: RefCell<Vec<Box<[f32]>>> = const { RefCell::new(Vec::new()) };
 }
 
