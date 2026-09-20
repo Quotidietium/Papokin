@@ -2,7 +2,7 @@ use crate::plugin::loader::wasm::wasm_host::WasmPlugin;
 use crate::server::Server;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
@@ -79,9 +79,14 @@ pub struct TaskScheduler {
     tasks: Mutex<BinaryHeap<ScheduledTask>>,
     cancelled_tasks: Mutex<HashSet<TaskId>>,
     disabled_plugins: Mutex<Vec<Weak<WasmPlugin>>>,
-    /// Cancellation flags for wall-clock async tasks, keyed by task id.
-    async_tasks: Mutex<HashMap<TaskId, Arc<AtomicBool>>>,
+    /// Cancellation handles for wall-clock async tasks, keyed by task id.
+    async_tasks: Mutex<HashMap<TaskId, AsyncTaskEntry>>,
     next_task_id: std::sync::atomic::AtomicU32,
+}
+
+struct AsyncTaskEntry {
+    cancel: tokio_util::sync::CancellationToken,
+    plugin: Weak<WasmPlugin>,
 }
 
 impl Default for TaskScheduler {
@@ -121,7 +126,7 @@ impl TaskScheduler {
             id,
             plugin,
             handler_id,
-            next_tick: current_tick + delay,
+            next_tick: current_tick.saturating_add(delay),
             period: None,
             entity_id: None,
         };
@@ -152,7 +157,7 @@ impl TaskScheduler {
             id,
             plugin,
             handler_id,
-            next_tick: current_tick + delay,
+            next_tick: current_tick.saturating_add(delay),
             period: Some(period),
             entity_id: None,
         };
@@ -187,7 +192,7 @@ impl TaskScheduler {
             id,
             plugin,
             handler_id,
-            next_tick: current_tick + delay,
+            next_tick: current_tick.saturating_add(delay),
             period: None,
             entity_id: Some(entity_id),
         };
@@ -222,7 +227,7 @@ impl TaskScheduler {
             id,
             plugin,
             handler_id,
-            next_tick: current_tick + delay,
+            next_tick: current_tick.saturating_add(delay),
             period: Some(period),
             entity_id: Some(entity_id),
         };
@@ -254,18 +259,30 @@ impl TaskScheduler {
             }
         }
 
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = tokio_util::sync::CancellationToken::new();
         self.async_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, Arc::clone(&cancelled));
+            .insert(
+                id,
+                AsyncTaskEntry {
+                    cancel: cancel.clone(),
+                    plugin: Arc::downgrade(&plugin),
+                },
+            );
 
         let task_server = server.clone();
         server.spawn_task(async move {
             if delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                tokio::select! {
+                    () = cancel.cancelled() => {
+                        task_server.task_scheduler.finish_async_task(id);
+                        return;
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+                }
             }
-            if !cancelled.load(AtomicOrdering::Relaxed) {
+            if !cancel.is_cancelled() {
                 run_task_handler(Arc::clone(&plugin), Arc::clone(&task_server), handler_id).await;
             }
             task_server.task_scheduler.finish_async_task(id);
@@ -296,83 +313,125 @@ impl TaskScheduler {
             }
         }
 
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel = tokio_util::sync::CancellationToken::new();
         self.async_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id, Arc::clone(&cancelled));
+            .insert(
+                id,
+                AsyncTaskEntry {
+                    cancel: cancel.clone(),
+                    plugin: Arc::downgrade(&plugin),
+                },
+            );
 
         let task_server = server.clone();
         server.spawn_task(async move {
             if delay_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                tokio::select! {
+                    () = cancel.cancelled() => {
+                        task_server.task_scheduler.finish_async_task(id);
+                        return;
+                    }
+                    () = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+                }
             }
             loop {
-                if cancelled.load(AtomicOrdering::Relaxed)
-                    || task_server.task_scheduler.is_stopped_for(&plugin)
-                {
+                if cancel.is_cancelled() {
                     break;
                 }
                 run_task_handler(Arc::clone(&plugin), Arc::clone(&task_server), handler_id).await;
                 if period_ms == 0 {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(period_ms)).await;
+                tokio::select! {
+                    () = cancel.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_millis(period_ms)) => {}
+                }
             }
             task_server.task_scheduler.finish_async_task(id);
         });
         id
     }
 
-    /// Marks an async task as finished and drops its cancellation flag.
+    /// Marks an async task as finished and drops its cancellation handle.
     fn finish_async_task(&self, id: TaskId) {
-        if let Some(flag) = self
-            .async_tasks
+        self.async_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&id)
-        {
-            flag.store(true, AtomicOrdering::Relaxed);
-        }
-    }
-
-    /// Whether an async task loop should stop for this plugin (disabled).
-    fn is_stopped_for(&self, plugin: &Arc<WasmPlugin>) -> bool {
-        let mut disabled_plugins = self
-            .disabled_plugins
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Self::is_plugin_disabled(&mut disabled_plugins, plugin)
+            .remove(&id);
     }
 
     pub fn cancel_task(&self, id: TaskId) {
-        self.cancelled_tasks
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(id);
-        if let Some(flag) = self
+        let async_entry = self
             .async_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&id)
-        {
-            flag.store(true, AtomicOrdering::Relaxed);
+            .remove(&id);
+        if let Some(entry) = async_entry {
+            // Async task ids never enter `cancelled_tasks`: that set is only
+            // consumed when a tick-aligned task pops from the heap.
+            entry.cancel.cancel();
+        } else {
+            self.cancelled_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id);
         }
     }
 
     pub fn disable_plugin(&self, plugin: &Arc<WasmPlugin>) {
-        let mut disabled_plugins = self
-            .disabled_plugins
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !Self::is_plugin_disabled(&mut disabled_plugins, plugin) {
-            disabled_plugins.push(Arc::downgrade(plugin));
+        {
+            let mut disabled_plugins = self
+                .disabled_plugins
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !Self::is_plugin_disabled(&mut disabled_plugins, plugin) {
+                disabled_plugins.push(Arc::downgrade(plugin));
+            }
         }
 
-        self.tasks
+        let mut removed_ids = Vec::new();
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut kept = BinaryHeap::new();
+        for task in tasks.drain() {
+            if Arc::ptr_eq(&task.plugin, plugin) {
+                removed_ids.push(task.id);
+            } else {
+                kept.push(task);
+            }
+        }
+        *tasks = kept;
+        drop(tasks);
+        // The removed tasks will never pop from the heap, so drop their ids
+        // from `cancelled_tasks` as well instead of leaking them.
+        if !removed_ids.is_empty() {
+            let mut cancelled = self
+                .cancelled_tasks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for id in removed_ids {
+                cancelled.remove(&id);
+            }
+        }
+
+        // Wake this plugin's wall-clock tasks so a guest-scheduled long sleep
+        // releases the plugin (and its store memory) at disable time instead
+        // of whenever the sleep happens to end.
+        let disabled_plugin = Arc::downgrade(plugin);
+        self.async_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|task| !Arc::ptr_eq(&task.plugin, plugin));
+            .retain(|_, entry| {
+                let owned = Weak::ptr_eq(&entry.plugin, &disabled_plugin);
+                if owned {
+                    entry.cancel.cancel();
+                }
+                !owned
+            });
     }
 
     fn is_plugin_disabled(
@@ -447,7 +506,7 @@ impl TaskScheduler {
 
             // If repeating, schedule next run
             if let Some(period) = task.period {
-                task.next_tick = current_tick + period;
+                task.next_tick = current_tick.saturating_add(period);
                 let mut disabled_plugins = self
                     .disabled_plugins
                     .lock()
