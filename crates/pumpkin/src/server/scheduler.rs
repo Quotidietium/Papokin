@@ -1,9 +1,10 @@
 use crate::plugin::loader::wasm::wasm_host::WasmPlugin;
 use crate::server::Server;
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashSet};
-use std::sync::atomic::Ordering as AtomicOrdering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 pub type TaskId = u32;
 
@@ -13,6 +14,10 @@ pub struct ScheduledTask {
     pub handler_id: u32,
     pub next_tick: u64,
     pub period: Option<u64>,
+    /// When set, the task is bound to an entity's lifetime: it is silently
+    /// skipped (and never rescheduled) once the entity is no longer present
+    /// in any world (Bukkit `EntityScheduler` retirement semantics).
+    pub entity_id: Option<i32>,
 }
 
 impl PartialEq for ScheduledTask {
@@ -36,10 +41,46 @@ impl Ord for ScheduledTask {
     }
 }
 
+/// Runs a plugin task handler by invoking its guest `handle-task` export.
+///
+/// Shared by the tick-aligned scheduler and the wall-clock async scheduler.
+async fn run_task_handler(plugin: Arc<WasmPlugin>, server: Arc<Server>, handler_id: u32) {
+    let function = match plugin.plugin_instance.as_ref() {
+        crate::plugin::loader::wasm::wasm_host::PluginInstance::V0_1(instance) => {
+            instance.func_handle_task()
+        }
+    };
+    if let Err(error) =
+        plugin
+            .store
+            .call_guest(move |mut guest| {
+                Box::pin(async move {
+                    let (server_resource, server_rep) = guest.with(|mut store| {
+                        let resource = store.data_mut().add_server(server)?;
+                        let rep = resource.rep();
+                        Ok::<_, wasmtime::Error>((resource, rep))
+                    })?;
+                    let result = guest.call(function, (handler_id, server_resource)).await;
+                    guest.with(|mut store| {
+                        let _ = store.data_mut().resource_table.delete::<
+                        crate::plugin::loader::wasm::wasm_host::state::ServerResource,
+                    >(wasmtime::component::Resource::new_own(server_rep));
+                    });
+                    result
+                })
+            })
+            .await
+    {
+        tracing::error!(handler_id, %error, "Wasm scheduled task failed");
+    }
+}
+
 pub struct TaskScheduler {
     tasks: Mutex<BinaryHeap<ScheduledTask>>,
     cancelled_tasks: Mutex<HashSet<TaskId>>,
     disabled_plugins: Mutex<Vec<Weak<WasmPlugin>>>,
+    /// Cancellation flags for wall-clock async tasks, keyed by task id.
+    async_tasks: Mutex<HashMap<TaskId, Arc<AtomicBool>>>,
     next_task_id: std::sync::atomic::AtomicU32,
 }
 
@@ -56,6 +97,7 @@ impl TaskScheduler {
             tasks: Mutex::new(BinaryHeap::new()),
             cancelled_tasks: Mutex::new(HashSet::new()),
             disabled_plugins: Mutex::new(Vec::new()),
+            async_tasks: Mutex::new(HashMap::new()),
             next_task_id: std::sync::atomic::AtomicU32::new(0),
         }
     }
@@ -81,6 +123,7 @@ impl TaskScheduler {
             handler_id,
             next_tick: current_tick + delay,
             period: None,
+            entity_id: None,
         };
         self.tasks
             .lock()
@@ -111,6 +154,7 @@ impl TaskScheduler {
             handler_id,
             next_tick: current_tick + delay,
             period: Some(period),
+            entity_id: None,
         };
         self.tasks
             .lock()
@@ -119,11 +163,201 @@ impl TaskScheduler {
         id
     }
 
+    /// Schedules a task to run once after the given tick delay, bound to an
+    /// entity's lifetime. When the task comes due and the entity is no longer
+    /// present in any world, the task is silently skipped (Bukkit
+    /// `EntityScheduler`).
+    pub fn schedule_entity_delayed_task(
+        &self,
+        plugin: Arc<WasmPlugin>,
+        handler_id: u32,
+        entity_id: i32,
+        delay: u64,
+        current_tick: u64,
+    ) -> TaskId {
+        let id = self.next_task_id.fetch_add(1, AtomicOrdering::SeqCst);
+        let mut disabled_plugins = self
+            .disabled_plugins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Self::is_plugin_disabled(&mut disabled_plugins, &plugin) {
+            return id;
+        }
+        let task = ScheduledTask {
+            id,
+            plugin,
+            handler_id,
+            next_tick: current_tick + delay,
+            period: None,
+            entity_id: Some(entity_id),
+        };
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(task);
+        id
+    }
+
+    /// Schedules a task to run repeatedly, bound to an entity's lifetime. The
+    /// task stops permanently as soon as the entity is no longer present in
+    /// any world when a run comes due.
+    pub fn schedule_entity_repeating_task(
+        &self,
+        plugin: Arc<WasmPlugin>,
+        handler_id: u32,
+        entity_id: i32,
+        delay: u64,
+        period: u64,
+        current_tick: u64,
+    ) -> TaskId {
+        let id = self.next_task_id.fetch_add(1, AtomicOrdering::SeqCst);
+        let mut disabled_plugins = self
+            .disabled_plugins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if Self::is_plugin_disabled(&mut disabled_plugins, &plugin) {
+            return id;
+        }
+        let task = ScheduledTask {
+            id,
+            plugin,
+            handler_id,
+            next_tick: current_tick + delay,
+            period: Some(period),
+            entity_id: Some(entity_id),
+        };
+        self.tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(task);
+        id
+    }
+
+    /// Schedules a task that runs once after a wall-clock delay, independent of
+    /// the tick loop (Bukkit's `runTaskLaterAsynchronously`). A zero delay runs
+    /// the task immediately on the async executor.
+    pub fn schedule_async_delayed_task(
+        &self,
+        server: &Arc<Server>,
+        plugin: Arc<WasmPlugin>,
+        handler_id: u32,
+        delay_ms: u64,
+    ) -> TaskId {
+        let id = self.next_task_id.fetch_add(1, AtomicOrdering::SeqCst);
+        {
+            let mut disabled_plugins = self
+                .disabled_plugins
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if Self::is_plugin_disabled(&mut disabled_plugins, &plugin) {
+                return id;
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.async_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, Arc::clone(&cancelled));
+
+        let task_server = server.clone();
+        server.spawn_task(async move {
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            if !cancelled.load(AtomicOrdering::Relaxed) {
+                run_task_handler(Arc::clone(&plugin), Arc::clone(&task_server), handler_id).await;
+            }
+            task_server.task_scheduler.finish_async_task(id);
+        });
+        id
+    }
+
+    /// Schedules a task that runs repeatedly on the async executor with a
+    /// wall-clock period, independent of the tick loop (Bukkit's
+    /// `runTaskTimerAsynchronously`). The task keeps running until cancelled,
+    /// the plugin is disabled, or the plugin is unloaded.
+    pub fn schedule_async_repeating_task(
+        &self,
+        server: &Arc<Server>,
+        plugin: Arc<WasmPlugin>,
+        handler_id: u32,
+        delay_ms: u64,
+        period_ms: u64,
+    ) -> TaskId {
+        let id = self.next_task_id.fetch_add(1, AtomicOrdering::SeqCst);
+        {
+            let mut disabled_plugins = self
+                .disabled_plugins
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if Self::is_plugin_disabled(&mut disabled_plugins, &plugin) {
+                return id;
+            }
+        }
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.async_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(id, Arc::clone(&cancelled));
+
+        let task_server = server.clone();
+        server.spawn_task(async move {
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+            loop {
+                if cancelled.load(AtomicOrdering::Relaxed)
+                    || task_server.task_scheduler.is_stopped_for(&plugin)
+                {
+                    break;
+                }
+                run_task_handler(Arc::clone(&plugin), Arc::clone(&task_server), handler_id).await;
+                if period_ms == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(period_ms)).await;
+            }
+            task_server.task_scheduler.finish_async_task(id);
+        });
+        id
+    }
+
+    /// Marks an async task as finished and drops its cancellation flag.
+    fn finish_async_task(&self, id: TaskId) {
+        if let Some(flag) = self
+            .async_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id)
+        {
+            flag.store(true, AtomicOrdering::Relaxed);
+        }
+    }
+
+    /// Whether an async task loop should stop for this plugin (disabled).
+    fn is_stopped_for(&self, plugin: &Arc<WasmPlugin>) -> bool {
+        let mut disabled_plugins = self
+            .disabled_plugins
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::is_plugin_disabled(&mut disabled_plugins, plugin)
+    }
+
     pub fn cancel_task(&self, id: TaskId) {
         self.cancelled_tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(id);
+        if let Some(flag) = self
+            .async_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&id)
+        {
+            flag.store(true, AtomicOrdering::Relaxed);
+        }
     }
 
     pub fn disable_plugin(&self, plugin: &Arc<WasmPlugin>) {
@@ -192,40 +426,24 @@ impl TaskScheduler {
             }
             drop(disabled_plugins);
 
+            // Entity-bound tasks are retired once their entity is gone; this
+            // also terminates repeating entity tasks (no reschedule below).
+            if let Some(entity_id) = task.entity_id
+                && !server
+                    .worlds
+                    .load()
+                    .iter()
+                    .any(|world| world.get_entity_by_id(entity_id).is_some())
+            {
+                continue;
+            }
+
             // Run the task
             let plugin = task.plugin.clone();
             let handler_id = task.handler_id;
             let server_clone = server.clone();
 
-            server.spawn_task(async move {
-                let function = match plugin.plugin_instance.as_ref() {
-                    crate::plugin::loader::wasm::wasm_host::PluginInstance::V0_1(instance) => {
-                        instance.func_handle_task()
-                    }
-                };
-                if let Err(error) = plugin
-                    .store
-                    .call_guest(move |mut guest| {
-                        Box::pin(async move {
-                            let (server_resource, server_rep) = guest.with(|mut store| {
-                                let resource = store.data_mut().add_server(server_clone)?;
-                                let rep = resource.rep();
-                                Ok::<_, wasmtime::Error>((resource, rep))
-                            })?;
-                            let result = guest.call(function, (handler_id, server_resource)).await;
-                            guest.with(|mut store| {
-                                let _ = store.data_mut().resource_table.delete::<
-                                    crate::plugin::loader::wasm::wasm_host::state::ServerResource,
-                                >(wasmtime::component::Resource::new_own(server_rep));
-                            });
-                            result
-                        })
-                    })
-                    .await
-                {
-                    tracing::error!(handler_id, %error, "Wasm scheduled task failed");
-                }
-            });
+            server.spawn_task(run_task_handler(plugin, server_clone, handler_id));
 
             // If repeating, schedule next run
             if let Some(period) = task.period {
