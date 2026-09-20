@@ -24,6 +24,7 @@
 | [10-插件系统对比-Pumpkin-vs-Papo.md](10-插件系统对比-Pumpkin-vs-Papo.md) | 与 REF/Papo（Paper fork）的插件系统逐维对比：WASM 能力沙箱 vs JVM 信任模型、加载/生命周期/类加载、事件分发、权限双语义、命令/调度/IPC、沙箱与供应链、配置面、互鉴清单（成文时点快照；清单 6 项当日已落地，见 11） | 双侧架构对比图、事件分发对比图 |
 | [11-插件API强化实现记录-Papo机制级覆盖.md](11-插件API强化实现记录-Papo机制级覆盖.md) | 实现记录：EventPriority+ignoreCancelled 分发、异步任务、依赖分级、ServicesManager、插件消息通道、config 深合并、命令 fallback 前缀、permissions.toml、Startup 引导阶段、事件 fire 点补缺 47 处（含不可接线清单）；API 版本 2→3；e2e wasm 插件 7 标记全绿；§七为后续两轮代码审计的稳定性修复清单 | — |
 | [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署/热重载）、生命周期与依赖、事件系统（273 类型/优先级/取消语义）、调度器（含 EntityScheduler 与即时取消语义）、命令、双层权限、配置（原子写）、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（内建 + AiGoalManager 自定义注册）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
+| [13-插件API覆盖复核-当前代码vs-Papo.md](13-插件API覆盖复核-当前代码vs-Papo.md) | 覆盖复核（锚定 b6af9b3c7）：11 的 12 项机制逐项验证属实；拉宽到 Papo 全 API 面的子系统覆盖矩阵（org.bukkit 1268 文件 + Paper 扩展）；896 WIT 函数/273 事件/288 fire 点实测；剩余缺口排序（Registry/Tag 体系最大）；勘误：world.spawn-entity/get-entities 存在，EntityScheduler 可无头 e2e | — |
 
 ## 核心发现（十件事）
 

@@ -501,7 +501,7 @@ WIT 侧最大的一块 API 面（函数数：`world` 252 · `block-entity` 172 �
 - 表现：`broadcast_system_message`、`play_sound`、`get_scoreboard`
 - 尺寸：`get_dimension`
 
-> **实体查询边界**：World 级**没有**按 ID/UUID 枚举实体的接口——实体资源只能从事件参数、`Entity::get_nearby_entities`（邻域查询）、车辆乘客链、`Player` 事件等获得。这是 EntityScheduler 一节所述无头验证限制的根因。
+> **实体获取途径**：`World::spawn_entity(entity_type, pos)` 生成实体、`World::get_entities()` 枚举全图实体（world.wit:901,904，宿主 `wit/v0_1/world.rs:952,1289` 真实实现），另有事件参数、`Entity::get_nearby_entities`（邻域查询）、车辆乘客链。无**按 ID/UUID 精确查询**的接口——需按 ID 定位时枚举 `get_entities()` 过滤。
 
 ### 11.3 Entity / LivingEntity / Mob
 
@@ -629,11 +629,14 @@ INFO E2E on_load ok  plugin.target=pumpkin_e2e_plugin  plugin.module=pumpkin_e2e
 ### 16.1 WIT 接口函数数（当前 0.1.0）
 
 ```
-world 252 · block-entity 172 · player 127 · display 67 · server 64 · text 37
-scoreboard 28 · item-stack 28 · inventory 28 · command 27 · plugin(exports) 17
-boss-bar 14 · gui 11 · datapack 9 · scheduler 7 · context 6 · services 4
-messaging 4 · enchantments 4 · 其余为类型/枚举定义接口
+world 252 · block-entity 172 · player 119 · server 64 · display 62
+text 28 · scoreboard 28 · item-stack 28 · inventory 28 · command 25
+plugin(exports) 17 · boss-bar 14 · gui 11 · datapack 9 · scheduler 7
+context 6 · services 4 · messaging 4 · enchantments 4 · recipe 3 · uuid 3
+log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余 23 个为类型/枚举定义接口
 ```
+
+（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-20 复核修正，见 note/13 §二。）
 
 ### 16.2 版本与兼容策略
 
@@ -657,7 +660,6 @@ E2E tick-event flowing (20 ticks observed)
 
 ### 16.4 已知边界（诚实清单）
 
-- **9 个事件无 fire 点**（vanilla 机制缺失）：见 §4.3 与 note/11 §三。
-- EntityScheduler 的触发/跳过路径、join/chat 优先级实机排序需真实玩家/mob 验证（无头环境拿不到 `Entity` 资源；WIT 无世界级实体枚举/生成接口）。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
+- **9 个事件无 fire 点**（vanilla 机制缺失）：见 §4.3 与 note/11 §三；当前代码业务引用仍为 0（note/13 §三逐事件复核）。
+- EntityScheduler 可经 `World::spawn_entity` 无头验证（2026-09-20 复核修正，见 note/13 §七.2）；join/chat 优先级实机排序仍需真实玩家。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
 - ChunkSave 事件低于插件边界（保存决策在 `pumpkin-world` 内部）。
-- 实体查询只能经事件/邻域等途径获得实体资源（§11.2 边界说明）。

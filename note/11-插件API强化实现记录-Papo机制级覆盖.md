@@ -114,3 +114,7 @@ E2E tick-event flowing (20 ticks observed)                  ← 事件分发链�
 9. **config.toml 原子写**：`load_config` 合并回写与 `save_config` 统一走 `write_config_atomic`（tmp + rename），崩溃不留截断配置。
 
 **门禁**（两波收尾均复跑）：`cargo fmt` 清洁；`cargo clippy --workspace --all-targets` 0 错误；`cargo test --workspace` 992 通过 / 0 失败；e2e 实跑 7 标记全绿 ×2（第二次覆盖了新的原子配置写路径）。
+
+## 八、勘误（2026-09-20 复核补记）
+
+§四"⑫ EntityScheduler 的 e2e 边界"中"WIT 无世界级实体枚举/生成接口，`Entity` 资源只能从事件获得"的论断**有误**：`world.wit` 的 `spawn-entity`（:901）与 `get-entities`（:904）随 subtree 导入即存在，宿主实现为真（`wit/v0_1/world.rs:952,1289`）。实体绑定任务的触发/跳过路径**可以无头 e2e**：`world.spawn_entity` 生成实体 → 绑定 repeating 任务 → `entity.remove()` → 断言日志停止。覆盖复核全文见 [13-插件API覆盖复核](13-插件API覆盖复核-当前代码vs-Papo.md)。
