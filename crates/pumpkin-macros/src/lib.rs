@@ -40,11 +40,15 @@ pub fn event(item: TokenStream) -> TokenStream {
     quote! {
         impl #impl_generics crate::plugin::Payload for #name #ty_generics #where_clause {
             fn get_name_static() -> &'static str {
-                stringify!(#name)
+                // Fully-qualified path: two events sharing a bare struct name
+                // in different modules must not alias in the handler map, or
+                // the name-guarded downcast in `EventRegistry` would be
+                // unsound.
+                std::any::type_name::<Self>()
             }
 
             fn get_name(&self) -> &'static str {
-                stringify!(#name)
+                std::any::type_name::<Self>()
             }
 
             fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
