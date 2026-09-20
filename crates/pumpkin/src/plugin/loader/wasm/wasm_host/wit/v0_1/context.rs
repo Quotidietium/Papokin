@@ -25,6 +25,7 @@ macro_rules! register_host_event {
             Arc::clone($handler),
             $priority,
             $blocking,
+            $handler.ignore_cancelled,
         )
     };
 }
@@ -1513,6 +1514,7 @@ impl pumpkin::plugin::context::HostContext for PluginHostState {
         event_type: EventType,
         event_priority: EventPriority,
         blocking: bool,
+        ignore_cancelled: bool,
     ) -> wasmtime::Result<()> {
         // Updated return type
         let priority = match event_priority {
@@ -1532,7 +1534,11 @@ impl pumpkin::plugin::context::HostContext for PluginHostState {
             .ok_or_else(|| wasmtime::Error::msg("Plugin has been dropped"))?;
 
         let resource = self.get_context(&context)?;
-        let handler = Arc::new(WasmPluginEventHandler { handler_id, plugin });
+        let handler = Arc::new(WasmPluginEventHandler {
+            handler_id,
+            plugin,
+            ignore_cancelled,
+        });
 
         match event_type {
             event_type @ (EventType::PacketReceivedEvent

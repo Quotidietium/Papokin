@@ -431,6 +431,50 @@ impl WasmPlugin {
             .await
     }
 
+    /// Calls the guest's `on-enable` export with a fresh context resource.
+    pub async fn on_enable(
+        &self,
+        context: Arc<Context>,
+    ) -> Result<Result<(), String>, wasmtime::Error> {
+        let function = match self.plugin_instance.as_ref() {
+            PluginInstance::V0_1(plugin) => plugin.func_on_enable(),
+        };
+        self.store
+            .call_guest(move |mut guest| {
+                Box::pin(async move {
+                    let context_res =
+                        guest.with(|mut store| store.data_mut().add_context(context))?;
+                    guest
+                        .call(function, (context_res,))
+                        .await
+                        .map(|(result,)| result)
+                })
+            })
+            .await
+    }
+
+    /// Calls the guest's `on-disable` export with a fresh context resource.
+    pub async fn on_disable(
+        &self,
+        context: Arc<Context>,
+    ) -> Result<Result<(), String>, wasmtime::Error> {
+        let function = match self.plugin_instance.as_ref() {
+            PluginInstance::V0_1(plugin) => plugin.func_on_disable(),
+        };
+        self.store
+            .call_guest(move |mut guest| {
+                Box::pin(async move {
+                    let context_res =
+                        guest.with(|mut store| store.data_mut().add_context(context))?;
+                    guest
+                        .call(function, (context_res,))
+                        .await
+                        .map(|(result,)| result)
+                })
+            })
+            .await
+    }
+
     pub async fn on_unload(
         &self,
         context: Arc<Context>,
@@ -475,6 +519,29 @@ impl WasmPlugin {
                         >(wasmtime::component::Resource::new_own(context_rep));
                     });
                     result
+                })
+            })
+            .await
+    }
+
+    /// Calls the guest's `handle-plugin-message` export.
+    pub async fn handle_plugin_message(
+        &self,
+        player_uuid: uuid::Uuid,
+        channel: String,
+        data: Vec<u8>,
+    ) -> Result<(), wasmtime::Error> {
+        let player_uuid = player_uuid.to_string();
+        let function = match self.plugin_instance.as_ref() {
+            PluginInstance::V0_1(plugin) => plugin.func_handle_plugin_message(),
+        };
+        self.store
+            .call_guest(move |mut guest| {
+                Box::pin(async move {
+                    guest
+                        .call(function, (player_uuid, channel, data))
+                        .await
+                        .map(drop)
                 })
             })
             .await

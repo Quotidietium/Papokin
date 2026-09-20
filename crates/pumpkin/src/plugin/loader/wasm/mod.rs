@@ -24,6 +24,24 @@ impl Plugin for WasmPlugin {
         })
     }
 
+    fn on_enable(&self, context: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            Self::on_enable(self, context)
+                .await
+                .map_err(|err| err.to_string())
+                .flatten()
+        })
+    }
+
+    fn on_disable(&self, context: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            Self::on_disable(self, context)
+                .await
+                .map_err(|err| err.to_string())
+                .flatten()
+        })
+    }
+
     fn on_unload(&self, context: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
         Box::pin(async move {
             Self::on_unload(self, context)
@@ -45,6 +63,21 @@ impl Plugin for WasmPlugin {
                 .await
                 .map_err(|err| err.to_string())
                 .flatten()
+        })
+    }
+
+    fn on_plugin_message(
+        &self,
+        player_uuid: uuid::Uuid,
+        channel: &str,
+        data: &[u8],
+    ) -> PluginFuture<'_, Result<(), String>> {
+        let channel_own = channel.to_owned();
+        let data_own = data.to_vec();
+        Box::pin(async move {
+            self.handle_plugin_message(player_uuid, channel_own, data_own)
+                .await
+                .map_err(|err| err.to_string())
         })
     }
 }

@@ -43,6 +43,9 @@ impl pumpkin::plugin::event::Host for PluginHostState {}
 pub struct WasmPluginEventHandler {
     pub handler_id: u32,
     pub plugin: Arc<WasmPlugin>,
+    /// Bukkit-style `ignoreCancelled`: the dispatcher skips this handler while
+    /// the fired event reports `cancelled_state() == Some(true)`.
+    pub ignore_cancelled: bool,
 }
 
 pub trait ToFromWasmEvent {

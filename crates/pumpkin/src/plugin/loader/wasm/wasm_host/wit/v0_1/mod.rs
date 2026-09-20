@@ -19,7 +19,10 @@ pub mod block_entity;
 pub mod boss_bar;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod commands;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod common;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod config;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod context;
 #[allow(clippy::unused_async_trait_impl)]
@@ -48,6 +51,8 @@ pub mod living_entity;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod logging;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod messaging;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod mob;
 pub mod permission;
 #[allow(clippy::unused_async_trait_impl)]
@@ -59,6 +64,8 @@ pub mod scheduler;
 pub mod scoreboard;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod server;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod services;
 pub mod status_effect;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod text;
@@ -134,6 +141,17 @@ pub async fn init_plugin(
         description: metadata.description,
         dependencies: metadata.dependencies,
         permissions: metadata.permissions,
+        load_after: metadata.load_after,
+        load_before: metadata.load_before,
+        provides: metadata.provides,
+        load_order: match metadata.load_order {
+            pumpkin_host_bindings::exports::pumpkin::plugin::metadata::LoadOrder::Startup => {
+                crate::plugin::LoadOrder::Startup
+            }
+            pumpkin_host_bindings::exports::pumpkin::plugin::metadata::LoadOrder::PostWorld => {
+                crate::plugin::LoadOrder::PostWorld
+            }
+        },
     };
 
     store
