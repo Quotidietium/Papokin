@@ -715,5 +715,270 @@ pub fn cleanup_event(event: &Event, state: &mut PluginHostState) {
         Event::RaidStopEvent(_) => {}
         Event::RaidTriggerEvent(_) => {}
         Event::LightningStrikeEvent(_) => {}
+        Event::BeaconActivatedEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::BeaconDeactivatedEvent(data) => {
+            if let Some(res) = &data.player {
+                cleanup_player(state, res);
+            }
+        }
+        Event::BlockBreakProgressUpdateEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::BlockFailedDispenseEvent(data) => {
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::CompostItemEvent(data) => {
+            if let Some(res) = &data.player {
+                cleanup_player(state, res);
+            }
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::TargetHitEvent(_) => {}
+        Event::VaultChangeStateEvent(_) => {}
+        Event::ClientTickEndEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerChunkUnloadEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_world(state, &data.target_world);
+        }
+        Event::UncheckedSignChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerConnectionValidateLoginEvent(data) => {
+            cleanup_text_component(state, &data.kick_message);
+        }
+        Event::AsyncPlayerConnectionConfigureEvent(_) => {}
+        Event::PlayerConnectionInitialConfigureEvent(_) => {}
+        Event::ServerResourcesReloadedEvent(_) => {}
+        Event::WhitelistStateUpdateEvent(_) => {}
+        Event::StructuresLocateEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::WorldDifficultyChangeEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::WorldGameRuleChangeEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::WorldBorderBoundsChangeEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::WorldBorderCenterChangeEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::EntityAttemptSmashAttackEvent(_) => {}
+        Event::EntityDamageItemEvent(data) => {
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::EntityEffectTickEvent(_) => {}
+        Event::EntityEquipmentChangedEvent(data) => {
+            if let Some(res) = &data.old_item {
+                cleanup_item_stack(state, res);
+            }
+            if let Some(res) = &data.new_item {
+                cleanup_item_stack(state, res);
+            }
+        }
+        Event::EntityFertilizeEggEvent(data) => {
+            if let Some(res) = &data.breeder {
+                cleanup_player(state, res);
+            }
+        }
+        Event::EntityInsideBlockEvent(_) => {}
+        Event::EntityLoadCrossbowEvent(data) => {
+            cleanup_item_stack(state, &data.crossbow);
+            for res in &data.projectiles {
+                cleanup_item_stack(state, res);
+            }
+        }
+        Event::EntityMoveEvent(_) => {}
+        Event::EntityToggleSitEvent(_) => {}
+        Event::ItemTransportingEntityValidateTargetEvent(_) => {}
+        Event::TameableDeathMessageEvent(data) => {
+            cleanup_text_component(state, &data.death_message);
+        }
+        Event::WaterBottleSplashEvent(_) => {}
+        Event::CreeperIgniteEvent(_) => {}
+        Event::EnderDragonFlameEvent(_) => {}
+        Event::EndermanAttackPlayerEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::EndermanEscapeEvent(_) => {}
+        Event::EntityJumpEvent(_) => {}
+        Event::EntityPathfindEvent(_) => {}
+        Event::EntityTeleportEndGatewayEvent(_) => {}
+        Event::EntityZapEvent(_) => {}
+        Event::PlayerNaturallySpawnCreaturesEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PreCreatureSpawnEvent(data) => {
+            cleanup_world(state, &data.target_world);
+        }
+        Event::PreSpawnerSpawnEvent(_) => {}
+        Event::ThrownEggHatchEvent(_) => {}
+        Event::PlayerBedFailEnterEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerChangeBeaconEffectEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerDeepSleepEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerFlowerPotManipulateEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::PlayerInsertLecternBookEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.book);
+        }
+        Event::PlayerInventorySlotChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+            if let Some(res) = &data.old_item {
+                cleanup_item_stack(state, res);
+            }
+            if let Some(res) = &data.new_item {
+                cleanup_item_stack(state, res);
+            }
+        }
+        Event::PlayerItemCooldownEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerItemFrameChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::PlayerItemGroupCooldownEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerLecternPageChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.book);
+        }
+        Event::PlayerLoomPatternSelectEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerPickBlockEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.result);
+        }
+        Event::PlayerPickEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.result);
+        }
+        Event::PlayerPurchaseEvent(data) => {
+            cleanup_player(state, &data.player);
+            for res in &data.ingredients {
+                cleanup_item_stack(state, res);
+            }
+            cleanup_item_stack(state, &data.result);
+        }
+        Event::PlayerTradeEvent(data) => {
+            cleanup_player(state, &data.player);
+            for res in &data.ingredients {
+                cleanup_item_stack(state, res);
+            }
+            cleanup_item_stack(state, &data.result);
+        }
+        Event::PlayerServerFullCheckEvent(_) => {}
+        Event::PlayerSignCommandPreprocessEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerStonecutterRecipeSelectEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerStopUsingItemEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.item);
+        }
+        Event::PlayerSwapWithEquipmentSlotEvent(data) => {
+            cleanup_player(state, &data.player);
+            if let Some(res) = &data.equipped_item {
+                cleanup_item_stack(state, res);
+            }
+            if let Some(res) = &data.cursor_item {
+                cleanup_item_stack(state, res);
+            }
+        }
+        Event::PlayerTrackEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerUntrackEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PrePlayerAttackEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerAdvancementCriterionGrantEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerArmorChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+            if let Some(res) = &data.old_item {
+                cleanup_item_stack(state, res);
+            }
+            if let Some(res) = &data.new_item {
+                cleanup_item_stack(state, res);
+            }
+        }
+        Event::PlayerAttackEntityCooldownResetEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerClientOptionsChangeEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerConnectionCloseEvent(_) => {}
+        Event::AnvilDamagedEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::BeaconEffectEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::AsyncPlayerSendSuggestionsEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::CommandRegisteredEvent(_) => {}
+        Event::PlayerJumpEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerPickupExperienceEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerPostRespawnEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerReadyArrowEvent(data) => {
+            cleanup_player(state, &data.player);
+            cleanup_item_stack(state, &data.bow);
+            cleanup_item_stack(state, &data.arrow);
+        }
+        Event::PlayerStartSpectatingEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerStopSpectatingEntityEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::PlayerTeleportEndGatewayEvent(data) => {
+            cleanup_player(state, &data.player);
+        }
+        Event::FillProfileEvent(_) => {}
+        Event::PreFillProfileEvent(_) => {}
+        Event::LookupProfileEvent(_) => {}
+        Event::PreLookupProfileEvent(_) => {}
+        Event::ProfileWhitelistVerifyEvent(data) => {
+            cleanup_text_component(state, &data.kick_message);
+        }
+        Event::AsyncTabCompleteEvent(data) => {
+            if let Some(res) = &data.sender {
+                cleanup_player(state, res);
+            }
+        }
+        Event::Gs4QueryEvent(_) => {}
+        Event::WhitelistToggleEvent(_) => {}
+        Event::PlayerHandshakeEvent(_) => {}
     }
 }

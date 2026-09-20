@@ -1881,6 +1881,1077 @@ interface event {
         cancelled: bool
     }
 
+    /// Called when a beacon is activated (its tier goes from 0 to n).
+    record beacon-activated-event-data {
+        /// The player that activated the beacon.
+        player: player,
+        /// Position of the beacon block.
+        block-pos: block-pos,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a beacon is deactivated (its tier drops to 0).
+    record beacon-deactivated-event-data {
+        /// The player that deactivated the beacon, if any.
+        player: option<player>,
+        /// Position of the beacon block.
+        block-pos: block-pos,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when the break progress of a block is updated for a player.
+    record block-break-progress-update-event-data {
+        /// The player breaking the block.
+        player: player,
+        /// Position of the block being broken.
+        block-pos: block-pos,
+        /// Current break progress from 0.0 to 1.0, or -1.0 when reset.
+        progress: f32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a dispenser fails to dispense an item.
+    record block-failed-dispense-event-data {
+        /// Position of the dispenser block.
+        block-pos: block-pos,
+        /// The item that failed to be dispensed.
+        item: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an item is inserted into a composter.
+    record compost-item-event-data {
+        /// The player composting the item, if any (hoppers can compost too).
+        player: option<player>,
+        /// Position of the composter block.
+        block-pos: block-pos,
+        /// The item being composted.
+        item: item-stack,
+        /// Whether the compost level will be raised.
+        will-raise-level: bool,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a target block is hit by a projectile or entity.
+    record target-hit-event-data {
+        /// The entity that hit the target, if any.
+        shooter-id: option<s32>,
+        /// Position of the target block.
+        block-pos: block-pos,
+        /// The redstone signal strength emitted (0-15).
+        signal-strength: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// The possible states of a vault block.
+    enum vault-state {
+        inactive,
+        active,
+        unlocking,
+        ejecting,
+    }
+
+    /// Called when a vault block changes state.
+    record vault-change-state-event-data {
+        /// Position of the vault block.
+        block-pos: block-pos,
+        /// The state the vault is changing from.
+        previous-state: vault-state,
+        /// The state the vault is changing to.
+        new-state: vault-state,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player's client finishes a tick.
+    record client-tick-end-event-data {
+        /// The player whose client tick ended.
+        player: player
+    }
+
+    /// Called when a chunk is unloaded on the client of a player.
+    record player-chunk-unload-event-data {
+        /// The player the chunk is unloaded for.
+        player: player,
+        /// The world the chunk is in.
+        target-world: %world,
+        /// The X coordinate of the chunk.
+        chunk-x: s32,
+        /// The Z coordinate of the chunk.
+        chunk-z: s32
+    }
+
+    /// Called when a player changes a sign before validation checks are applied.
+    record unchecked-sign-change-event-data {
+        /// The player editing the sign.
+        player: player,
+        /// Position of the sign block.
+        block-pos: block-pos,
+        /// The raw text lines of the sign.
+        lines: list<string>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// The outcome of a login validation.
+    enum connection-validation-result {
+        allowed,
+        denied,
+    }
+
+    /// Called when an incoming login is validated, allowing it to be denied early.
+    record player-connection-validate-login-event-data {
+        /// The IP address of the connecting client.
+        ip-address: string,
+        /// The kick message sent when the login is denied.
+        kick-message: text-component,
+        /// The validation result.
+        %result: connection-validation-result
+    }
+
+    /// Called asynchronously when a player connection is being configured.
+    record async-player-connection-configure-event-data {
+        /// The name of the connecting player.
+        player-name: string,
+        /// The UUID of the connecting player.
+        player-uuid: uuid,
+        /// Whether the player joins for the first time.
+        first-join: bool
+    }
+
+    /// Called when a player connection is initially configured.
+    record player-connection-initial-configure-event-data {
+        /// The name of the connecting player.
+        player-name: string,
+        /// The UUID of the connecting player.
+        player-uuid: uuid,
+        /// Whether the player joins for the first time.
+        first-join: bool
+    }
+
+    /// Called when the server resources (data packs) are reloaded.
+    record server-resources-reloaded-event-data {
+        /// The cause of the reload (e.g. command or plugin).
+        cause: string
+    }
+
+    /// The kind of whitelist state update.
+    enum whitelist-state-update-status {
+        added,
+        removed,
+    }
+
+    /// Called when the whitelist state of a player is updated.
+    record whitelist-state-update-event-data {
+        /// The name of the target player.
+        player-name: string,
+        /// The UUID of the target player.
+        player-uuid: uuid,
+        /// The new whitelist status of the target.
+        status: whitelist-state-update-status
+    }
+
+    /// Called when the server locates structures, e.g. for the locate command.
+    record structures-locate-event-data {
+        /// The world the search runs in.
+        target-world: %world,
+        /// The origin of the search.
+        origin: block-pos,
+        /// The identifier of the structure being located.
+        structure: string,
+        /// The search radius in chunks.
+        radius: s32,
+        /// The located structure positions (modifiable).
+        results: list<block-pos>
+    }
+
+    /// Called when the difficulty of a world changes.
+    record world-difficulty-change-event-data {
+        /// The world whose difficulty changed.
+        target-world: %world,
+        /// The previous difficulty name.
+        old-difficulty: string,
+        /// The new difficulty name.
+        new-difficulty: string
+    }
+
+    /// Called when a game rule value changes in a world.
+    record world-game-rule-change-event-data {
+        /// The world the game rule changed in.
+        target-world: %world,
+        /// The name of the game rule.
+        rule: string,
+        /// The new value of the game rule.
+        value: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when the bounds (diameter) of a world border change.
+    record world-border-bounds-change-event-data {
+        /// The world whose border changed.
+        target-world: %world,
+        /// The old diameter in blocks.
+        old-diameter: f64,
+        /// The new diameter in blocks.
+        new-diameter: f64,
+        /// The time in milliseconds the resize takes.
+        duration-ms: u64,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when the center of a world border changes.
+    record world-border-center-change-event-data {
+        /// The world whose border center changed.
+        target-world: %world,
+        /// The old center position.
+        old-center: position,
+        /// The new center position.
+        new-center: position,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// The result of an attempted smash attack.
+    enum smash-attack-result {
+        allowed,
+        denied,
+    }
+
+    /// Called when an entity (e.g. a mace-wielding player) attempts a smash attack.
+    record entity-attempt-smash-attack-event-data {
+        /// The entity attempting the smash attack.
+        entity-id: s32,
+        /// The entity targeted by the smash attack.
+        target-id: s32,
+        /// The result of the attempt.
+        %result: smash-attack-result
+    }
+
+    /// Called when an item held or worn by an entity takes durability damage.
+    record entity-damage-item-event-data {
+        /// The entity whose item is damaged.
+        entity-id: s32,
+        /// The item being damaged.
+        item: item-stack,
+        /// The amount of durability damage dealt to the item.
+        damage: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called every tick for each active potion effect on an entity.
+    record entity-effect-tick-event-data {
+        /// The entity the effect is ticking on.
+        entity-id: s32,
+        /// The identifier of the effect type.
+        effect-type: string,
+        /// The amplifier of the effect.
+        amplifier: s32,
+        /// The remaining duration of the effect in ticks.
+        duration: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity's equipment in a slot changes.
+    record entity-equipment-changed-event-data {
+        /// The entity whose equipment changed.
+        entity-id: s32,
+        /// The equipment slot that changed.
+        slot: string,
+        /// The item previously in the slot, if any.
+        old-item: option<item-stack>,
+        /// The item now in the slot, if any.
+        new-item: option<item-stack>
+    }
+
+    /// Called when an entity (turtle) fertilizes an egg.
+    record entity-fertilize-egg-event-data {
+        /// The entity laying the egg.
+        entity-id: s32,
+        /// The player that bred the entity, if any.
+        breeder: option<player>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called every tick while an entity is inside a block.
+    record entity-inside-block-event-data {
+        /// The entity inside the block.
+        entity-id: s32,
+        /// Position of the block the entity is inside of.
+        block-pos: block-pos,
+        /// The name of the block the entity is inside of.
+        block-name: string
+    }
+
+    /// Called when an entity loads a crossbow with projectiles.
+    record entity-load-crossbow-event-data {
+        /// The entity loading the crossbow.
+        entity-id: s32,
+        /// The crossbow being loaded.
+        crossbow: item-stack,
+        /// The projectile items being loaded.
+        projectiles: list<item-stack>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity moves.
+    record entity-move-event-data {
+        /// The entity that moved.
+        entity-id: s32,
+        /// The position the entity moved from.
+        from-position: position,
+        /// The position the entity moved to.
+        to-position: position
+    }
+
+    /// Called when an entity toggles its sitting state.
+    record entity-toggle-sit-event-data {
+        /// The entity toggling its sitting state.
+        entity-id: s32,
+        /// Whether the entity is now sitting.
+        sitting: bool,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an item-transporting entity validates its target block.
+    record item-transporting-entity-validate-target-event-data {
+        /// The transporting entity.
+        entity-id: s32,
+        /// Position of the target block being validated.
+        target-pos: block-pos,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a tameable entity dies and its death message is created.
+    record tameable-death-message-event-data {
+        /// The tameable entity that died.
+        entity-id: s32,
+        /// The death message to broadcast.
+        death-message: text-component
+    }
+
+    /// Called when a water bottle splashes on entities.
+    record water-bottle-splash-event-data {
+        /// The thrown potion entity.
+        entity-id: s32,
+        /// The entities affected by the splash.
+        affected-entities: list<s32>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a creeper is ignited.
+    record creeper-ignite-event-data {
+        /// The creeper being ignited.
+        entity-id: s32,
+        /// The entity that ignited the creeper, if any.
+        igniter-id: option<s32>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an ender dragon breathes fire, creating an area effect cloud.
+    record ender-dragon-flame-event-data {
+        /// The ender dragon entity.
+        entity-id: s32,
+        /// The area effect cloud created by the breath.
+        area-effect-cloud-id: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an enderman attacks a player.
+    record enderman-attack-player-event-data {
+        /// The attacking enderman.
+        entity-id: s32,
+        /// The player being attacked.
+        player: player,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an enderman escapes from combat.
+    record enderman-escape-event-data {
+        /// The escaping enderman.
+        entity-id: s32,
+        /// The escape reason (e.g. teleport or unknown).
+        reason: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity jumps.
+    record entity-jump-event-data {
+        /// The entity that jumped.
+        entity-id: s32
+    }
+
+    /// Called when an entity starts pathfinding towards a target.
+    record entity-pathfind-event-data {
+        /// The pathfinding entity.
+        entity-id: s32,
+        /// The target entity of the path, if any.
+        target-id: option<s32>,
+        /// The calculated path as a list of positions.
+        path: list<position>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity teleports through an end gateway.
+    record entity-teleport-end-gateway-event-data {
+        /// The teleporting entity.
+        entity-id: s32,
+        /// Position of the end gateway block.
+        gateway: block-pos,
+        /// The position the entity teleports from.
+        from-position: position,
+        /// The position the entity teleports to.
+        to-position: position,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity is zapped by lightning.
+    record entity-zap-event-data {
+        /// The entity being zapped.
+        entity-id: s32,
+        /// The lightning entity.
+        lightning-id: s32,
+        /// The cause of the zap.
+        cause: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when creatures are naturally spawned around a player.
+    record player-naturally-spawn-creatures-event-data {
+        /// The player the creatures spawn around.
+        player: player,
+        /// The X coordinate of the spawning chunk.
+        chunk-x: s32,
+        /// The Z coordinate of the spawning chunk.
+        chunk-z: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called before a creature spawns, allowing early filtering.
+    record pre-creature-spawn-event-data {
+        /// The spawn position.
+        position: position,
+        /// The world the creature spawns in.
+        target-world: %world,
+        /// The identifier of the entity type being spawned.
+        entity-type: string,
+        /// The spawn reason.
+        reason: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called before a spawner spawns an entity.
+    record pre-spawner-spawn-event-data {
+        /// Position of the spawner block.
+        spawner-pos: block-pos,
+        /// The identifier of the entity type being spawned.
+        entity-type: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a thrown egg decides whether to hatch.
+    record thrown-egg-hatch-event-data {
+        /// The egg entity.
+        egg-id: s32,
+        /// Whether the egg will hatch.
+        will-hatch: bool,
+        /// The number of entities hatching from the egg.
+        num-hatches: u8,
+        /// The identifier of the entity type hatching.
+        hatching-type: string
+    }
+
+    /// Called when a player fails to enter a bed.
+    record player-bed-fail-enter-event-data {
+        /// The player failing to enter the bed.
+        player: player,
+        /// Position of the bed block.
+        bed-pos: block-pos,
+        /// The reason entering the bed failed.
+        fail-reason: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player changes the effects of a beacon.
+    record player-change-beacon-effect-event-data {
+        /// The player changing the beacon effects.
+        player: player,
+        /// The primary effect identifier, if any.
+        primary-effect: option<string>,
+        /// The secondary effect identifier, if any.
+        secondary-effect: option<string>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player enters deep sleep.
+    record player-deep-sleep-event-data {
+        /// The player entering deep sleep.
+        player: player
+    }
+
+    /// Called when a player manipulates the content of a flower pot.
+    record player-flower-pot-manipulate-event-data {
+        /// The player manipulating the flower pot.
+        player: player,
+        /// Position of the flower pot block.
+        block-pos: block-pos,
+        /// The item being put into or taken from the pot.
+        item: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player inserts a book into a lectern.
+    record player-insert-lectern-book-event-data {
+        /// The player inserting the book.
+        player: player,
+        /// Position of the lectern block.
+        block-pos: block-pos,
+        /// The book being inserted.
+        book: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an item in a player's inventory slot changes.
+    record player-inventory-slot-change-event-data {
+        /// The player whose inventory changed.
+        player: player,
+        /// The inventory slot that changed.
+        slot: s32,
+        /// The item previously in the slot, if any.
+        old-item: option<item-stack>,
+        /// The item now in the slot, if any.
+        new-item: option<item-stack>
+    }
+
+    /// Called when a cooldown is applied to an item type for a player.
+    record player-item-cooldown-event-data {
+        /// The player receiving the cooldown.
+        player: player,
+        /// The identifier of the item type.
+        item-type: string,
+        /// The cooldown duration in ticks.
+        cooldown: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// The action performed on an item frame.
+    enum item-frame-action {
+        place,
+        remove,
+        rotate,
+    }
+
+    /// Called when a player places, removes or rotates an item in an item frame.
+    record player-item-frame-change-event-data {
+        /// The player interacting with the item frame.
+        player: player,
+        /// The item frame entity.
+        frame-id: s32,
+        /// The item involved in the action.
+        item: item-stack,
+        /// The action performed on the item frame.
+        action: item-frame-action,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a cooldown is applied to an item cooldown group for a player.
+    record player-item-group-cooldown-event-data {
+        /// The player receiving the cooldown.
+        player: player,
+        /// The identifier of the cooldown group.
+        cooldown-group: string,
+        /// The cooldown duration in ticks.
+        cooldown: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player changes the page of a book on a lectern.
+    record player-lectern-page-change-event-data {
+        /// The player changing the page.
+        player: player,
+        /// Position of the lectern block.
+        block-pos: block-pos,
+        /// The book on the lectern.
+        book: item-stack,
+        /// The new page number.
+        new-page: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player selects a pattern in a loom.
+    record player-loom-pattern-select-event-data {
+        /// The player selecting the pattern.
+        player: player,
+        /// The identifier of the selected banner pattern.
+        pattern: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player picks a block (middle click) and receives an item.
+    record player-pick-block-event-data {
+        /// The player picking the block.
+        player: player,
+        /// Position of the picked block.
+        block-pos: block-pos,
+        /// The resulting item given to the player.
+        %result: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player picks an entity (middle click) and receives an item.
+    record player-pick-entity-event-data {
+        /// The player picking the entity.
+        player: player,
+        /// The picked entity.
+        entity-id: s32,
+        /// The resulting item given to the player.
+        %result: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player completes a purchase with a merchant.
+    record player-purchase-event-data {
+        /// The player making the purchase.
+        player: player,
+        /// The merchant entity, if any.
+        merchant-id: option<s32>,
+        /// The ingredient items of the trade.
+        ingredients: list<item-stack>,
+        /// The resulting item of the trade.
+        %result: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player trades with a villager or wandering trader.
+    record player-trade-event-data {
+        /// The player trading.
+        player: player,
+        /// The merchant entity.
+        merchant-id: s32,
+        /// The ingredient items of the trade.
+        ingredients: list<item-stack>,
+        /// The resulting item of the trade.
+        %result: item-stack,
+        /// The experience the villager gains from the trade.
+        villager-experience: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// The result of a full-server join check.
+    enum server-full-check-result {
+        allowed,
+        denied,
+    }
+
+    /// Called when a player tries to join a full server.
+    record player-server-full-check-event-data {
+        /// The name of the joining player.
+        player-name: string,
+        /// The UUID of the joining player.
+        player-uuid: uuid,
+        /// Whether the player is allowed to join despite the server being full.
+        %result: server-full-check-result
+    }
+
+    /// Called when a command on a sign is preprocessed before execution.
+    record player-sign-command-preprocess-event-data {
+        /// The player running the sign command.
+        player: player,
+        /// Position of the sign block.
+        block-pos: block-pos,
+        /// The command to be executed (modifiable).
+        command: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player selects a recipe in a stonecutter.
+    record player-stonecutter-recipe-select-event-data {
+        /// The player selecting the recipe.
+        player: player,
+        /// The identifier of the selected recipe.
+        recipe-id: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player stops using an item (e.g. releases a bow).
+    record player-stop-using-item-event-data {
+        /// The player that stopped using the item.
+        player: player,
+        /// The item that was being used.
+        item: item-stack
+    }
+
+    /// Called when a player swaps an item with an equipment slot.
+    record player-swap-with-equipment-slot-event-data {
+        /// The player swapping the item.
+        player: player,
+        /// The equipment slot being swapped with.
+        slot: string,
+        /// The item currently equipped in the slot, if any.
+        equipped-item: option<item-stack>,
+        /// The item on the cursor being equipped, if any.
+        cursor-item: option<item-stack>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when an entity starts being tracked (sent) to a player.
+    record player-track-entity-event-data {
+        /// The player starting to track the entity.
+        player: player,
+        /// The entity being tracked.
+        entity-id: s32
+    }
+
+    /// Called when an entity stops being tracked by a player.
+    record player-untrack-entity-event-data {
+        /// The player stopping tracking the entity.
+        player: player,
+        /// The entity no longer tracked.
+        entity-id: s32
+    }
+
+    /// Called before a player attacks an entity, allowing the attack to be redirected or cancelled.
+    record pre-player-attack-entity-event-data {
+        /// The attacking player.
+        player: player,
+        /// The entity about to be attacked.
+        target-id: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a criterion of an advancement is granted to a player.
+    record player-advancement-criterion-grant-event-data {
+        /// The player being granted the criterion.
+        player: player,
+        /// The identifier of the advancement.
+        advancement-id: string,
+        /// The criterion being granted.
+        criterion: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player's armor piece changes.
+    record player-armor-change-event-data {
+        /// The player whose armor changed.
+        player: player,
+        /// The armor slot that changed.
+        slot: string,
+        /// The previously equipped item, if any.
+        old-item: option<item-stack>,
+        /// The newly equipped item, if any.
+        new-item: option<item-stack>
+    }
+
+    /// Called when a player's attack cooldown is reset by attacking an entity.
+    record player-attack-entity-cooldown-reset-event-data {
+        /// The attacking player.
+        player: player,
+        /// The entity being attacked.
+        target-id: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player's client options change.
+    record player-client-options-change-event-data {
+        /// The player whose client options changed.
+        player: player,
+        /// The new client locale.
+        locale: string,
+        /// The new view distance in chunks.
+        view-distance: s32,
+        /// The new chat visibility setting.
+        chat-visibility: string,
+        /// Whether chat colors are enabled.
+        chat-colors: bool,
+        /// The new main hand setting.
+        main-hand: string,
+        /// The new visible skin parts bitmask.
+        skin-parts: u32
+    }
+
+    /// Called when a player connection is closed.
+    record player-connection-close-event-data {
+        /// The UUID of the disconnecting player.
+        player-uuid: uuid,
+        /// The name of the disconnecting player.
+        player-name: string,
+        /// The IP address of the disconnecting player.
+        ip-address: string
+    }
+
+    /// Called when an anvil is damaged through use.
+    record anvil-damaged-event-data {
+        /// The player using the anvil.
+        player: player,
+        /// Position of the anvil block.
+        block-pos: block-pos,
+        /// The new damage state of the anvil.
+        damage-state: string,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a beacon effect is applied to a player.
+    record beacon-effect-event-data {
+        /// The player receiving the effect.
+        player: player,
+        /// The identifier of the effect being applied.
+        effect: string,
+        /// Whether the effect is the primary effect of the beacon.
+        primary: bool,
+        /// Position of the beacon block.
+        block-pos: block-pos,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called asynchronously when command suggestions are sent to a player.
+    record async-player-send-suggestions-event-data {
+        /// The player receiving the suggestions.
+        player: player,
+        /// The current command buffer.
+        buffer: string,
+        /// The suggestions to send (modifiable).
+        suggestions: list<string>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a command is registered to the server.
+    record command-registered-event-data {
+        /// The label of the registered command.
+        command-label: string,
+        /// The name of the plugin registering the command.
+        plugin: string
+    }
+
+    /// Called when a player jumps.
+    record player-jump-event-data {
+        /// The jumping player.
+        player: player,
+        /// The position the player jumps from.
+        from-position: position,
+        /// The position the player jumps to.
+        to-position: position,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player picks up an experience orb.
+    record player-pickup-experience-event-data {
+        /// The player picking up the experience.
+        player: player,
+        /// The experience orb entity.
+        orb-id: s32,
+        /// The amount of experience picked up.
+        amount: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called after a player respawns.
+    record player-post-respawn-event-data {
+        /// The respawned player.
+        player: player,
+        /// The location the player respawned at.
+        respawn-location: position,
+        /// Whether the respawn location is the player's bed spawn.
+        is-bed-spawn: bool
+    }
+
+    /// Called when a player readies an arrow with a bow.
+    record player-ready-arrow-event-data {
+        /// The player readying the arrow.
+        player: player,
+        /// The bow being used.
+        bow: item-stack,
+        /// The arrow being readied.
+        arrow: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player starts spectating an entity.
+    record player-start-spectating-entity-event-data {
+        /// The spectating player.
+        player: player,
+        /// The entity being spectated.
+        target-id: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player stops spectating an entity.
+    record player-stop-spectating-entity-event-data {
+        /// The player that was spectating.
+        player: player,
+        /// The entity that was being spectated.
+        target-id: s32,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player teleports through an end gateway.
+    record player-teleport-end-gateway-event-data {
+        /// The teleporting player.
+        player: player,
+        /// Position of the end gateway block.
+        gateway: block-pos,
+        /// The position the player teleports from.
+        from-position: position,
+        /// The position the player teleports to.
+        to-position: position,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a player profile has been filled with its properties.
+    record fill-profile-event-data {
+        /// The UUID of the profile.
+        player-uuid: uuid,
+        /// The name of the profile, if resolved.
+        player-name: option<string>,
+        /// The profile properties as name/value pairs.
+        properties: list<tuple<string, string>>
+    }
+
+    /// Called before a player profile is filled, allowing a cached profile to be supplied.
+    record pre-fill-profile-event-data {
+        /// The UUID of the profile.
+        player-uuid: uuid,
+        /// The name of the profile, if known.
+        player-name: option<string>,
+        /// The profile properties as name/value pairs.
+        properties: list<tuple<string, string>>
+    }
+
+    /// Called when a player profile is looked up by name.
+    record lookup-profile-event-data {
+        /// The name that was looked up.
+        name: string,
+        /// The UUID of the resolved profile.
+        player-uuid: uuid,
+        /// The name of the resolved profile, if any.
+        player-name: option<string>,
+        /// The profile properties as name/value pairs.
+        properties: list<tuple<string, string>>
+    }
+
+    /// Called before a player profile is looked up by name.
+    record pre-lookup-profile-event-data {
+        /// The name being looked up.
+        name: string
+    }
+
+    /// The result of a whitelist verification.
+    enum whitelist-verify-result {
+        allowed,
+        denied,
+    }
+
+    /// Called when a connecting player is verified against the whitelist.
+    record profile-whitelist-verify-event-data {
+        /// The UUID of the connecting player.
+        player-uuid: uuid,
+        /// The name of the connecting player.
+        player-name: string,
+        /// The kick message sent when the player is not whitelisted.
+        kick-message: text-component,
+        /// The verification result.
+        %result: whitelist-verify-result
+    }
+
+    /// Called asynchronously when tab completions are computed.
+    record async-tab-complete-event-data {
+        /// The sender requesting completions, if it is a player.
+        sender: option<player>,
+        /// The current command buffer.
+        buffer: string,
+        /// The computed completions (modifiable).
+        completions: list<string>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a GS4 query is received.
+    record gs4-query-event-data {
+        /// The type of the query.
+        query-type: string,
+        /// The address of the querier.
+        querier-address: string,
+        /// The response data as key/value pairs.
+        data: list<tuple<string, string>>
+    }
+
+    /// Called when the whitelist is toggled on or off.
+    record whitelist-toggle-event-data {
+        /// Whether the whitelist is now enabled.
+        enabled: bool
+    }
+
+    /// The intention of a handshake.
+    enum handshake-intention {
+        status,
+        login,
+    }
+
+    /// Called when a client sends a handshake packet.
+    record player-handshake-event-data {
+        /// The IP address of the client.
+        ip-address: string,
+        /// The hostname the client used to connect.
+        hostname: string,
+        /// The protocol version of the client.
+        protocol-version: s32,
+        /// The intention of the handshake (status or login).
+        intention: handshake-intention,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
     enum event-type {
         player-join-event,
         player-leave-event,
@@ -2155,6 +3226,98 @@ interface event {
         raid-stop-event,
         raid-trigger-event,
         lightning-strike-event,
+        beacon-activated-event,
+        beacon-deactivated-event,
+        block-break-progress-update-event,
+        block-failed-dispense-event,
+        compost-item-event,
+        target-hit-event,
+        vault-change-state-event,
+        client-tick-end-event,
+        player-chunk-unload-event,
+        unchecked-sign-change-event,
+        player-connection-validate-login-event,
+        async-player-connection-configure-event,
+        player-connection-initial-configure-event,
+        server-resources-reloaded-event,
+        whitelist-state-update-event,
+        structures-locate-event,
+        world-difficulty-change-event,
+        world-game-rule-change-event,
+        world-border-bounds-change-event,
+        world-border-center-change-event,
+        entity-attempt-smash-attack-event,
+        entity-damage-item-event,
+        entity-effect-tick-event,
+        entity-equipment-changed-event,
+        entity-fertilize-egg-event,
+        entity-inside-block-event,
+        entity-load-crossbow-event,
+        entity-move-event,
+        entity-toggle-sit-event,
+        item-transporting-entity-validate-target-event,
+        tameable-death-message-event,
+        water-bottle-splash-event,
+        creeper-ignite-event,
+        ender-dragon-flame-event,
+        enderman-attack-player-event,
+        enderman-escape-event,
+        entity-jump-event,
+        entity-pathfind-event,
+        entity-teleport-end-gateway-event,
+        entity-zap-event,
+        player-naturally-spawn-creatures-event,
+        pre-creature-spawn-event,
+        pre-spawner-spawn-event,
+        thrown-egg-hatch-event,
+        player-bed-fail-enter-event,
+        player-change-beacon-effect-event,
+        player-deep-sleep-event,
+        player-flower-pot-manipulate-event,
+        player-insert-lectern-book-event,
+        player-inventory-slot-change-event,
+        player-item-cooldown-event,
+        player-item-frame-change-event,
+        player-item-group-cooldown-event,
+        player-lectern-page-change-event,
+        player-loom-pattern-select-event,
+        player-pick-block-event,
+        player-pick-entity-event,
+        player-purchase-event,
+        player-trade-event,
+        player-server-full-check-event,
+        player-sign-command-preprocess-event,
+        player-stonecutter-recipe-select-event,
+        player-stop-using-item-event,
+        player-swap-with-equipment-slot-event,
+        player-track-entity-event,
+        player-untrack-entity-event,
+        pre-player-attack-entity-event,
+        player-advancement-criterion-grant-event,
+        player-armor-change-event,
+        player-attack-entity-cooldown-reset-event,
+        player-client-options-change-event,
+        player-connection-close-event,
+        anvil-damaged-event,
+        beacon-effect-event,
+        async-player-send-suggestions-event,
+        command-registered-event,
+        player-jump-event,
+        player-pickup-experience-event,
+        player-post-respawn-event,
+        player-ready-arrow-event,
+        player-start-spectating-entity-event,
+        player-stop-spectating-entity-event,
+        player-teleport-end-gateway-event,
+        fill-profile-event,
+        pre-fill-profile-event,
+        lookup-profile-event,
+        pre-lookup-profile-event,
+        profile-whitelist-verify-event,
+        async-tab-complete-event,
+        gs4-query-event,
+        whitelist-toggle-event,
+        player-handshake-event,
     }
 
     variant event {
@@ -2431,5 +3594,97 @@ interface event {
         raid-stop-event(raid-stop-event-data),
         raid-trigger-event(raid-trigger-event-data),
         lightning-strike-event(lightning-strike-event-data),
+        beacon-activated-event(beacon-activated-event-data),
+        beacon-deactivated-event(beacon-deactivated-event-data),
+        block-break-progress-update-event(block-break-progress-update-event-data),
+        block-failed-dispense-event(block-failed-dispense-event-data),
+        compost-item-event(compost-item-event-data),
+        target-hit-event(target-hit-event-data),
+        vault-change-state-event(vault-change-state-event-data),
+        client-tick-end-event(client-tick-end-event-data),
+        player-chunk-unload-event(player-chunk-unload-event-data),
+        unchecked-sign-change-event(unchecked-sign-change-event-data),
+        player-connection-validate-login-event(player-connection-validate-login-event-data),
+        async-player-connection-configure-event(async-player-connection-configure-event-data),
+        player-connection-initial-configure-event(player-connection-initial-configure-event-data),
+        server-resources-reloaded-event(server-resources-reloaded-event-data),
+        whitelist-state-update-event(whitelist-state-update-event-data),
+        structures-locate-event(structures-locate-event-data),
+        world-difficulty-change-event(world-difficulty-change-event-data),
+        world-game-rule-change-event(world-game-rule-change-event-data),
+        world-border-bounds-change-event(world-border-bounds-change-event-data),
+        world-border-center-change-event(world-border-center-change-event-data),
+        entity-attempt-smash-attack-event(entity-attempt-smash-attack-event-data),
+        entity-damage-item-event(entity-damage-item-event-data),
+        entity-effect-tick-event(entity-effect-tick-event-data),
+        entity-equipment-changed-event(entity-equipment-changed-event-data),
+        entity-fertilize-egg-event(entity-fertilize-egg-event-data),
+        entity-inside-block-event(entity-inside-block-event-data),
+        entity-load-crossbow-event(entity-load-crossbow-event-data),
+        entity-move-event(entity-move-event-data),
+        entity-toggle-sit-event(entity-toggle-sit-event-data),
+        item-transporting-entity-validate-target-event(item-transporting-entity-validate-target-event-data),
+        tameable-death-message-event(tameable-death-message-event-data),
+        water-bottle-splash-event(water-bottle-splash-event-data),
+        creeper-ignite-event(creeper-ignite-event-data),
+        ender-dragon-flame-event(ender-dragon-flame-event-data),
+        enderman-attack-player-event(enderman-attack-player-event-data),
+        enderman-escape-event(enderman-escape-event-data),
+        entity-jump-event(entity-jump-event-data),
+        entity-pathfind-event(entity-pathfind-event-data),
+        entity-teleport-end-gateway-event(entity-teleport-end-gateway-event-data),
+        entity-zap-event(entity-zap-event-data),
+        player-naturally-spawn-creatures-event(player-naturally-spawn-creatures-event-data),
+        pre-creature-spawn-event(pre-creature-spawn-event-data),
+        pre-spawner-spawn-event(pre-spawner-spawn-event-data),
+        thrown-egg-hatch-event(thrown-egg-hatch-event-data),
+        player-bed-fail-enter-event(player-bed-fail-enter-event-data),
+        player-change-beacon-effect-event(player-change-beacon-effect-event-data),
+        player-deep-sleep-event(player-deep-sleep-event-data),
+        player-flower-pot-manipulate-event(player-flower-pot-manipulate-event-data),
+        player-insert-lectern-book-event(player-insert-lectern-book-event-data),
+        player-inventory-slot-change-event(player-inventory-slot-change-event-data),
+        player-item-cooldown-event(player-item-cooldown-event-data),
+        player-item-frame-change-event(player-item-frame-change-event-data),
+        player-item-group-cooldown-event(player-item-group-cooldown-event-data),
+        player-lectern-page-change-event(player-lectern-page-change-event-data),
+        player-loom-pattern-select-event(player-loom-pattern-select-event-data),
+        player-pick-block-event(player-pick-block-event-data),
+        player-pick-entity-event(player-pick-entity-event-data),
+        player-purchase-event(player-purchase-event-data),
+        player-trade-event(player-trade-event-data),
+        player-server-full-check-event(player-server-full-check-event-data),
+        player-sign-command-preprocess-event(player-sign-command-preprocess-event-data),
+        player-stonecutter-recipe-select-event(player-stonecutter-recipe-select-event-data),
+        player-stop-using-item-event(player-stop-using-item-event-data),
+        player-swap-with-equipment-slot-event(player-swap-with-equipment-slot-event-data),
+        player-track-entity-event(player-track-entity-event-data),
+        player-untrack-entity-event(player-untrack-entity-event-data),
+        pre-player-attack-entity-event(pre-player-attack-entity-event-data),
+        player-advancement-criterion-grant-event(player-advancement-criterion-grant-event-data),
+        player-armor-change-event(player-armor-change-event-data),
+        player-attack-entity-cooldown-reset-event(player-attack-entity-cooldown-reset-event-data),
+        player-client-options-change-event(player-client-options-change-event-data),
+        player-connection-close-event(player-connection-close-event-data),
+        anvil-damaged-event(anvil-damaged-event-data),
+        beacon-effect-event(beacon-effect-event-data),
+        async-player-send-suggestions-event(async-player-send-suggestions-event-data),
+        command-registered-event(command-registered-event-data),
+        player-jump-event(player-jump-event-data),
+        player-pickup-experience-event(player-pickup-experience-event-data),
+        player-post-respawn-event(player-post-respawn-event-data),
+        player-ready-arrow-event(player-ready-arrow-event-data),
+        player-start-spectating-entity-event(player-start-spectating-entity-event-data),
+        player-stop-spectating-entity-event(player-stop-spectating-entity-event-data),
+        player-teleport-end-gateway-event(player-teleport-end-gateway-event-data),
+        fill-profile-event(fill-profile-event-data),
+        pre-fill-profile-event(pre-fill-profile-event-data),
+        lookup-profile-event(lookup-profile-event-data),
+        pre-lookup-profile-event(pre-lookup-profile-event-data),
+        profile-whitelist-verify-event(profile-whitelist-verify-event-data),
+        async-tab-complete-event(async-tab-complete-event-data),
+        gs4-query-event(gs4-query-event-data),
+        whitelist-toggle-event(whitelist-toggle-event-data),
+        player-handshake-event(player-handshake-event-data),
     }
 }
