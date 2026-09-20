@@ -120,8 +120,20 @@ impl Context {
         name: N,
         service: Arc<T>,
     ) {
+        let name = name.into();
+        // Also publish into the name-based cross-plugin registry so wasm
+        // plugins can discover (and IPC to) this native provider.
+        self.plugin_manager
+            .register_service_provider(&name, &self.metadata.name, 0);
         let mut services = self.plugin_manager.services.write().await;
-        services.insert(name.into(), service);
+        services.insert(name, service);
+    }
+
+    /// Removes a service previously registered by this plugin.
+    pub async fn unregister_service(&self, name: &str) {
+        self.plugin_manager
+            .unregister_service_provider(name, &self.metadata.name);
+        self.plugin_manager.services.write().await.remove(name);
     }
 
     /// Retrieves a registered service by name and type.
@@ -156,9 +168,13 @@ impl Context {
 
     /// Registers a new command to the server with a specified permission level.
     ///
+    /// When the command's label is already owned by another plugin, the label
+    /// is registered as `<plugin>:<label>` instead (Bukkit's fallback prefix),
+    /// so the original command keeps its bare label.
+    ///
     /// # Arguments
     /// - `node`: The command node to register.
-    /// - `permission`: The permission level required to execute the command.
+    /// - `permission`: The required permission level to execute the command.
     pub fn register_command<P: Into<String>>(
         &self,
         node: impl Into<crate::command::node::detached::CommandDetachedNode>,
@@ -173,6 +189,7 @@ impl Context {
         };
 
         let mut node = node.into();
+        self.apply_command_fallback_prefix(&mut node);
         node.meta.source = Some(self.metadata.name.clone());
         node.owned
             .requirements
@@ -190,7 +207,34 @@ impl Context {
         self.reload_commands_for_everyone();
     }
 
+    /// Renames `node`'s literal to `<plugin>:<label>` when the bare label is
+    /// already owned by a different plugin (Bukkit's fallback prefix).
+    fn apply_command_fallback_prefix(
+        &self,
+        node: &mut crate::command::node::detached::CommandDetachedNode,
+    ) {
+        let normalized = node.meta.literal.to_ascii_lowercase();
+        let conflict = {
+            let dispatcher = self.server.command_dispatcher.load();
+            dispatcher
+                .get_command_source(&normalized)
+                .is_some_and(|source| source != self.metadata.name)
+        };
+        if conflict {
+            let fallback = format!("{}:{normalized}", self.metadata.name);
+            tracing::info!(
+                "Command /{normalized} is already registered by another plugin; \
+                 registering /{fallback} as fallback"
+            );
+            node.meta.literal = fallback.into();
+            node.meta.literal_lowercase = node.meta.literal.to_ascii_lowercase();
+        }
+    }
+
     /// Registers a new command with aliases to the server with a specified permission level.
+    ///
+    /// A conflicting label falls back to `<plugin>:<label>` like
+    /// [`Context::register_command`].
     pub fn register_command_with_aliases<P: Into<String>>(
         &self,
         node: impl Into<crate::command::node::detached::CommandDetachedNode>,
@@ -206,6 +250,7 @@ impl Context {
         };
 
         let mut node = node.into();
+        self.apply_command_fallback_prefix(&mut node);
         node.meta.source = Some(self.metadata.name.clone());
         node.owned
             .requirements
@@ -311,8 +356,11 @@ impl Context {
     ///
     /// # Arguments
     /// - `handler`: A reference to the event handler.
-    /// - `priority`: The priority of the event handler.
+    /// - `priority`: The priority of the event handler (`Lowest` runs first,
+    ///   `Highest` runs last).
     /// - `blocking`: A boolean indicating whether the handler is blocking.
+    /// - `ignore_cancelled`: When true, the handler is skipped for cancellable
+    ///   events whose cancellation flag is set (Bukkit's `ignoreCancelled`).
     ///
     /// # Constraints
     /// The handler must implement the `EventHandler<E>` trait.
@@ -321,6 +369,7 @@ impl Context {
         handler: Arc<H>,
         priority: EventPriority,
         blocking: bool,
+        ignore_cancelled: bool,
     ) where
         H: EventHandler<E> + 'static,
     {
@@ -328,6 +377,7 @@ impl Context {
             handler,
             priority,
             blocking,
+            ignore_cancelled,
             source: Some(self.metadata.name.clone()),
             _phantom: std::marker::PhantomData,
         });

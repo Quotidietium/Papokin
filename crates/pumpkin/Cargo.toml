@@ -57,6 +57,7 @@ notify.workspace = true
 serde.workspace = true
 serde_repr.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 colored.workspace = true
 

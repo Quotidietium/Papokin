@@ -34,7 +34,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Bump this whenever the public plugin API or any event layout changes in a way
 /// that makes old binary plugins incompatible.
-pub const PLUGIN_API_VERSION: u32 = 2;
+pub const PLUGIN_API_VERSION: u32 = 3;
 
 const PLUGIN_DIR: &str = "./plugins";
 
@@ -74,10 +74,32 @@ pub trait DynEventHandler: Send + Sync {
     /// The priority of the event handler.
     fn get_priority(&self) -> &EventPriority;
 
+    /// Whether this handler opted out of cancelled events (Bukkit's
+    /// `ignoreCancelled`). When true, the dispatcher skips this handler while
+    /// the event's cancellation flag is set.
+    fn ignores_cancelled(&self) -> bool {
+        false
+    }
+
     /// Returns the plugin that registered this handler, when applicable.
     fn source(&self) -> Option<&str> {
         None
     }
+}
+
+/// Bukkit-compatible dispatch order: `Lowest` first, `Highest` last, stable
+/// so registration order breaks ties within a priority.
+fn order_handlers(handlers: &[Arc<dyn DynEventHandler>]) -> Vec<&Arc<dyn DynEventHandler>> {
+    let mut ordered: Vec<&Arc<dyn DynEventHandler>> = handlers.iter().collect();
+    // Ascending by `Reverse` walks the derived enum order backwards.
+    ordered.sort_by_key(|handler| std::cmp::Reverse(handler.get_priority().clone()));
+    ordered
+}
+
+/// Whether the dispatcher may invoke `handler` given the event's cancellation
+/// state (Bukkit's `ignoreCancelled` semantics).
+fn should_invoke(handler: &dyn DynEventHandler, cancelled: Option<bool>) -> bool {
+    !(handler.ignores_cancelled() && cancelled == Some(true))
 }
 
 /// A trait for handling specific events.
@@ -116,6 +138,7 @@ where
     pub handler: Arc<H>,
     pub priority: EventPriority,
     pub blocking: bool,
+    pub ignore_cancelled: bool,
     pub source: Option<String>,
     pub _phantom: std::marker::PhantomData<E>,
 }
@@ -163,6 +186,10 @@ where
         &self.priority
     }
 
+    fn ignores_cancelled(&self) -> bool {
+        self.ignore_cancelled
+    }
+
     fn source(&self) -> Option<&str> {
         self.source.as_deref()
     }
@@ -177,7 +204,26 @@ pub type HandlerMap = HashMap<&'static str, Vec<Arc<dyn DynEventHandler>>>;
 pub enum PluginState {
     Loading,
     Loaded,
+    /// The plugin is loaded but inactive (its `on-enable` failed, or it was
+    /// disabled at runtime). Handlers and commands are unregistered.
+    Disabled(String),
     Failed(String),
+}
+
+/// One entry in the server-level service registry (Bukkit `ServicesManager`).
+///
+/// Services are discovered by name across plugins and invoked via IPC; native
+/// plugins may additionally expose typed in-process payloads.
+#[derive(Debug, Clone)]
+pub struct ServiceRegistration {
+    /// The service capability name (conventionally `plugin:service`).
+    pub service: String,
+    /// The plugin providing the service.
+    pub plugin: String,
+    /// Priority among multiple providers; higher values win.
+    pub priority: i32,
+    /// Monotonic sequence used as a stable tie-breaker for equal priorities.
+    pub sequence: u64,
 }
 
 /// Core plugin management system
@@ -187,6 +233,12 @@ pub struct PluginManager {
     handlers: Arc<ArcSwap<HandlerMap>>,
     unloaded_files: RwLock<HashSet<PathBuf>>,
     services: Arc<RwLock<HashMap<String, Arc<dyn Payload>>>>,
+    /// Cross-plugin service registry (name-based discovery for native and wasm
+    /// plugins alike).
+    service_registry: SyncRwLock<Vec<ServiceRegistration>>,
+    service_sequence: std::sync::atomic::AtomicU64,
+    /// Incoming plugin messaging channels: `channel -> plugins handling it`.
+    incoming_channels: SyncRwLock<HashMap<String, Vec<String>>>,
     // Plugin state tracking
     plugin_states: RwLock<HashMap<String, PluginState>>,
     // Notification for plugin state changes
@@ -245,6 +297,9 @@ impl PluginManager {
             handlers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             unloaded_files: RwLock::new(HashSet::new()),
             services: Arc::new(RwLock::new(HashMap::new())),
+            service_registry: SyncRwLock::new(Vec::new()),
+            service_sequence: std::sync::atomic::AtomicU64::new(0),
+            incoming_channels: SyncRwLock::new(HashMap::new()),
             plugin_states: RwLock::new(HashMap::new()),
             state_notify: Arc::new(Notify::new()),
             hot_reload_task: RwLock::new(None),
@@ -262,7 +317,7 @@ impl PluginManager {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             plugins
                 .iter()
-                .filter(|p| p.is_active)
+                .filter(|p| p.instance.is_some())
                 .map(|p| p.metadata.name.clone())
                 .collect()
         };
@@ -596,31 +651,61 @@ impl PluginManager {
             // Initialize the plugin
             match instance.on_load(context.clone()).await {
                 Ok(()) => {
-                    // Update plugin state to loaded
-                    {
-                        let mut plugins = self_ref_clone
-                            .plugins
-                            .write()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(plugin) = plugins.get_mut(plugin_index) {
-                            plugin.instance = Some(instance);
-                            plugin.is_active = true;
+                    // Enable grading (Paper-style): a failed enable deactivates
+                    // the plugin (handlers/commands unregistered) but keeps it
+                    // loaded, unlike a failed load which fully unloads it.
+                    match instance.on_enable(context.clone()).await {
+                        Ok(()) => {
+                            // Update plugin state to loaded
+                            {
+                                let mut plugins = self_ref_clone
+                                    .plugins
+                                    .write()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if let Some(plugin) = plugins.get_mut(plugin_index) {
+                                    plugin.instance = Some(instance);
+                                    plugin.is_active = true;
+                                }
+                            }
+                            self_ref_clone
+                                .plugin_states
+                                .write()
+                                .await
+                                .insert(plugin_name.clone(), PluginState::Loaded);
+                            state_notify.notify_waiters();
+
+                            info!("Loaded {} ({})", metadata.name, metadata.version);
+
+                            if !metadata.permissions.is_empty() {
+                                warn!(
+                                    "Plugin \"{}\" uses the following permissions: {:?}",
+                                    metadata.name, metadata.permissions
+                                );
+                            }
                         }
-                    }
-                    self_ref_clone
-                        .plugin_states
-                        .write()
-                        .await
-                        .insert(plugin_name.clone(), PluginState::Loaded);
-                    state_notify.notify_waiters();
+                        Err(enable_error) => {
+                            let error_msg = format!("Enable failed: {enable_error}");
+                            self_ref_clone.unregister_handlers(&plugin_name);
+                            context.unregister_commands();
 
-                    info!("Loaded {} ({})", metadata.name, metadata.version);
+                            {
+                                let mut plugins = self_ref_clone
+                                    .plugins
+                                    .write()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if let Some(plugin) = plugins.get_mut(plugin_index) {
+                                    plugin.instance = Some(instance);
+                                    plugin.is_active = false;
+                                }
+                            }
+                            self_ref_clone.plugin_states.write().await.insert(
+                                plugin_name.clone(),
+                                PluginState::Disabled(error_msg.clone()),
+                            );
+                            state_notify.notify_waiters();
 
-                    if !metadata.permissions.is_empty() {
-                        warn!(
-                            "Plugin \"{}\" uses the following permissions: {:?}",
-                            metadata.name, metadata.permissions
-                        );
+                            error!("Failed to enable plugin {plugin_name}: {error_msg}");
+                        }
                     }
                 }
                 Err(e) => {
@@ -670,11 +755,15 @@ impl PluginManager {
         Ok(task)
     }
 
-    /// Load all plugins from the plugin directory
+    /// Load all plugins from the plugin directory for the given startup phase.
+    ///
+    /// Plugins whose metadata declares a different [`LoadOrder`] are left for
+    /// their phase's call, and already-loaded plugins are never loaded twice.
     #[allow(clippy::too_many_lines)]
     pub async fn load_plugins(
         self: &Arc<Self>,
         server: &Arc<Server>,
+        phase: crate::plugin::api::LoadOrder,
     ) -> Result<std::time::Duration, ManagerError> {
         let path = Path::new(PLUGIN_DIR);
 
@@ -762,14 +851,161 @@ impl PluginManager {
             }
         }
 
-        // Resolve dependencies
-        let metadata_list: Vec<(String, Vec<String>)> = prepared_plugins
+        // Phase split: only initialize plugins that declared this phase and
+        // were not loaded by an earlier phase. Later phases re-scan the same
+        // directory, so previously loaded plugins must be filtered out here.
+        let already_loaded: HashSet<String> = {
+            let plugins = self
+                .plugins
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            plugins.iter().map(|p| p.metadata.name.clone()).collect()
+        };
+        prepared_plugins.retain(|(_, metadata, ..)| {
+            if metadata.load_order != phase {
+                return false;
+            }
+            if already_loaded.contains(&metadata.name) {
+                info!(
+                    "Plugin \"{}\" is already loaded, skipping duplicate load.",
+                    metadata.name
+                );
+                return false;
+            }
+            true
+        });
+
+        // Resolve dependency edges: hard `dependencies`, soft `load_after` /
+        // `load_before`, and `provides` capability aliases (Paper-style).
+        let plugin_names: HashSet<String> = prepared_plugins
             .iter()
-            .map(|(_, m, _, _, _)| (m.name.clone(), m.dependencies.clone()))
+            .map(|(_, m, ..)| m.name.clone())
+            .chain(already_loaded.iter().cloned())
             .collect();
+        let mut provides_map: HashMap<String, String> = HashMap::new();
+        for (_, metadata, ..) in &prepared_plugins {
+            for capability in &metadata.provides {
+                if capability == &metadata.name {
+                    continue;
+                }
+                match provides_map.get(capability) {
+                    Some(existing) => warn!(
+                        "Plugins \"{existing}\" and \"{}\" both provide `{capability}`; using \"{existing}\"",
+                        metadata.name
+                    ),
+                    None => {
+                        provides_map.insert(capability.clone(), metadata.name.clone());
+                    }
+                }
+            }
+        }
+        // Resolve a dependency name to a concrete plugin in this batch.
+        let resolve_dep = |dep: &str| -> Option<String> {
+            if plugin_names.contains(dep) {
+                return Some(dep.to_string());
+            }
+            provides_map.get(dep).cloned()
+        };
+
+        // `deps[p]` lists the plugins that must load before `p`.
+        let mut skipped: HashMap<String, String> = HashMap::new();
+        let mut name_deps: Vec<(String, Vec<String>)> = Vec::new();
+        for (_, metadata, ..) in &prepared_plugins {
+            let mut deps: Vec<String> = Vec::new();
+            let mut hard_missing = false;
+            for dep in &metadata.dependencies {
+                match resolve_dep(dep) {
+                    Some(name) if name != metadata.name => deps.push(name),
+                    Some(_) => {}
+                    None => {
+                        warn!(
+                            "Plugin \"{}\" cannot load: missing hard dependency `{dep}`",
+                            metadata.name
+                        );
+                        skipped.insert(
+                            metadata.name.clone(),
+                            format!("missing hard dependency `{dep}`"),
+                        );
+                        hard_missing = true;
+                    }
+                }
+            }
+            if hard_missing {
+                continue;
+            }
+            for dep in &metadata.load_after {
+                match resolve_dep(dep) {
+                    Some(name) if name != metadata.name => deps.push(name),
+                    _ => {} // soft edges to absent plugins are ignored
+                }
+            }
+            name_deps.push((metadata.name.clone(), deps));
+        }
+
+        // `load_before`: `p.load_before(x)` means `p` must load before `x`, i.e.
+        // an edge `x -> p` in the "must load before" graph.
+        let before_edges: Vec<(String, Vec<String>)> = prepared_plugins
+            .iter()
+            .map(|(_, m, ..)| {
+                let targets = m
+                    .load_before
+                    .iter()
+                    .filter_map(|dep| resolve_dep(dep))
+                    .filter(|resolved| resolved != &m.name)
+                    .collect();
+                (m.name.clone(), targets)
+            })
+            .collect();
+        for (source, targets) in &before_edges {
+            for target in targets {
+                if let Some(entry) = name_deps.iter_mut().find(|(n, _)| n == target)
+                    && !entry.1.contains(source)
+                {
+                    entry.1.push(source.clone());
+                }
+            }
+        }
+
+        // Plugins whose hard dependencies were skipped are skipped transitively.
+        loop {
+            let present: HashSet<String> = name_deps.iter().map(|(n, _)| n.clone()).collect();
+            let mut removed = false;
+            name_deps.retain(|(name, deps)| {
+                let missing = deps.iter().find(|d| !present.contains(*d));
+                if let Some(missing) = missing {
+                    skipped.insert(
+                        name.clone(),
+                        format!("hard dependency `{missing}` was skipped or is absent"),
+                    );
+                    removed = true;
+                    warn!("Plugin \"{name}\" cannot load: hard dependency `{missing}` was skipped or is absent");
+                    return false;
+                }
+                true
+            });
+            if !removed {
+                break;
+            }
+        }
+
+        if !skipped.is_empty() {
+            let names: Vec<String> = skipped.keys().cloned().collect();
+            warn!(
+                "Skipped plugins due to dependency problems: {}",
+                names.join(", ")
+            );
+        }
+
+        // Edges resolved to plugins from an earlier phase are already satisfied
+        // (those plugins are loaded); drop them before sorting, which only sees
+        // plugins in this batch.
+        let batch_names: HashSet<String> = name_deps.iter().map(|(n, _)| n.clone()).collect();
+        for (_, deps) in &mut name_deps {
+            deps.retain(|d| batch_names.contains(d));
+        }
 
         let sorted_names =
-            Self::topological_sort(&metadata_list).map_err(ManagerError::DependencyError)?;
+            Self::topological_sort(&name_deps).map_err(ManagerError::DependencyError)?;
 
         // Map names back to prepared plugins
         #[expect(clippy::type_complexity)]
@@ -827,6 +1063,14 @@ impl PluginManager {
                     Err(err) => error!("{}", err),
                 }
             }
+        }
+
+        // Anything left in the map was skipped by dependency resolution.
+        for (name, (_, metadata, ..)) in plugins_map {
+            warn!(
+                "Plugin \"{}\" ({}) was skipped and will not be loaded.",
+                name, metadata.version
+            );
         }
 
         Ok(total_wait_time)
@@ -1015,7 +1259,7 @@ impl PluginManager {
             if let Some(state) = state {
                 match state {
                     PluginState::Loaded => return Ok(()),
-                    PluginState::Failed(error) => {
+                    PluginState::Disabled(error) | PluginState::Failed(error) => {
                         return Err(ManagerError::LoaderError(
                             LoaderError::InitializationFailed(error),
                         ));
@@ -1046,6 +1290,14 @@ impl PluginManager {
         plugins
             .iter()
             .any(|p| p.metadata.name == name && p.is_active && p.instance.is_some())
+    }
+
+    /// Returns `true` while the plugin is between `on_load` and the end of
+    /// `on_enable` — i.e. its registrations must already be observable.
+    fn is_plugin_loading(&self, name: &str) -> bool {
+        self.plugin_states
+            .try_read()
+            .is_ok_and(|states| matches!(states.get(name), Some(PluginState::Loading)))
     }
 
     /// Get list of active plugins
@@ -1098,8 +1350,14 @@ impl PluginManager {
 
         self.unregister_handlers(name);
         plugin.context.unregister_commands();
+        self.unregister_all_service_providers(name);
+        self.unregister_all_incoming_channels(name);
 
         if let Some(instance) = plugin.instance.take() {
+            // Active plugins get a graceful disable before unload.
+            if plugin.is_active {
+                instance.on_disable(plugin.context.clone()).await.ok();
+            }
             instance.on_unload(plugin.context.clone()).await.ok();
         }
 
@@ -1118,6 +1376,58 @@ impl PluginManager {
         // Remove from plugin states
         self.plugin_states.write().await.remove(name);
 
+        Ok(())
+    }
+
+    /// Disable a loaded plugin without unloading it.
+    ///
+    /// Unregisters its event handlers and commands and calls `on_disable`.
+    /// Mirrors Paper's plugin disable: the plugin stays loaded so it can be
+    /// inspected, but it no longer participates in the server.
+    pub async fn disable_plugin(&self, name: &str) -> Result<(), ManagerError> {
+        let (instance, context, is_active) = {
+            let plugins = self
+                .plugins
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let plugin = plugins
+                .iter()
+                .find(|p| p.metadata.name == name)
+                .ok_or_else(|| ManagerError::PluginNotFound(name.to_string()))?;
+            (
+                plugin.instance.clone(),
+                plugin.context.clone(),
+                plugin.is_active,
+            )
+        };
+
+        let Some(instance) = instance else {
+            return Err(ManagerError::PluginNotFound(name.to_string()));
+        };
+        if !is_active {
+            return Ok(()); // already disabled
+        }
+
+        self.unregister_handlers(name);
+        context.unregister_commands();
+        self.unregister_all_service_providers(name);
+        self.unregister_all_incoming_channels(name);
+        instance.on_disable(context).await.ok();
+
+        {
+            let mut plugins = self
+                .plugins
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(plugin) = plugins.iter_mut().find(|p| p.metadata.name == name) {
+                plugin.is_active = false;
+            }
+        }
+        self.plugin_states.write().await.insert(
+            name.to_string(),
+            PluginState::Disabled("disabled by server".to_string()),
+        );
+        info!("Disabled plugin {name}");
         Ok(())
     }
 
@@ -1173,8 +1483,13 @@ impl PluginManager {
     }
 
     /// Register an event handler
-    pub fn register<E, H>(&self, handler: Arc<H>, priority: EventPriority, blocking: bool)
-    where
+    pub fn register<E, H>(
+        &self,
+        handler: Arc<H>,
+        priority: EventPriority,
+        blocking: bool,
+        ignore_cancelled: bool,
+    ) where
         E: Payload + Send + Sync + 'static,
         H: EventHandler<E> + 'static,
     {
@@ -1182,6 +1497,7 @@ impl PluginManager {
             handler,
             priority,
             blocking,
+            ignore_cancelled,
             source: None,
             _phantom: std::marker::PhantomData,
         });
@@ -1205,6 +1521,12 @@ impl PluginManager {
     }
 
     /// Fire an event to all registered handlers
+    ///
+    /// Handlers run in Bukkit-compatible priority order (`Lowest` first,
+    /// `Highest` last, registration order within a priority), with blocking
+    /// handlers completing before non-blocking ones at each priority level.
+    /// Handlers that opted out of cancelled events (`ignoreCancelled`) are
+    /// skipped while the event's cancellation flag is set.
     pub async fn fire<E: Payload + Send + Sync + 'static>(
         &self,
         server: &Arc<Server>,
@@ -1223,17 +1545,22 @@ impl PluginManager {
             return;
         }
 
-        // Process blocking handlers first
-        for handler in handlers {
-            if handler.is_blocking() {
-                handler.handle_blocking_dyn(server, event).await;
-            }
-        }
+        let ordered = order_handlers(handlers);
+        let cancelled = event.cancelled_state();
 
-        // Process non-blocking handlers
-        for handler in handlers {
-            if !handler.is_blocking() {
-                handler.handle_dyn(server, event).await;
+        for phase in [true, false] {
+            for handler in &ordered {
+                if handler.is_blocking() != phase {
+                    continue;
+                }
+                if !should_invoke(handler.as_ref(), cancelled) {
+                    continue;
+                }
+                if phase {
+                    handler.handle_blocking_dyn(server, event).await;
+                } else {
+                    handler.handle_dyn(server, event).await;
+                }
             }
         }
     }
@@ -1295,6 +1622,185 @@ impl PluginManager {
             Err(())
         }
     }
+
+    /// Registers `plugin` as a provider of `service` with the given priority.
+    ///
+    /// Re-registering the same (service, plugin) pair updates its priority;
+    /// the original registration order is kept as the tie-breaker.
+    pub fn register_service_provider(&self, service: &str, plugin: &str, priority: i32) {
+        let sequence = self
+            .service_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut registry = self
+            .service_registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = registry
+            .iter_mut()
+            .find(|r| r.service == service && r.plugin == plugin)
+        {
+            existing.priority = priority;
+            return;
+        }
+        registry.push(ServiceRegistration {
+            service: service.to_string(),
+            plugin: plugin.to_string(),
+            priority,
+            sequence,
+        });
+    }
+
+    /// Removes `plugin`'s registration for `service`.
+    pub fn unregister_service_provider(&self, service: &str, plugin: &str) {
+        self.service_registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|r| !(r.service == service && r.plugin == plugin));
+    }
+
+    /// Removes every service registration made by `plugin`.
+    pub fn unregister_all_service_providers(&self, plugin: &str) {
+        self.service_registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|r| r.plugin != plugin);
+    }
+
+    /// Returns all active providers of `service`, sorted by descending
+    /// priority (then registration order).
+    #[must_use]
+    pub fn get_service_providers(&self, service: &str) -> Vec<ServiceRegistration> {
+        let registry = self
+            .service_registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut providers: Vec<ServiceRegistration> = registry
+            .iter()
+            .filter(|r| {
+                r.service == service
+                    // A plugin mid-enable (state `Loading`) is already allowed to
+                    // provide services — its registrations must be discoverable
+                    // immediately, including from its own on_enable.
+                    && (self.is_plugin_active(&r.plugin) || self.is_plugin_loading(&r.plugin))
+            })
+            .cloned()
+            .collect();
+        providers.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.sequence.cmp(&b.sequence))
+        });
+        providers
+    }
+
+    /// Registers `plugin` as a handler of an incoming messaging channel.
+    ///
+    /// Reserved `minecraft:*` channels cannot be registered. Registering the
+    /// same (channel, plugin) pair twice is a no-op.
+    pub fn register_incoming_channel(&self, channel: &str, plugin: &str) -> Result<(), String> {
+        if channel.starts_with("minecraft:") {
+            return Err(format!("channel `{channel}` is reserved (minecraft:*)"));
+        }
+        let mut channels = self
+            .incoming_channels
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let handlers = channels.entry(channel.to_string()).or_default();
+        if !handlers.iter().any(|p| p == plugin) {
+            handlers.push(plugin.to_string());
+        }
+        Ok(())
+    }
+
+    /// Removes `plugin` from the handlers of `channel`.
+    pub fn unregister_incoming_channel(&self, channel: &str, plugin: &str) {
+        let mut channels = self
+            .incoming_channels
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(handlers) = channels.get_mut(channel) {
+            handlers.retain(|p| p != plugin);
+            if handlers.is_empty() {
+                channels.remove(channel);
+            }
+        }
+    }
+
+    /// Removes every channel registration made by `plugin`.
+    pub fn unregister_all_incoming_channels(&self, plugin: &str) {
+        let mut channels = self
+            .incoming_channels
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        channels.retain(|_, handlers| {
+            handlers.retain(|p| p != plugin);
+            !handlers.is_empty()
+        });
+    }
+
+    /// Returns the channels registered by `plugin`.
+    #[must_use]
+    pub fn get_plugin_channels(&self, plugin: &str) -> Vec<String> {
+        let channels = self
+            .incoming_channels
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut owned: Vec<String> = channels
+            .iter()
+            .filter(|(_, handlers)| handlers.iter().any(|p| p == plugin))
+            .map(|(channel, _)| channel.clone())
+            .collect();
+        owned.sort();
+        owned
+    }
+
+    /// Returns the active plugins handling `channel` (registration order).
+    #[must_use]
+    pub fn get_channel_handlers(&self, channel: &str) -> Vec<String> {
+        let channels = self
+            .incoming_channels
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        channels
+            .get(channel)
+            .map(|handlers| {
+                handlers
+                    .iter()
+                    .filter(|p| self.is_plugin_active(p))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Dispatches a client plugin message to every active plugin registered
+    /// for `channel` (Bukkit `Messenger` incoming dispatch).
+    pub async fn dispatch_plugin_message(
+        &self,
+        channel: &str,
+        player_uuid: uuid::Uuid,
+        data: Vec<u8>,
+    ) {
+        let handlers = self.get_channel_handlers(channel);
+        for name in handlers {
+            let instance = {
+                let plugins = self
+                    .plugins
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                plugins
+                    .iter()
+                    .find(|p| p.metadata.name == name && p.is_active)
+                    .and_then(|p| p.instance.clone())
+            };
+            if let Some(instance) = instance {
+                instance
+                    .on_plugin_message(player_uuid, channel, &data)
+                    .await
+                    .ok();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1332,5 +1838,88 @@ mod tests {
 
         let plugins_missing = vec![("A".to_string(), vec!["B".to_string()])];
         assert!(PluginManager::topological_sort(&plugins_missing).is_err());
+    }
+
+    struct DummyHandler;
+
+    impl EventHandler<crate::plugin::api::events::block::block_break::BlockBreakEvent>
+        for DummyHandler
+    {
+    }
+
+    fn dummy_handler(
+        priority: EventPriority,
+        blocking: bool,
+        ignore_cancelled: bool,
+    ) -> Arc<dyn DynEventHandler> {
+        Arc::new(TypedEventHandler {
+            handler: Arc::new(DummyHandler),
+            priority,
+            blocking,
+            ignore_cancelled,
+            source: None,
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    #[test]
+    fn bukkit_priority_order() {
+        let handlers: Vec<Arc<dyn DynEventHandler>> = vec![
+            dummy_handler(EventPriority::Highest, true, false),
+            dummy_handler(EventPriority::Low, true, false),
+            dummy_handler(EventPriority::Normal, true, false),
+            dummy_handler(EventPriority::Lowest, true, false),
+            dummy_handler(EventPriority::High, true, false),
+        ];
+        let ordered = order_handlers(&handlers);
+        let priorities: Vec<_> = ordered.iter().map(|h| h.get_priority().clone()).collect();
+        assert_eq!(
+            priorities,
+            vec![
+                EventPriority::Lowest,
+                EventPriority::Low,
+                EventPriority::Normal,
+                EventPriority::High,
+                EventPriority::Highest,
+            ]
+        );
+    }
+
+    #[test]
+    fn ignore_cancelled_gate() {
+        let ignoring = dummy_handler(EventPriority::Normal, true, true);
+        let observing = dummy_handler(EventPriority::Normal, true, false);
+
+        // Not cancelled: both handlers run.
+        assert!(should_invoke(ignoring.as_ref(), Some(false)));
+        assert!(should_invoke(observing.as_ref(), Some(false)));
+        // Cancelled: the ignoreCancelled handler is skipped, the other runs.
+        assert!(!should_invoke(ignoring.as_ref(), Some(true)));
+        assert!(should_invoke(observing.as_ref(), Some(true)));
+        // Non-cancellable events never gate.
+        assert!(should_invoke(ignoring.as_ref(), None));
+    }
+
+    #[test]
+    fn cancellable_event_reports_cancellation() {
+        use crate::plugin::api::events::block::block_break::BlockBreakEvent;
+
+        let mut event = BlockBreakEvent {
+            player: None,
+            block: &pumpkin_data::Block::STONE,
+            block_position: pumpkin_util::math::position::BlockPos::new(0, 0, 0),
+            exp: 0,
+            drop: true,
+            cancelled: false,
+        };
+        assert_eq!(
+            crate::plugin::api::events::Payload::cancelled_state(&event),
+            Some(false)
+        );
+        event.cancelled = true;
+        assert_eq!(
+            crate::plugin::api::events::Payload::cancelled_state(&event),
+            Some(true)
+        );
     }
 }

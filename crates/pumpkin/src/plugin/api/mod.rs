@@ -26,10 +26,33 @@ pub struct PluginMetadata {
     pub authors: Vec<String>,
     /// A description of the plugin.
     pub description: String,
-    /// The dependencies of the plugin.
+    /// Hard dependencies: the plugin fails to load when any of these is missing.
     pub dependencies: Vec<String>,
     /// The permissions requested by the plugin.
     pub permissions: Vec<String>,
+    /// Soft ordering edges: load this plugin after the named plugins when they
+    /// are present. Missing names are ignored.
+    pub load_after: Vec<String>,
+    /// Soft ordering edges: load this plugin before the named plugins when they
+    /// are present. Missing names are ignored.
+    pub load_before: Vec<String>,
+    /// Capability aliases this plugin satisfies for other plugins' dependency
+    /// edges.
+    pub provides: Vec<String>,
+    /// The startup phase this plugin loads in.
+    pub load_order: LoadOrder,
+}
+
+/// When a plugin should be loaded relative to server startup.
+///
+/// Defaults to [`LoadOrder::PostWorld`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoadOrder {
+    /// Load before worlds are created (bootstrap phase).
+    Startup,
+    /// Load after worlds are ready (default).
+    #[default]
+    PostWorld,
 }
 
 /// This type represents a future for the plugin.
@@ -45,6 +68,25 @@ pub trait Plugin: Send + Sync + 'static {
     /// This method initializes the plugin within the server context.
     #[expect(unused)]
     fn on_load(&self, server: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    /// Asynchronous method called to enable the plugin after a successful load.
+    ///
+    /// A failing enable does not unload the plugin (unlike [`Plugin::on_load`]):
+    /// the plugin stays loaded but inactive — its event handlers and commands
+    /// are unregistered — mirroring Paper's `onEnable` failure grading.
+    #[expect(unused)]
+    fn on_enable(&self, server: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
+        Box::pin(async move { Ok(()) })
+    }
+
+    /// Asynchronous method called to disable an active plugin.
+    ///
+    /// Runs before [`Plugin::on_unload`] during shutdown/unload, and when the
+    /// plugin is explicitly disabled.
+    #[expect(unused)]
+    fn on_disable(&self, server: Arc<Context>) -> PluginFuture<'_, Result<(), String>> {
         Box::pin(async move { Ok(()) })
     }
 
@@ -66,5 +108,17 @@ pub trait Plugin: Send + Sync + 'static {
         message: &[u8],
     ) -> PluginFuture<'_, Result<Vec<u8>, String>> {
         Box::pin(async move { Err("This plugin cannot receive messages.".to_string()) })
+    }
+
+    /// Asynchronous method called when a player sends a plugin message on a
+    /// channel this plugin registered (Bukkit `PluginMessageListener`).
+    #[allow(unused_variables)]
+    fn on_plugin_message(
+        &self,
+        _player_uuid: uuid::Uuid,
+        _channel: &str,
+        _data: &[u8],
+    ) -> PluginFuture<'_, Result<(), String>> {
+        Box::pin(async move { Ok(()) })
     }
 }

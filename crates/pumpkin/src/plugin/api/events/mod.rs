@@ -46,6 +46,17 @@ pub trait Payload: Send + Sync {
     /// # Returns
     /// A mutable reference to the payload as a `dyn Any` trait object.
     fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    /// Reports the cancellation state of this event, if it is cancellable.
+    ///
+    /// Returns `Some(true)` when the event carries a `cancelled` flag and is
+    /// currently cancelled, `Some(false)` when it carries the flag but is not
+    /// cancelled, and `None` for events that are not cancellable. The dispatcher
+    /// uses this to skip handlers that opted out of cancelled events
+    /// (Bukkit's `ignoreCancelled` semantics).
+    fn cancelled_state(&self) -> Option<bool> {
+        None
+    }
 }
 
 /// Helper functions for safe downcasting of Payload implementations.
@@ -127,8 +138,10 @@ pub trait Cancellable: Send + Sync {
 }
 /// An enumeration representing the priority levels of events.
 ///
-/// Events with lower priority values are executed first, allowing higher priority events
-/// to override their changes.
+/// Handlers registered at a lower priority are invoked first during dispatch:
+/// `Lowest` runs before `Low`, and `Highest` runs last, letting high-priority
+/// handlers override the changes made by earlier ones. Handlers sharing the
+/// same priority run in registration order (Bukkit-compatible ordering).
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub enum EventPriority {
     /// Highest priority level.

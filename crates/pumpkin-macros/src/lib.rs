@@ -19,6 +19,24 @@ pub fn event(item: TokenStream) -> TokenStream {
     let name = &ast.ident;
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
 
+    // Structs carrying a `cancelled` flag (e.g. injected by `#[cancellable]`)
+    // surface their state through `Payload::cancelled_state` so the dispatcher
+    // can enforce `ignoreCancelled` semantics without specialization.
+    let is_cancellable = match &ast.data {
+        syn::Data::Struct(data) => data
+            .fields
+            .iter()
+            .any(|f| f.ident.as_ref().is_some_and(|i| i == "cancelled")),
+        _ => false,
+    };
+    let cancelled_state_impl = is_cancellable.then(|| {
+        quote! {
+            fn cancelled_state(&self) -> Option<bool> {
+                Some(self.cancelled)
+            }
+        }
+    });
+
     quote! {
         impl #impl_generics crate::plugin::Payload for #name #ty_generics #where_clause {
             fn get_name_static() -> &'static str {
@@ -36,6 +54,8 @@ pub fn event(item: TokenStream) -> TokenStream {
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }
+
+            #cancelled_state_impl
         }
     }
     .into()
