@@ -47,6 +47,12 @@ world plugin {
     import block-entity;
     /// Provides 1 : 1 inter-plugin communication
     import ipc;
+    /// Provides the cross-plugin service registry (ServicesManager equivalent).
+    import services;
+    /// Provides plugin messaging channel registration and delivery.
+    import messaging;
+    /// Provides plugin config file management.
+    import config;
     /// Provides entity attribute types and modifiers.
     import attributes;
     /// Provides player management.
@@ -88,6 +94,15 @@ world plugin {
     /// Use this to register commands, events, and perform initial setup.
     export on-load: func(context: context) -> result<_, string>;
 
+    /// Called to enable the plugin after a successful load.
+    /// A failing enable does not unload the plugin: it stays loaded but
+    /// inactive (its event handlers and commands are unregistered).
+    export on-enable: func(context: context) -> result<_, string>;
+
+    /// Called to disable an active plugin, before `on-unload` during unload
+    /// and shutdown. Use this to pause work and release runtime resources.
+    export on-disable: func(context: context) -> result<_, string>;
+
     /// Called when the plugin is being unloaded.
     /// Use this to save data and clean up resources.
     export on-unload: func(context: context) -> result<_, string>;
@@ -109,6 +124,10 @@ world plugin {
 
     /// Processes an incoming message from another plugin if possible, and returns (a possibly empty) response.
     export handle-ipc-message: func(sender: plugin-id, message: ipc-message) -> result<ipc-message, string>;
+
+    /// Dispatches a plugin message received from a player on a channel this
+    /// plugin registered via the messaging interface.
+    export handle-plugin-message: func(player-uuid: string, channel: string, data: list<u8>);
 
     export handle-ai-goal-can-start: func(goal-id: u32, server: server-instance, entity: entity) -> bool;
     export handle-ai-goal-should-continue: func(goal-id: u32, server: server-instance, entity: entity) -> bool;

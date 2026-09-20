@@ -1,0 +1,24 @@
+/// Plugin configuration files (the equivalent of Bukkit's `getConfig`).
+///
+/// The host stores each plugin's config at `<data folder>/config.toml` on
+/// behalf of the plugin; the sandboxed plugin never touches the file system
+/// directly for this. `load-config` deeply merges the stored file over the
+/// defaults the plugin supplies (stored user values win), persists the merged
+/// document, and returns it — so new default keys appear and user values
+/// survive upgrades.
+interface config {
+    /// Loads the plugin's config, merged over the TOML `defaults`.
+    ///
+    /// * `defaults`: A TOML document with the plugin's default values. May be
+    ///   empty when the plugin ships no defaults.
+    ///
+    /// # Errors
+    /// Returns an error when either document is not valid TOML.
+    load-config: func(defaults: string) -> result<string, string>;
+
+    /// Overwrites the plugin's config file with the given TOML content.
+    ///
+    /// # Errors
+    /// Returns an error when the content is not valid TOML or writing fails.
+    save-config: func(content: string) -> result<_, string>;
+}

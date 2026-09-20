@@ -36,8 +36,11 @@ interface context {
         /// * `handler-id`: Unique ID for the event handler.
         /// * `event-type`: The type of event to listen for.
         /// * `event-priority`: When this handler should be called relative to others.
+        ///   `lowest` runs first and `highest` runs last.
         /// * `blocking`: Whether the event should wait for this handler to finish.
-        register-event: func(handler-id: u32, event-type: event-type, event-priority: event-priority, blocking: bool);
+        /// * `ignore-cancelled`: Skip this handler while the event is cancelled
+        ///   (only meaningful for cancellable events).
+        register-event: func(handler-id: u32, event-type: event-type, event-priority: event-priority, blocking: bool, ignore-cancelled: bool);
 
         /// Registers a new command.
         ///
