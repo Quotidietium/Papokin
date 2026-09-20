@@ -188,6 +188,15 @@ impl<S: CommandSource> CommandDispatcher<S> {
         self.tree.get(name).is_some()
     }
 
+    /// Returns the source (owning plugin) recorded on the command `name`, if
+    /// the command exists and carries one. Used to detect cross-plugin label
+    /// conflicts so later registrations fall back to `plugin:label` names.
+    #[must_use]
+    pub fn get_command_source(&self, name: &str) -> Option<String> {
+        let node_id = self.tree.get(name)?;
+        self.tree[node_id].meta.source.clone()
+    }
+
     /// Collects the names of every root-level alias that redirects to the command
     /// with the given primary name.
     ///
