@@ -427,7 +427,7 @@ impl World {
         }
     }
 
-    pub fn update_active_chunks(&self) {
+    pub fn update_active_chunks(self: &Arc<Self>) {
         let sim_dist = self.server.upgrade().map_or(10, |s| {
             s.advanced_config.networking.java.simulation_distance.get()
         }) as i32;
@@ -486,6 +486,20 @@ impl World {
         for change in self.level.loaded_chunk_changes() {
             match change {
                 pumpkin_world::level::LoadedChunkChange::Loaded(pos) => {
+                    // The host chunk system only hands out `Arc<ChunkData>` snapshots, while the
+                    // event payload wants `Arc<RwLock<ChunkData>>`. The WIT layer only exposes the
+                    // chunk coordinates to plugins, so a chunk stub with the correct coordinates
+                    // is filled in here (the same shape the dispatch builds on the WASM side).
+                    let mut event = crate::plugin::api::events::world::chunk_load::ChunkLoad {
+                        world: self.clone(),
+                        chunk: Arc::new(tokio::sync::RwLock::new(
+                            pumpkin_world::chunk::ChunkData::empty(pos.x, pos.y),
+                        )),
+                        cancelled: false,
+                    };
+                    if let Some(server) = self.server.upgrade() {
+                        server.plugin_manager.fire_blocking(&server, &mut event);
+                    }
                     if active_chunks.contains(&pos)
                         && self.level.is_chunk_loaded(&pos)
                         && tracker.loaded_active_chunks.insert(pos)
@@ -2477,6 +2491,24 @@ impl World {
             is_thundering,
         );
         for entity in entities {
+            // Natural-spawn gate: plugins may veto individual spawns.
+            let mut spawn_event =
+                crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                    entity_id: entity.get_entity().entity_id,
+                    entity_type: entity.get_entity().entity_type.resource_name.to_string(),
+                    position: entity.get_entity().pos.load(),
+                    world: self.clone(),
+                    spawn_reason: "NATURAL".to_string(),
+                    cancelled: false,
+                };
+            if let Some(server) = self.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut spawn_event);
+            }
+            if spawn_event.cancelled {
+                continue;
+            }
             self.spawn_entity_non_save(entity);
         }
     }
@@ -7048,9 +7080,25 @@ impl World {
         Self::broadcast_bedrock_grouped(be_packet, bedrock_recipients.into_iter());
     }
 
-    pub fn emit_game_event(&self, event_key: impl Into<String>, position: Vector3<f64>) {
+    pub fn emit_game_event(self: &Arc<Self>, event_key: impl Into<String>, position: Vector3<f64>) {
+        let mut receive_event =
+            crate::plugin::api::events::block::block_receive_game::BlockReceiveGameEvent::new(
+                position.to_block_pos(),
+                self.clone(),
+                event_key.into(),
+                None,
+            );
+        if let Some(server) = self.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut receive_event);
+        }
+        if receive_event.cancelled {
+            return;
+        }
+
         let mut event = crate::plugin::api::events::world::generic_game::GenericGameEvent::new(
-            event_key.into(),
+            receive_event.game_event,
             position,
         );
         if let Some(server) = self.server.upgrade() {

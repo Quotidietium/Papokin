@@ -616,6 +616,27 @@ pub fn spawn_mobs_for_chunk_generation(
                         entity
                             .get_entity()
                             .set_rotation(rand::random::<f32>() * 360.0, 0.0);
+                        let mut spawn_event =
+                            crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                                entity_id: entity.get_entity().entity_id,
+                                entity_type: entity
+                                    .get_entity()
+                                    .entity_type
+                                    .resource_name
+                                    .to_string(),
+                                position: spawn_pos_f64,
+                                world: world.clone(),
+                                spawn_reason: "CHUNK_GENERATION".to_string(),
+                                cancelled: false,
+                            };
+                        if let Some(server) = world.server.upgrade() {
+                            server
+                                .plugin_manager
+                                .fire_blocking(&server, &mut spawn_event);
+                        }
+                        if spawn_event.cancelled {
+                            continue;
+                        }
                         world.spawn_entity_non_save(entity);
                         success = true;
                     }
