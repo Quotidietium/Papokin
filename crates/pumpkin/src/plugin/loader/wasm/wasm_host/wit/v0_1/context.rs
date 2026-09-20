@@ -1774,6 +1774,16 @@ impl pumpkin::plugin::context::HostContext for PluginHostState {
 
         let command = self.take_command(&command)?.provider;
         let context = self.get_context(&context)?.provider.clone();
+
+        // Namespace rule (same as `register_permission`): trap with a clear
+        // message instead of letting the host silently drop the command.
+        let plugin_name = &context.get_metadata().name;
+        if permission.contains(':') && !permission.starts_with(&format!("{plugin_name}:")) {
+            return Err(wasmtime::Error::msg(format!(
+                "Permission {permission} must use the plugin's namespace ({plugin_name})"
+            )));
+        }
+
         let aliases = if command.names.len() > 1 {
             command.names[1..].to_vec()
         } else {

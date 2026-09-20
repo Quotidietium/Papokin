@@ -81,8 +81,13 @@ impl Context {
     #[must_use]
     pub fn get_data_folder(&self) -> PathBuf {
         let path = Path::new("plugins").join("data").join(&self.metadata.name);
-        if !path.exists() {
-            let _ = fs::create_dir_all(&path);
+        if !path.exists()
+            && let Err(error) = fs::create_dir_all(&path)
+        {
+            tracing::error!(
+                "Failed to create data folder for plugin \"{}\": {error}",
+                self.metadata.name
+            );
         }
         path
     }
@@ -126,14 +131,29 @@ impl Context {
         self.plugin_manager
             .register_service_provider(&name, &self.metadata.name, 0);
         let mut services = self.plugin_manager.services.write().await;
-        services.insert(name, service);
+        if let Some((owner, _)) = services.get(&name)
+            && owner != &self.metadata.name
+        {
+            tracing::warn!(
+                "Plugin \"{}\" overwrites service `{name}` previously registered by \"{owner}\"",
+                self.metadata.name
+            );
+        }
+        services.insert(name, (self.metadata.name.clone(), service));
     }
 
     /// Removes a service previously registered by this plugin.
     pub async fn unregister_service(&self, name: &str) {
         self.plugin_manager
             .unregister_service_provider(name, &self.metadata.name);
-        self.plugin_manager.services.write().await.remove(name);
+        let mut services = self.plugin_manager.services.write().await;
+        // Only the owning plugin may remove a service entry.
+        if services
+            .get(name)
+            .is_some_and(|(owner, _)| owner == &self.metadata.name)
+        {
+            services.remove(name);
+        }
     }
 
     /// Retrieves a registered service by name and type.
@@ -162,8 +182,26 @@ impl Context {
     /// ```
     pub async fn get_service<T: Payload + 'static>(&self, name: &str) -> Option<Arc<T>> {
         let services = self.plugin_manager.services.read().await;
-        let service = services.get(name)?.clone();
+        let service = services.get(name)?.1.clone();
         <dyn Payload>::downcast_arc::<T>(service)
+    }
+
+    /// Normalizes a command permission node: a bare name is prefixed with this
+    /// plugin's namespace; a node in a *different* plugin's namespace is
+    /// rejected, mirroring [`Context::register_permission`]'s namespace rule.
+    pub(crate) fn normalize_command_permission(&self, permission: String) -> Option<String> {
+        if !permission.contains(':') {
+            return Some(format!("{}:{permission}", self.metadata.name));
+        }
+        if permission.starts_with(&format!("{}:", self.metadata.name)) {
+            return Some(permission);
+        }
+        tracing::error!(
+            plugin = %self.metadata.name,
+            %permission,
+            "Plugin tried to register a command gated on a foreign permission node; refusing to register it",
+        );
+        None
     }
 
     /// Registers a new command to the server with a specified permission level.
@@ -180,12 +218,9 @@ impl Context {
         node: impl Into<crate::command::node::detached::CommandDetachedNode>,
         permission: P,
     ) {
-        let permission = permission.into();
-
-        let full_permission_node = if permission.contains(':') {
-            permission
-        } else {
-            format!("{}:{permission}", self.metadata.name)
+        let Some(full_permission_node) = self.normalize_command_permission(permission.into())
+        else {
+            return;
         };
 
         let mut node = node.into();
@@ -241,12 +276,9 @@ impl Context {
         aliases: &[String],
         permission: P,
     ) {
-        let permission = permission.into();
-
-        let full_permission_node = if permission.contains(':') {
-            permission
-        } else {
-            format!("{}:{permission}", self.metadata.name)
+        let Some(full_permission_node) = self.normalize_command_permission(permission.into())
+        else {
+            return;
         };
 
         let mut node = node.into();
@@ -434,22 +466,24 @@ impl Context {
                 .with_thread_names(config.threads)
                 .with_thread_ids(config.threads);
 
+            // `try_init`, not `init`: a second native plugin calling this must
+            // not panic on the already-installed global subscriber.
             if config.timestamp {
                 let fmt_layer = fmt_layer.with_timer(fmt::time::UtcTime::new(
                     time::macros::format_description!(
                         "[year]-[month]-[day] [hour]:[minute]:[second]"
                     ),
                 ));
-                tracing_subscriber::registry()
+                let _ = tracing_subscriber::registry()
                     .with(*level)
                     .with(fmt_layer)
-                    .init();
+                    .try_init();
             } else {
                 let fmt_layer = fmt_layer.without_time();
-                tracing_subscriber::registry()
+                let _ = tracing_subscriber::registry()
                     .with(*level)
                     .with(fmt_layer)
-                    .init();
+                    .try_init();
             }
         }
     }
