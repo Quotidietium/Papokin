@@ -286,7 +286,7 @@ let cmd = Command::new(vec!["greet".into(), "hi".into()], "向玩家问好") // 
     .then(CommandNode::literal("now"))
     .execute(GreetHandler);                                            // 挂执行 handler
 
-context.register_command(cmd, "myplugin.greet")?;   // 第二参 = 所需权限节点
+context.register_command(cmd, "my-plugin:greet")?;  // 第二参 = 所需权限节点（必须以插件名: 开头，见 7.2）
 ```
 
 `CommandNode::literal(name)` / `CommandNode::argument(name, ArgumentType)`，用 `.then(node)` 组树；`ArgumentType` 覆盖 40+ vanilla 参数类型（bool/数值区间/字符串、entity/players/game-profile、block-pos/position3d、block-state/predicate、item/predicate、nbt、particle、scoreboard、item-slot、资源/标签/枚举补全…）。
@@ -340,12 +340,14 @@ permissions: vec![
 
 ```rust
 context.register_permission(Permission {
-    node: "myplugin.greet".into(),
+    node: "my-plugin:greet".into(),
     description: "允许使用 /greet".into(),
     default: PermissionDefault::Op(PermissionLevel::Two), // deny | allow | op(0-4)
     children: vec![],
 })?;
 ```
+
+> **命名空间强制**：节点**必须**以 `插件名:` 开头（如插件叫 `my-plugin`，节点必须是 `my-plugin:xxx`），否则 `register_permission` 在 enable 阶段报错 `Permission <node> must use the plugin's namespace (<name>)` 并导致插件 enable 失败（宿主校验见 `plugin/api/context.rs`）。`register_command` 的权限参数同理。
 
 - 权限级别 0-4：`zero(普通) / one(moderator) / two(gamemaster) / three(admin) / four(owner)`。
 - 服务器管理员可用 **`permissions.toml`**（服务端根目录）覆盖声明：default 支持 `true/false/deny/allow/op/op:<0-4>`，并可按玩家 UUID 授予/拒绝。启动时加载。
