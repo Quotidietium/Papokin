@@ -38,6 +38,18 @@ pub const PLUGIN_API_VERSION: u32 = 3;
 
 const PLUGIN_DIR: &str = "./plugins";
 
+/// A plugin name is used as a filesystem path component (`plugins/data/<name>/`),
+/// as a permission namespace (`<name>:<node>`) and as a registry key. Reject
+/// names that could traverse out of the data directory or break those usages.
+fn is_valid_plugin_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 /// A trait for handling events dynamically.
 ///
 /// This trait allows for handling events of any type that implements the `Event` trait.
@@ -92,7 +104,7 @@ pub trait DynEventHandler: Send + Sync {
 fn order_handlers(handlers: &[Arc<dyn DynEventHandler>]) -> Vec<&Arc<dyn DynEventHandler>> {
     let mut ordered: Vec<&Arc<dyn DynEventHandler>> = handlers.iter().collect();
     // Ascending by `Reverse` walks the derived enum order backwards.
-    ordered.sort_by_key(|handler| std::cmp::Reverse(handler.get_priority().clone()));
+    ordered.sort_by_key(|handler| std::cmp::Reverse(*handler.get_priority()));
     ordered
 }
 
@@ -226,13 +238,16 @@ pub struct ServiceRegistration {
     pub sequence: u64,
 }
 
+/// Typed in-process services: `name -> (owning plugin, payload)`.
+type ServiceMap = Arc<RwLock<HashMap<String, (String, Arc<dyn Payload>)>>>;
+
 /// Core plugin management system
 pub struct PluginManager {
     plugins: SyncRwLock<Vec<LoadedPlugin>>,
     loaders: RwLock<Vec<Arc<dyn PluginLoader>>>,
     handlers: Arc<ArcSwap<HandlerMap>>,
     unloaded_files: RwLock<HashSet<PathBuf>>,
-    services: Arc<RwLock<HashMap<String, Arc<dyn Payload>>>>,
+    services: ServiceMap,
     /// Cross-plugin service registry (name-based discovery for native and wasm
     /// plugins alike).
     service_registry: SyncRwLock<Vec<ServiceRegistration>>,
@@ -310,7 +325,7 @@ impl PluginManager {
 
     /// Unload all loaded plugins
     pub async fn unload_all_plugins(&self) -> Result<(), ManagerError> {
-        let plugin_names: Vec<String> = {
+        let mut plugin_names: Vec<String> = {
             let plugins = self
                 .plugins
                 .read()
@@ -321,6 +336,10 @@ impl PluginManager {
                 .map(|p| p.metadata.name.clone())
                 .collect()
         };
+
+        // Unload in reverse load order so dependents shut down before the
+        // plugins they depend on (the list is in topological load order).
+        plugin_names.reverse();
 
         for name in plugin_names {
             if let Err(e) = self.unload_plugin(&name).await {
@@ -365,54 +384,79 @@ impl PluginManager {
         let manager = self.clone();
         let server_clone = Arc::clone(server);
         let task = server.spawn_task(async move {
+            // One file save produces a burst of notify events (create + data
+            // modify + rename); coalesce each burst into one reload per path
+            // after a quiet window instead of one full unload+JIT-load per
+            // event.
+            const HOT_RELOAD_DEBOUNCE: Duration = Duration::from_millis(500);
+
             // Keep watcher alive by moving it into the task
             let _watcher = watcher;
 
+            let is_reload_event = |kind: &EventKind| {
+                matches!(
+                    kind,
+                    EventKind::Modify(ModifyKind::Data(_)) | EventKind::Create(_)
+                )
+            };
+            let is_plugin_file = |path: &Path| {
+                path.extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("wasm"))
+            };
+
             while let Some(event) = rx.recv().await {
-                if !manager
-                    .hot_reload_enabled
-                    .load(std::sync::atomic::Ordering::Relaxed)
-                {
+                if !manager.is_hot_reload_enabled() {
                     continue;
                 }
+                let mut pending: HashSet<PathBuf> = if is_reload_event(&event.kind) {
+                    event
+                        .paths
+                        .into_iter()
+                        .filter(|p| is_plugin_file(p))
+                        .collect()
+                } else {
+                    HashSet::new()
+                };
 
-                match event.kind {
-                    EventKind::Modify(ModifyKind::Data(_)) | EventKind::Create(_) => {
-                        for path in event.paths {
-                            if path.extension().is_some_and(|ext| ext == "wasm") {
-                                debug!("Detected change in plugin: {:?}", path);
-                                // Give it a small delay to ensure file is completely written
-                                tokio::time::sleep(Duration::from_millis(100)).await;
-
-                                // We need to find if this plugin is already loaded to unload it first
-                                let plugin_name = {
-                                    let plugins = manager
-                                        .plugins
-                                        .read()
-                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                    plugins
-                                        .iter()
-                                        .find(|p| p.path == path)
-                                        .map(|p| p.metadata.name.clone())
-                                };
-
-                                if let Some(name) = plugin_name {
-                                    info!("Hot-reloading plugin: {}", name);
-                                    let _ = manager.unload_plugin(&name).await;
-                                }
-
-                                // For now, we just try to load it. If it's already loaded,
-                                // the loader might handle it or we might get a duplicate.
-                                // Most WASM loaders will just create a new instance.
-                                if let Err(e) =
-                                    manager.start_loading_plugin(&server_clone, &path).await
-                                {
-                                    error!("Failed to hot-reload plugin {:?}: {}", path, e);
-                                }
-                            }
-                        }
+                // Drain the burst until the directory stays quiet for the
+                // debounce window (or the watcher goes away).
+                while let Ok(Some(event)) =
+                    tokio::time::timeout(HOT_RELOAD_DEBOUNCE, rx.recv()).await
+                {
+                    if is_reload_event(&event.kind) {
+                        pending.extend(event.paths.into_iter().filter(|p| is_plugin_file(p)));
                     }
-                    _ => {}
+                }
+
+                if !manager.is_hot_reload_enabled() {
+                    continue;
+                }
+                for path in pending {
+                    debug!("Detected change in plugin: {:?}", path);
+
+                    // We need to find if this plugin is already loaded to unload it first
+                    let plugin_name = {
+                        let plugins = manager
+                            .plugins
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        plugins
+                            .iter()
+                            .find(|p| p.path == path)
+                            .map(|p| p.metadata.name.clone())
+                    };
+
+                    if let Some(name) = plugin_name {
+                        info!("Hot-reloading plugin: {}", name);
+                        let _ = manager.unload_plugin(&name).await;
+                    }
+
+                    // For now, we just try to load it. If it's already loaded,
+                    // the loader might handle it or we might get a duplicate.
+                    // Most WASM loaders will just create a new instance.
+                    if let Err(e) = manager.start_loading_plugin(&server_clone, &path).await {
+                        error!("Failed to hot-reload plugin {:?}: {}", path, e);
+                    }
                 }
             }
         });
@@ -632,14 +676,10 @@ impl PluginManager {
             path,
         };
 
-        let plugin_index = {
-            let mut plugins = self
-                .plugins
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            plugins.push(plugin);
-            plugins.len() - 1
-        };
+        self.plugins
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(plugin);
 
         // Spawn async task for plugin initialization
         let self_ref_clone = Arc::clone(self);
@@ -647,6 +687,9 @@ impl PluginManager {
         let plugin_name = metadata.name.clone();
         let loader_clone = loader.clone();
 
+        // Plugins are looked up by name below, never by vector position:
+        // concurrent unloads (e.g. hot reload) shift indices, which would
+        // otherwise update or remove the wrong plugin.
         let task = server.spawn_task(async move {
             // Initialize the plugin
             match instance.on_load(context.clone()).await {
@@ -662,7 +705,9 @@ impl PluginManager {
                                     .plugins
                                     .write()
                                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                if let Some(plugin) = plugins.get_mut(plugin_index) {
+                                if let Some(plugin) =
+                                    plugins.iter_mut().find(|p| p.metadata.name == plugin_name)
+                                {
                                     plugin.instance = Some(instance);
                                     plugin.is_active = true;
                                 }
@@ -688,12 +733,19 @@ impl PluginManager {
                             self_ref_clone.unregister_handlers(&plugin_name);
                             context.unregister_commands();
 
+                            // Paper parity: a failed onEnable is followed by
+                            // onDisable, which also stops any tasks the plugin
+                            // scheduled during its partial enable.
+                            let _ = instance.on_disable(context.clone()).await;
+
                             {
                                 let mut plugins = self_ref_clone
                                     .plugins
                                     .write()
                                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                if let Some(plugin) = plugins.get_mut(plugin_index) {
+                                if let Some(plugin) =
+                                    plugins.iter_mut().find(|p| p.metadata.name == plugin_name)
+                                {
                                     plugin.instance = Some(instance);
                                     plugin.is_active = false;
                                 }
@@ -719,11 +771,10 @@ impl PluginManager {
                             .plugins
                             .write()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(plugin) = plugins.get_mut(plugin_index) {
-                            plugin.loader_data.take()
-                        } else {
-                            None
-                        }
+                        plugins
+                            .iter_mut()
+                            .find(|p| p.metadata.name == plugin_name)
+                            .and_then(|plugin| plugin.loader_data.take())
                     };
 
                     // Try to unload the plugin data
@@ -736,8 +787,10 @@ impl PluginManager {
                             .plugins
                             .write()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if plugin_index < plugins.len() {
-                            plugins.remove(plugin_index);
+                        if let Some(index) =
+                            plugins.iter().position(|p| p.metadata.name == plugin_name)
+                        {
+                            plugins.remove(index);
                         }
                     };
                     self_ref_clone
@@ -776,6 +829,7 @@ impl PluginManager {
         let mut cache = cache::PermissionCache::load(&cache_path).await;
 
         let mut prepared_plugins = Vec::new();
+        let mut prepared_names: HashSet<String> = HashSet::new();
         let loaders = self.loaders.read().await.clone();
 
         for entry in std::fs::read_dir(path)? {
@@ -799,6 +853,26 @@ impl PluginManager {
                 if loader.can_load(&path) {
                     match loader.load(&path).await {
                         Ok((instance, metadata, loader_data)) => {
+                            if !is_valid_plugin_name(&metadata.name) {
+                                error!(
+                                    "Plugin at {:?} declares an invalid name {:?} \
+                                     (allowed: 1-64 chars of [a-zA-Z0-9-_.], no `..`); refusing to load.",
+                                    path, metadata.name
+                                );
+                                loader_found = true;
+                                break;
+                            }
+
+                            if !prepared_names.insert(metadata.name.clone()) {
+                                warn!(
+                                    "Duplicate plugin name \"{}\" from {:?}; \
+                                     keeping the first copy and skipping this one.",
+                                    metadata.name, path
+                                );
+                                loader_found = true;
+                                break;
+                            }
+
                             let plugin_override =
                                 server.advanced_config.plugins.overrides.get(&metadata.name);
 
@@ -1168,7 +1242,27 @@ impl PluginManager {
             if loader.can_load(path) {
                 let (instance, metadata, loader_data) = loader.load(path).await?;
 
+                if !is_valid_plugin_name(&metadata.name) {
+                    return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                        format!(
+                            "Plugin at {} declares an invalid name {:?} \
+                             (allowed: 1-64 chars of [a-zA-Z0-9-_.], no `..`); refusing to load.",
+                            path.display(),
+                            metadata.name
+                        ),
+                    )));
+                }
+
                 let plugin_override = server.advanced_config.plugins.overrides.get(&metadata.name);
+
+                if self.is_plugin_loaded(&metadata.name) {
+                    return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                        format!(
+                            "Plugin \"{}\" is already loaded; unload it before loading a new copy",
+                            metadata.name
+                        ),
+                    )));
+                }
 
                 if plugin_override.is_some_and(|o| !o.enabled) {
                     return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
@@ -1255,23 +1349,28 @@ impl PluginManager {
     /// Wait for a plugin to finish loading
     pub async fn wait_for_plugin(&self, plugin_name: &str) -> Result<(), ManagerError> {
         loop {
+            // Register as a waiter *before* re-reading the state; otherwise a
+            // `notify_waiters` landing between the read and the await would be
+            // missed and this loop would hang forever.
+            let notified = self.state_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
             let state = self.plugin_states.read().await.get(plugin_name).cloned();
-            if let Some(state) = state {
-                match state {
-                    PluginState::Loaded => return Ok(()),
-                    PluginState::Disabled(error) | PluginState::Failed(error) => {
-                        return Err(ManagerError::LoaderError(
-                            LoaderError::InitializationFailed(error),
-                        ));
-                    }
-                    PluginState::Loading => {
-                        // Wait for state change notification
-                        self.state_notify.notified().await;
-                        continue;
-                    }
+            let Some(state) = state else {
+                return Err(ManagerError::PluginNotFound(plugin_name.to_string()));
+            };
+            match state {
+                PluginState::Loaded => return Ok(()),
+                PluginState::Disabled(error) | PluginState::Failed(error) => {
+                    return Err(ManagerError::LoaderError(
+                        LoaderError::InitializationFailed(error),
+                    ));
+                }
+                PluginState::Loading => {
+                    notified.await;
                 }
             }
-            return Err(ManagerError::PluginNotFound(plugin_name.to_string()));
         }
     }
 
@@ -1362,19 +1461,22 @@ impl PluginManager {
         }
 
         if plugin.loader.can_unload() {
-            if let Some(data) = plugin.loader_data {
-                plugin.loader.unload(data).await?;
-            }
+            let unload_result = match plugin.loader_data {
+                Some(data) => plugin.loader.unload(data).await,
+                None => Ok(()),
+            };
+            // The plugin is gone from the manager's perspective either way;
+            // never leave a stale `Loaded` state behind when the loader fails.
+            self.plugin_states.write().await.remove(name);
+            unload_result?;
         } else {
             plugin.is_active = false;
             self.plugins
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(plugin);
+            self.plugin_states.write().await.remove(name);
         }
-
-        // Remove from plugin states
-        self.plugin_states.write().await.remove(name);
 
         Ok(())
     }
@@ -1477,8 +1579,16 @@ impl PluginManager {
 
     /// Wait for all plugins to finish loading
     pub async fn wait_for_all_plugins(&self) {
-        while !self.all_plugins_loaded().await {
-            self.state_notify.notified().await;
+        loop {
+            // Same lost-wakeup avoidance as `wait_for_plugin`.
+            let notified = self.state_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            if self.all_plugins_loaded().await {
+                return;
+            }
+            notified.await;
         }
     }
 
@@ -1523,10 +1633,10 @@ impl PluginManager {
     /// Fire an event to all registered handlers
     ///
     /// Handlers run in Bukkit-compatible priority order (`Lowest` first,
-    /// `Highest` last, registration order within a priority), with blocking
-    /// handlers completing before non-blocking ones at each priority level.
-    /// Handlers that opted out of cancelled events (`ignoreCancelled`) are
-    /// skipped while the event's cancellation flag is set.
+    /// `Highest` last, registration order within a priority); all blocking
+    /// handlers run before any non-blocking handler. Handlers that opted out
+    /// of cancelled events (`ignoreCancelled`) are skipped while the event's
+    /// cancellation flag is set.
     pub async fn fire<E: Payload + Send + Sync + 'static>(
         &self,
         server: &Arc<Server>,
@@ -1546,14 +1656,16 @@ impl PluginManager {
         }
 
         let ordered = order_handlers(handlers);
-        let cancelled = event.cancelled_state();
 
         for phase in [true, false] {
             for handler in &ordered {
                 if handler.is_blocking() != phase {
                     continue;
                 }
-                if !should_invoke(handler.as_ref(), cancelled) {
+                // Re-read the cancellation flag per handler: an earlier blocking
+                // handler may have cancelled the event mid-dispatch, and later
+                // `ignoreCancelled` handlers must observe that (Bukkit semantics).
+                if !should_invoke(handler.as_ref(), event.cancelled_state()) {
                     continue;
                 }
                 if phase {
@@ -1614,6 +1726,11 @@ impl PluginManager {
                 .iter()
                 .find(|p| p.metadata.name == recipient)
                 .ok_or(())?;
+            // Disabled plugins no longer participate in the server; a loading
+            // plugin may answer (its services are already discoverable).
+            if !target_plugin.is_active && !self.is_plugin_loading(recipient) {
+                return Err(());
+            }
             target_plugin.instance.clone()
         };
         if let Some(instance) = instance {
@@ -1872,7 +1989,7 @@ mod tests {
             dummy_handler(EventPriority::High, true, false),
         ];
         let ordered = order_handlers(&handlers);
-        let priorities: Vec<_> = ordered.iter().map(|h| h.get_priority().clone()).collect();
+        let priorities: Vec<_> = ordered.iter().map(|h| *h.get_priority()).collect();
         assert_eq!(
             priorities,
             vec![
