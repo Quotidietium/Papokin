@@ -28,7 +28,7 @@ use crate::{
             pumpkin::{
                 self,
                 plugin::damage_types::DamageType as WitDamageType,
-                plugin::player::{Player, PlayerSkin, SkinParts},
+                plugin::player::{Player, PlayerSkin, SkinParts, TeleportFlags},
                 plugin::statistics::{
                     CustomStatistic as WitCustomStatistic,
                     StatisticCategory as WitStatisticCategory,
@@ -37,6 +37,7 @@ use crate::{
                 plugin::world::World,
             },
             uuid::UuidExt,
+            world::from_wit_teleport_flags,
         },
     },
 };
@@ -3212,6 +3213,34 @@ impl pumpkin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             .store
             .pump_blocking(&mut host, move || {
                 player.teleport(position, yaw, pitch, world);
+            })
+            .await
+    }
+
+    async fn teleport_with_flags(
+        mut host: Access<'_, PluginHostState, Self>,
+        player: Resource<Player>,
+        position: pumpkin::plugin::common::Position,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        flags: TeleportFlags,
+        world: Resource<World>,
+    ) -> wasmtime::Result<()> {
+        let (player, world, plugin) = {
+            let state = host.get();
+            (
+                player_from_resource(state, &player)?,
+                world_from_resource(state, &world),
+                plugin_from_state(state)?,
+            )
+        };
+        let position = from_wasm_position(position);
+        let relatives = from_wit_teleport_flags(flags);
+
+        plugin
+            .store
+            .pump_blocking(&mut host, move || {
+                player.teleport_with_relatives(position, yaw, pitch, &relatives, world);
             })
             .await
     }

@@ -17,11 +17,11 @@ use crate::plugin::loader::wasm::wasm_host::{
             LivingEntity as WitLivingEntity, Mob as WitMob,
             RayTraceBlockResult as WitRayTraceBlockResult,
             RayTraceEntityResult as WitRayTraceEntityResult, RaycastResult as WitRaycastResult,
-            World,
+            TeleportFlags, World,
         },
     },
     wit::v0_1::uuid::UuidExt,
-    wit::v0_1::world::to_wasm_block_direction,
+    wit::v0_1::world::{from_wit_teleport_flags, to_wasm_block_direction},
 };
 use pumpkin_data::entity::EntityPose as InternalEntityPose;
 
@@ -845,6 +845,38 @@ impl
         plugin
             .store
             .pump_blocking(&mut host, move || entity.teleport(pos, None, None, world))
+            .await
+    }
+
+    async fn teleport_with_flags(
+        mut host: Access<'_, PluginHostState, Self>,
+        entity: Resource<Entity>,
+        pos: Position,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        flags: TeleportFlags,
+        world_ref: Resource<World>,
+    ) -> wasmtime::Result<()> {
+        let (entity, world, plugin) = {
+            let state = host.get();
+            let entity = entity_from_resource(state, &entity)?;
+            let world = state
+                .resource_table
+                .get::<crate::plugin::loader::wasm::wasm_host::state::WorldResource>(
+                    &Resource::new_own(world_ref.rep()),
+                )
+                .map_err(|_| wasmtime::Error::msg("invalid world resource handle"))?
+                .provider
+                .clone();
+            (entity, world, active_plugin(state)?)
+        };
+        let pos = Vector3::new(pos.0, pos.1, pos.2);
+        let relatives = from_wit_teleport_flags(flags);
+        plugin
+            .store
+            .pump_blocking(&mut host, move || {
+                entity.teleport_with_relatives(pos, yaw, pitch, &relatives, world);
+            })
             .await
     }
 

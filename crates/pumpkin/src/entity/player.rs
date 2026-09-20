@@ -254,6 +254,7 @@ use pumpkin_macros::send_cancellable;
 use pumpkin_nbt::compound::NbtCompound;
 use pumpkin_nbt::tag::NbtTag;
 use pumpkin_protocol::IdOr;
+use pumpkin_protocol::PositionFlag;
 use pumpkin_protocol::SoundEvent;
 use pumpkin_protocol::bedrock::client::container_open::CContainerOpen;
 use pumpkin_protocol::bedrock::server::actor_event::{ActorEventID, SActorEvent};
@@ -3857,7 +3858,6 @@ impl Player {
     }
 
     /// Teleports the player to a different world or dimension with an optional position, yaw, and pitch.
-    #[expect(clippy::too_many_lines)]
     pub async fn teleport_world(
         self: &Arc<Self>,
         new_world: Arc<World>,
@@ -3865,9 +3865,53 @@ impl Player {
         yaw: Option<f32>,
         pitch: Option<f32>,
     ) {
+        self.teleport_world_with_relatives(new_world, position, yaw, pitch, Vec::new())
+            .await;
+    }
+
+    /// Variant of `teleport_world` that marks individual components of the
+    /// clientbound position packet as relative (Papo `TeleportFlags`
+    /// equivalent). A `none` yaw/pitch falls back to the world's spawn
+    /// rotation like `teleport_world` and ignores the matching rotation flags.
+    ///
+    /// Matching vanilla, the position packet is sent with the raw values and
+    /// the flags so the client resolves the relative components itself, while
+    /// the server tracks the resolved absolute target. Bedrock clients have no
+    /// relative teleport mechanism and receive the resolved absolute teleport
+    /// instead.
+    #[expect(clippy::too_many_lines)]
+    pub async fn teleport_world_with_relatives(
+        self: &Arc<Self>,
+        new_world: Arc<World>,
+        position: Vector3<f64>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        relatives: Vec<PositionFlag>,
+    ) {
         let current_world = self.living_entity.entity.world.load_full();
+        // A missing yaw/pitch falls back to the spawn rotation; the matching
+        // rotation flags do not apply then.
+        let mut relative_bits = PositionFlag::get_bitfield(&relatives);
+        if yaw.is_none() {
+            relative_bits &=
+                !PositionFlag::get_bitfield(&[PositionFlag::YRot, PositionFlag::RotateDelta]);
+        }
+        if pitch.is_none() {
+            relative_bits &=
+                !PositionFlag::get_bitfield(&[PositionFlag::XRot, PositionFlag::RotateDelta]);
+        }
+        let relatives = PositionFlag::from_bitfield(relative_bits);
         let yaw = yaw.unwrap_or(new_world.level_info.load().spawn_yaw);
         let pitch = pitch.unwrap_or(new_world.level_info.load().spawn_pitch);
+        // Resolve the absolute target server-side; Java clients receive the
+        // raw values plus the flags and compute the same target themselves.
+        let (abs_position, abs_yaw, abs_pitch) = Self::resolve_relative_teleport(
+            &self.living_entity.entity,
+            position,
+            yaw,
+            pitch,
+            &relatives,
+        );
 
         let Some(server) = new_world.server.upgrade() else {
             return;
@@ -3879,18 +3923,29 @@ impl Player {
                 player: self.clone(),
                 previous_world: current_world.clone(),
                 new_world: new_world.clone(),
-                position,
-                yaw,
-                pitch,
+                position: abs_position,
+                yaw: abs_yaw,
+                pitch: abs_pitch,
                 cancelled: false,
             };
 
             'after: {
+                // If the event rewrote the target, the raw relative components
+                // no longer describe it: fall back to an absolute teleport.
+                let target_rewritten = event.position != abs_position
+                    || event.yaw != abs_yaw
+                    || event.pitch != abs_pitch;
                 // TODO: this is duplicate code from world
-                let position = event.position;
-                let yaw = event.yaw;
-                let pitch = event.pitch;
+                let abs_position = event.position;
+                let abs_yaw = event.yaw;
+                let abs_pitch = event.pitch;
                 let new_world = event.new_world;
+                let (packet_position, packet_yaw, packet_pitch, packet_relatives) =
+                    if target_rewritten {
+                        (abs_position, abs_yaw, abs_pitch, Vec::new())
+                    } else {
+                        (position, yaw, pitch, relatives)
+                    };
 
                 self.set_client_loaded(false);
                 let Some(player) = current_world.remove_player(self, false).await else {
@@ -3953,7 +4008,7 @@ impl Player {
                         } else {
                             0
                         };
-                        let pos_f32 = Vector3::new(position.x as f32, position.y as f32, position.z as f32);
+                        let pos_f32 = Vector3::new(abs_position.x as f32, abs_position.y as f32, abs_position.z as f32);
                         let change_dim_packet = pumpkin_protocol::bedrock::client::CChangeDimension {
                             dimension_id: bedrock_dimension.into(),
                             position: pos_f32,
@@ -3969,9 +4024,9 @@ impl Player {
 
                 self.send_permission_lvl_update();
 
-                player.get_entity().set_pos(position);
-                player.get_entity().set_rotation(yaw, pitch);
-                player.get_entity().last_pos.store(position);
+                player.get_entity().set_pos(abs_position);
+                player.get_entity().set_rotation(abs_yaw, abs_pitch);
+                player.get_entity().last_pos.store(abs_position);
 
                 self.send_abilities_update();
 
@@ -3983,7 +4038,7 @@ impl Player {
 
                 self.send_health();
 
-                new_world.send_world_info(&player, position, yaw, pitch);
+                new_world.send_world_info(&player, abs_position, abs_yaw, abs_pitch);
 
                 if let ClientPlatform::Java(java_client) = player.client.as_ref() {
                     let center_chunk = player.get_entity().chunk_pos.load();
@@ -3994,7 +4049,17 @@ impl Player {
                     java_client.send_chunks(&[chunk]).await;
                 }
 
-                player.request_teleport(position, yaw, pitch);
+                if player.fire_teleport_event(abs_position) {
+                    player.send_teleport_packet(
+                        packet_position,
+                        packet_yaw,
+                        packet_pitch,
+                        abs_position,
+                        abs_yaw,
+                        abs_pitch,
+                        &packet_relatives,
+                    );
+                }
 
                 let mut changed_world_event = crate::plugin::api::events::player::player_changed_world::PlayerChangedWorldEvent {
                     player: player.clone(),
@@ -4011,62 +4076,184 @@ impl Player {
     /// Rarly used, for example when waking up the player from a bed or their first time spawn. Otherwise, the `teleport` method should be used.
     /// The player should respond with the `SConfirmTeleport` packet.
     pub fn request_teleport(&self, position: Vector3<f64>, yaw: f32, pitch: f32) {
-        // This is the ultra special magic code used to create the teleport id
-        // This returns the old value
-        // This operation wraps around on overflow.
+        self.request_teleport_with_relatives(position, yaw, pitch, &[]);
+    }
+
+    /// `yaw` and `pitch` are in degrees.
+    /// Variant of `request_teleport` that marks individual components of the
+    /// clientbound position packet as relative (Papo `TeleportFlags`
+    /// equivalent): a flag in `relatives` marks the matching packet component
+    /// as relative to the player's current state instead of absolute.
+    ///
+    /// Server-side state is updated to the resolved absolute target. Java
+    /// clients receive the raw values together with the flags; the Bedrock
+    /// protocol has no relative teleport mechanism, so Bedrock clients receive
+    /// the resolved absolute teleport instead.
+    pub fn request_teleport_with_relatives(
+        &self,
+        position: Vector3<f64>,
+        yaw: f32,
+        pitch: f32,
+        relatives: &[PositionFlag],
+    ) {
+        let _ = self.request_teleport_resolved(position, yaw, pitch, relatives);
+    }
+
+    /// Resolves a teleport target whose components may be relative to the
+    /// entity's current state into absolute values. `RotateDelta` applies the
+    /// rotation as a delta on top of the current rotation, matching the
+    /// vanilla client behavior.
+    fn resolve_relative_teleport(
+        entity: &Entity,
+        position: Vector3<f64>,
+        yaw: f32,
+        pitch: f32,
+        relatives: &[PositionFlag],
+    ) -> (Vector3<f64>, f32, f32) {
+        let current = entity.pos.load();
+        let abs_position = Vector3::new(
+            if relatives.contains(&PositionFlag::X) {
+                current.x + position.x
+            } else {
+                position.x
+            },
+            if relatives.contains(&PositionFlag::Y) {
+                current.y + position.y
+            } else {
+                position.y
+            },
+            if relatives.contains(&PositionFlag::Z) {
+                current.z + position.z
+            } else {
+                position.z
+            },
+        );
+        let rotate_delta = relatives.contains(&PositionFlag::RotateDelta);
+        let abs_yaw = if rotate_delta || relatives.contains(&PositionFlag::YRot) {
+            entity.yaw.load() + yaw
+        } else {
+            yaw
+        };
+        let abs_pitch = if rotate_delta || relatives.contains(&PositionFlag::XRot) {
+            entity.pitch.load() + pitch
+        } else {
+            pitch
+        };
+        (abs_position, abs_yaw, abs_pitch)
+    }
+
+    /// Fires the teleport event and sends the clientbound position packet for
+    /// a teleport whose components may be relative. Returns the resolved
+    /// absolute target on success, or `None` when the teleport was cancelled
+    /// (or no server is available).
+    fn request_teleport_resolved(
+        &self,
+        position: Vector3<f64>,
+        yaw: f32,
+        pitch: f32,
+        relatives: &[PositionFlag],
+    ) -> Option<(Vector3<f64>, f32, f32)> {
+        // Keep the `request_teleport` early-out: no server, no teleport.
+        self.world().server.upgrade()?;
+        let (abs_position, abs_yaw, abs_pitch) = Self::resolve_relative_teleport(
+            &self.living_entity.entity,
+            position,
+            yaw,
+            pitch,
+            relatives,
+        );
+        if !self.fire_teleport_event(abs_position) {
+            return None;
+        }
+        self.send_teleport_packet(
+            position,
+            yaw,
+            pitch,
+            abs_position,
+            abs_yaw,
+            abs_pitch,
+            relatives,
+        );
+        Some((abs_position, abs_yaw, abs_pitch))
+    }
+
+    /// Fires the `PlayerTeleportEvent` for a teleport to `to`. Returns `false`
+    /// when the event was cancelled or no server is available.
+    fn fire_teleport_event(&self, to: Vector3<f64>) -> bool {
         let Some(server) = self.world().server.upgrade() else {
-            return;
+            return false;
         };
         if let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id) {
             let mut event = PlayerTeleportEvent {
                 player: player_arc,
                 from: self.living_entity.entity.pos.load(),
-                to: position,
+                to,
                 cancelled: false,
             };
             server.plugin_manager.fire_blocking(&server, &mut event);
-            if event.cancelled {
-                return;
-            }
+            return !event.cancelled;
         }
+        true
+    }
 
+    /// Assigns a teleport id, updates the server-side state to the resolved
+    /// absolute target and sends the clientbound position packet. Java clients
+    /// receive the raw `position`/`yaw`/`pitch` values together with
+    /// `relatives`; Bedrock clients receive the resolved absolute values.
+    #[expect(clippy::too_many_arguments)]
+    fn send_teleport_packet(
+        &self,
+        position: Vector3<f64>,
+        yaw: f32,
+        pitch: f32,
+        abs_position: Vector3<f64>,
+        abs_yaw: f32,
+        abs_pitch: f32,
+        relatives: &[PositionFlag],
+    ) {
+        // This is the ultra special magic code used to create the teleport id
+        // This returns the old value
+        // This operation wraps around on overflow.
         let i = self.teleport_id_count.fetch_add(1, Ordering::Relaxed);
         self.chunk_send_epoch.fetch_add(1, Ordering::Relaxed);
         let teleport_id = i + 1;
-        self.living_entity.entity.set_pos(position);
         let entity = &self.living_entity.entity;
-        entity.set_rotation(yaw, pitch);
+        entity.set_pos(abs_position);
+        entity.set_rotation(abs_yaw, abs_pitch);
         match self.client.as_ref() {
             ClientPlatform::Java(client) => {
                 *self
                     .awaiting_teleport
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some((teleport_id.into(), position));
+                    Some((teleport_id.into(), abs_position));
                 let packet = CPlayerPosition::new(
                     teleport_id.into(),
                     position,
                     Vector3::new(0.0, 0.0, 0.0),
                     yaw,
                     pitch,
-                    // TODO
-                    Vec::new(),
+                    // `PositionFlag` is not `Clone`; rebuild the vector from
+                    // its bitfield (a lossless round-trip).
+                    PositionFlag::from_bitfield(PositionFlag::get_bitfield(relatives)),
                 );
                 if let Ok(data) = client.serialize_packet(&packet) {
                     client.try_enqueue_packet(data);
                 }
             }
             ClientPlatform::Bedrock(client) => {
+                // Bedrock has no relative teleport flags: send the resolved
+                // absolute position and rotation.
                 let packet = CBedrockMovePlayer::new(
                     VarULong(self.entity_id() as u64),
                     Vector3::new(
-                        position.x as f32,
-                        position.y as f32 + entity.entity_type.eye_height,
-                        position.z as f32,
+                        abs_position.x as f32,
+                        abs_position.y as f32 + entity.entity_type.eye_height,
+                        abs_position.z as f32,
                     ),
-                    pitch,
-                    yaw,
-                    yaw,
+                    abs_pitch,
+                    abs_yaw,
+                    abs_yaw,
                     CBedrockMovePlayer::MODE_TELEPORT,
                     false,
                     VarULong(0),
@@ -6702,6 +6889,60 @@ impl EntityBase for Player {
         } else if let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id) {
             self.spawn_task(async move {
                 player_arc.teleport_world(world, position, yaw, pitch).await;
+            });
+        }
+    }
+
+    fn teleport_with_relatives(
+        &self,
+        position: Vector3<f64>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        relatives: &[PositionFlag],
+        world: Arc<World>,
+    ) {
+        if Arc::ptr_eq(&world, &self.world()) {
+            // Same world
+            let entity = &self.living_entity.entity;
+            // A missing yaw/pitch keeps the current rotation; the matching
+            // rotation flags do not apply then.
+            let mut relative_bits = PositionFlag::get_bitfield(relatives);
+            if yaw.is_none() {
+                relative_bits &=
+                    !PositionFlag::get_bitfield(&[PositionFlag::YRot, PositionFlag::RotateDelta]);
+            }
+            if pitch.is_none() {
+                relative_bits &=
+                    !PositionFlag::get_bitfield(&[PositionFlag::XRot, PositionFlag::RotateDelta]);
+            }
+            let relatives = PositionFlag::from_bitfield(relative_bits);
+            let yaw = yaw.unwrap_or_else(|| entity.yaw.load());
+            let pitch = pitch.unwrap_or_else(|| entity.pitch.load());
+            if let Some((abs_position, abs_yaw, abs_pitch)) =
+                self.request_teleport_resolved(position, yaw, pitch, &relatives)
+            {
+                let chunk_pos = entity.chunk_pos.load();
+                entity.world.load().broadcast_to_chunk_except(
+                    chunk_pos,
+                    &[entity.entity_uuid],
+                    // Viewers always receive the resolved absolute position.
+                    &CEntityPositionSync::new(
+                        entity.entity_id.into(),
+                        abs_position,
+                        Vector3::new(0.0, 0.0, 0.0),
+                        abs_yaw,
+                        abs_pitch,
+                        entity.on_ground.load(Ordering::SeqCst),
+                    ),
+                );
+            }
+        } else if let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id) {
+            // `PositionFlag` is not `Clone`; pass an owned copy into the task.
+            let relatives = PositionFlag::from_bitfield(PositionFlag::get_bitfield(relatives));
+            self.spawn_task(async move {
+                player_arc
+                    .teleport_world_with_relatives(world, position, yaw, pitch, relatives)
+                    .await;
             });
         }
     }

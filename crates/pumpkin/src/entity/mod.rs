@@ -232,6 +232,25 @@ pub trait EntityBase: Send + Sync + std::any::Any {
         self.get_entity().teleport(position, yaw, pitch, &world);
     }
 
+    /// Teleports the entity like [`EntityBase::teleport`], additionally marking
+    /// individual components of the clientbound position packet as relative
+    /// (Papo `TeleportFlags` equivalent).
+    ///
+    /// Relative flags only affect player clients; non-player entities have no
+    /// relative teleport mechanism, so the default implementation ignores
+    /// `relatives` and teleports absolutely.
+    fn teleport_with_relatives(
+        &self,
+        position: Vector3<f64>,
+        yaw: Option<f32>,
+        pitch: Option<f32>,
+        relatives: &[PositionFlag],
+        world: Arc<World>,
+    ) {
+        let _ = relatives;
+        self.teleport(position, yaw, pitch, world);
+    }
+
     fn is_pushed_by_fluids(&self) -> bool {
         true
     }

@@ -1,6 +1,7 @@
 use pumpkin_data::block_properties::NoteblockInstrument as InternalNoteblockInstrument;
 use pumpkin_data::block_state::PistonBehavior;
 use pumpkin_data::{BlockDirection as InternalBlockDirection, BlockId, BlockStateId};
+use pumpkin_protocol::PositionFlag;
 use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::chunk::ChunkHeightmapType;
 use pumpkin_world::chunk::io::Dirtiable;
@@ -69,8 +70,8 @@ use crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::world::{
     BlockStateInfo as WitBlockStateInfo, BoundingBox as WitBoundingBox, Chunk as WitChunk,
     Flammable as WitFlammable, NoteblockInstrument as WitNoteblockInstrument,
     PistonBehavior as WitPistonBehavior, RayTraceBlockResult as WitRayTraceBlockResult,
-    RayTraceEntityResult as WitRayTraceEntityResult, WorldBorder as WitWorldBorder,
-    WorldSpawnLocation as WitWorldSpawnLocation,
+    RayTraceEntityResult as WitRayTraceEntityResult, TeleportFlags as WitTeleportFlags,
+    WorldBorder as WitWorldBorder, WorldSpawnLocation as WitWorldSpawnLocation,
 };
 use crate::plugin::loader::wasm::wasm_host::{
     state::{
@@ -129,6 +130,40 @@ fn from_wit_block_flags(flags: WitBlockFlags) -> BlockFlags {
         internal |= BlockFlags::SKIP_BLOCK_ADDED_CALLBACK;
     }
     internal
+}
+
+/// Converts WIT teleport flags into protocol position flags. The WIT flag
+/// order matches the `PositionFlag` bitfield order.
+pub(crate) fn from_wit_teleport_flags(flags: WitTeleportFlags) -> Vec<PositionFlag> {
+    let mut relatives = Vec::new();
+    if flags.contains(WitTeleportFlags::X) {
+        relatives.push(PositionFlag::X);
+    }
+    if flags.contains(WitTeleportFlags::Y) {
+        relatives.push(PositionFlag::Y);
+    }
+    if flags.contains(WitTeleportFlags::Z) {
+        relatives.push(PositionFlag::Z);
+    }
+    if flags.contains(WitTeleportFlags::Y_ROT) {
+        relatives.push(PositionFlag::YRot);
+    }
+    if flags.contains(WitTeleportFlags::X_ROT) {
+        relatives.push(PositionFlag::XRot);
+    }
+    if flags.contains(WitTeleportFlags::DELTA_X) {
+        relatives.push(PositionFlag::DeltaX);
+    }
+    if flags.contains(WitTeleportFlags::DELTA_Y) {
+        relatives.push(PositionFlag::DeltaY);
+    }
+    if flags.contains(WitTeleportFlags::DELTA_Z) {
+        relatives.push(PositionFlag::DeltaZ);
+    }
+    if flags.contains(WitTeleportFlags::ROTATE_DELTA) {
+        relatives.push(PositionFlag::RotateDelta);
+    }
+    relatives
 }
 
 fn world_and_plugin(

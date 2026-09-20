@@ -258,6 +258,35 @@ interface %world {
         skip-block-added-callback,
     }
 
+    /// Relative teleport flags: a set flag marks the matching component as
+    /// relative to the entity's current state instead of absolute
+    /// (Papo `TeleportFlags` equivalent).
+    ///
+    /// Relative flags only affect player clients; non-player entities have no
+    /// relative teleport mechanism and ignore them. The Bedrock protocol has
+    /// no equivalent, so Bedrock players always receive the resolved absolute
+    /// teleport.
+    flags teleport-flags {
+        /// X coordinate is relative.
+        x,
+        /// Y coordinate is relative.
+        y,
+        /// Z coordinate is relative.
+        z,
+        /// Yaw is relative to the current yaw.
+        y-rot,
+        /// Pitch is relative to the current pitch.
+        x-rot,
+        /// Delta X (velocity) is relative.
+        delta-x,
+        /// Delta Y (velocity) is relative.
+        delta-y,
+        /// Delta Z (velocity) is relative.
+        delta-z,
+        /// Rotation is applied as a delta.
+        rotate-delta,
+    }
+
     /// Flammability properties of a block.
     record flammable {
         spread-chance: u8,
@@ -415,6 +444,12 @@ interface %world {
         get-head-yaw: func() -> f32;
 
         teleport: func(pos: position, world-ref: %world);
+        /// Teleports the entity with per-component relative flags.
+        ///
+        /// The flags only affect player clients; non-player entities are
+        /// teleported absolutely and ignore `flags`. A `none` yaw/pitch keeps
+        /// the current rotation and ignores the matching rotation flags.
+        teleport-with-flags: func(pos: position, yaw: option<f32>, pitch: option<f32>, %flags: teleport-flags, world-ref: %world);
         set-velocity: func(velocity: position);
         get-velocity: func() -> position;
 

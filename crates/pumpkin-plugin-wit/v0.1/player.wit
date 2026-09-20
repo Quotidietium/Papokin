@@ -2,7 +2,7 @@
 interface player {
     use common.{hand, position, game-mode, block-pos};
     use item-stack.{item-stack};
-    use %world.{%world, entity, ray-trace-block-result, ray-trace-entity-result};
+    use %world.{%world, entity, ray-trace-block-result, ray-trace-entity-result, teleport-flags};
     use permission.{permission-level};
     use text.{text-component};
     use gui.{gui};
@@ -988,6 +988,14 @@ interface player {
         teleport: func (position: position, yaw: option<f32>, pitch: option<f32>, %world: %world);
         /// Teleports the player to another world at a specific position.
         teleport-world: func (world-ref: %world, position: position, yaw: option<f32>, pitch: option<f32>);
+        /// Teleports the player with per-component relative flags (Papo TeleportFlags equivalent).
+        ///
+        /// A `none` yaw/pitch keeps the current rotation for same-world
+        /// teleports (cross-world teleports use the target world's spawn
+        /// rotation) and ignores the matching rotation flags. Bedrock clients
+        /// have no relative teleport mechanism and receive the resolved
+        /// absolute teleport instead.
+        teleport-with-flags: func (position: position, yaw: option<f32>, pitch: option<f32>, %flags: teleport-flags, %world: %world);
         /// Forces the player to respawn.
         respawn: func ();
 
