@@ -3754,10 +3754,23 @@ impl pumpkin::plugin::player::HostJavaPlayer for PluginHostState {
             .client
             .java()
             .ok_or_else(|| wasmtime::Error::msg("Not a java player"))?;
-        if let Some(bytes) = crate::plugin::loader::wasm::wasm_host::wit::v0_1::generated_packets::serialize_java_packet(
-            &packet, client.version.load(),
-        ) {
-            client.send_packet_now_data(bytes).await;
+        // Guest-controlled packet fields can fail the generated
+        // `try_into().unwrap()` conversions; never let that panic cross the
+        // host-call boundary — drop the packet instead.
+        let version = client.version.load();
+        let serialized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::plugin::loader::wasm::wasm_host::wit::v0_1::generated_packets::serialize_java_packet(
+                &packet, version,
+            )
+        }));
+        match serialized {
+            Ok(Some(bytes)) => client.send_packet_now_data(bytes).await,
+            Ok(None) => {}
+            Err(_) => {
+                tracing::error!(
+                    "Plugin-supplied Java packet panicked during serialization; dropping it"
+                );
+            }
         }
         Ok(())
     }
@@ -4449,10 +4462,22 @@ impl pumpkin::plugin::player::HostBedrockPlayer for PluginHostState {
             .provider
             .clone();
 
-        if let Some(bytes) = crate::plugin::loader::wasm::wasm_host::wit::v0_1::generated_packets::serialize_bedrock_packet(
-            &packet,
-        ) {
-            player.client.send_packet_now_data(bytes).await;
+        // Guest-controlled packet fields can fail the generated
+        // `try_into().unwrap()` conversions; never let that panic cross the
+        // host-call boundary — drop the packet instead.
+        let serialized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::plugin::loader::wasm::wasm_host::wit::v0_1::generated_packets::serialize_bedrock_packet(
+                &packet,
+            )
+        }));
+        match serialized {
+            Ok(Some(bytes)) => player.client.send_packet_now_data(bytes).await,
+            Ok(None) => {}
+            Err(_) => {
+                tracing::error!(
+                    "Plugin-supplied Bedrock packet panicked during serialization; dropping it"
+                );
+            }
         }
         Ok(())
     }
