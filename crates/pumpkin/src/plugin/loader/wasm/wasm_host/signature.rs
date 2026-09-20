@@ -42,15 +42,33 @@ pub struct KeyManager {
 
 impl KeyManager {
     /// Loads or generates an Ed25519 keypair from a 32-byte secret hex.
+    ///
+    /// An invalid hex secret previously fell back to the all-zero key, which is
+    /// publicly known and would make every signature forgeable. A malformed
+    /// secret now produces a random throwaway key (signatures simply verify
+    /// nowhere) plus a loud warning, instead of a silent weak key.
     #[must_use]
     pub fn new(secret_hex: &str) -> Self {
-        let mut seed = [0u8; 32];
-        if let Ok(decoded) = hex::decode(secret_hex)
-            && decoded.len() == 32
-        {
-            seed.copy_from_slice(&decoded);
-        }
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+        use ed25519_dalek::SigningKey;
+
+        let signing_key = match hex::decode(secret_hex) {
+            Ok(decoded) if decoded.len() == 32 => {
+                let mut seed = [0u8; 32];
+                seed.copy_from_slice(&decoded);
+                SigningKey::from_bytes(&seed)
+            }
+            _ => {
+                warn!(
+                    "Invalid Ed25519 secret hex (expected 32 bytes as hex); \
+                     generated signatures will not verify. Fix the configured secret."
+                );
+                // Derive a throwaway key from the malformed input instead of
+                // falling back to the publicly known all-zero key.
+                let seed: [u8; 32] =
+                    <sha2::Sha256 as sha2::Digest>::digest(secret_hex.as_bytes()).into();
+                SigningKey::from_bytes(&seed)
+            }
+        };
         Self { signing_key }
     }
 
@@ -167,10 +185,31 @@ pub struct VerificationResult {
     pub public_key_hex: String,
 }
 
+/// Fetches the market public key over HTTP with a hard timeout.
+///
+/// The request runs inside plugin loading; without a timeout a hanging market
+/// endpoint would stall the whole load pipeline (including server startup).
+async fn fetch_market_public_key_http() -> Result<String, String> {
+    let client = pumpkin_auth::client_builder()
+        .user_agent("Pumpkin-MC")
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        client.get(PUMPKIN_MARKET_PUBLIC_KEY_URL).send(),
+    )
+    .await
+    .map_err(|_| "Timed out fetching public key from market (10s)".to_string())?
+    .map_err(|e| format!("Failed to fetch public key from market: {e}"))?;
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read public key response: {e}"))
+}
+
 /// Fetches public key from market REST API, returning cached key if previously fetched.
 ///
 /// # Errors
-///
 /// Returns an error if the public key cache lock cannot be acquired, if the HTTP request fails,
 /// if the response body cannot be read, or if the returned key is empty.
 pub fn fetch_market_public_key() -> Result<String, String> {
@@ -183,41 +222,11 @@ pub fn fetch_market_public_key() -> Result<String, String> {
     }
 
     let body = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                let client = pumpkin_auth::client_builder()
-                    .user_agent("Pumpkin-MC")
-                    .build()
-                    .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-                let response = client
-                    .get(PUMPKIN_MARKET_PUBLIC_KEY_URL)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to fetch public key from market: {e}"))?;
-                response
-                    .text()
-                    .await
-                    .map_err(|e| format!("Failed to read public key response: {e}"))
-            })
-        })?
+        tokio::task::block_in_place(|| handle.block_on(fetch_market_public_key_http()))?
     } else {
         tokio::runtime::Runtime::new()
             .map_err(|e| format!("Failed to create runtime: {e}"))?
-            .block_on(async {
-                let client = pumpkin_auth::client_builder()
-                    .user_agent("Pumpkin-MC")
-                    .build()
-                    .map_err(|e| format!("Failed to build HTTP client: {e}"))?;
-                let response = client
-                    .get(PUMPKIN_MARKET_PUBLIC_KEY_URL)
-                    .send()
-                    .await
-                    .map_err(|e| format!("Failed to fetch public key from market: {e}"))?;
-                response
-                    .text()
-                    .await
-                    .map_err(|e| format!("Failed to read public key response: {e}"))
-            })?
+            .block_on(fetch_market_public_key_http())?
     };
 
     let key = body.trim().trim_matches('"').to_string();
