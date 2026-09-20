@@ -113,6 +113,8 @@ pub mod permissions;
 pub mod recipe;
 /// Scheduler utilities.
 pub mod scheduler;
+/// Server-level queries: build info and offline player lookup.
+pub mod server;
 /// Cross-plugin service registry (ServicesManager equivalent).
 pub mod services;
 /// Scoreboard team management and builder utilities.
@@ -139,8 +141,8 @@ pub use wit::pumpkin::plugin::{
     event::{self as events_wit, EventType},
     game_events as game_events_wit, gui, i18n, inventory as inventory_wit, ipc, item_stack,
     java_dialogs, java_packets, particles, permission, player, potions as potions_wit,
-    recipe as recipe_wit, scoreboard, screens as screens_wit, server, statistics as statistics_wit,
-    text, uuid, world,
+    recipe as recipe_wit, scoreboard, screens as screens_wit, statistics as statistics_wit, text,
+    uuid, world,
 };
 
 // Convenience re-exports of commonly-used plugin types so plugin authors can
@@ -172,10 +174,12 @@ pub use mobs::{
 };
 pub use potions_wit::PotionType;
 pub use recipe::{
-    CookingRecipeBuilder, Ingredient, RecipeCategory, RecipeError, RecipeManager,
-    RegistrableRecipe, ShapedRecipeBuilder, ShapelessRecipeBuilder,
+    BrewingRecipeBuilder, CookingRecipeBuilder, Ingredient, RecipeCategory, RecipeError,
+    RecipeManager, RegistrableRecipe, ShapedRecipeBuilder, ShapelessRecipeBuilder,
+    SmithingTransformRecipeBuilder, SmithingTrimRecipeBuilder, StonecuttingRecipeBuilder,
 };
 pub use screens_wit::Screen;
+pub use server::{BuildInfo, OfflinePlayerInfo};
 pub use statistics_wit::{CustomStatistic, StatisticCategory};
 pub use team::{PlayerTeamExt, ScoreboardTeamExt, Team, TeamSettingsBuilder};
 pub use wit::pumpkin::plugin::attributes::{Attribute, AttributeModifier, ModifierOperation};
@@ -185,7 +189,8 @@ pub use wit::pumpkin::plugin::scoreboard::{CollisionRule, NametagVisibility, Tea
 pub use wit::pumpkin::plugin::server::Dimension;
 pub use wit::pumpkin::plugin::world::{
     Block, BlockDirection, BlockState, BlockStateInfo, Entity, Flammable, LivingEntity, Mob,
-    PathNodeType, RayTraceBlockResult, RayTraceEntityResult, RaycastResult, World, WorldBorder,
+    PathNodeType, RayTraceBlockResult, RayTraceEntityResult, RaycastResult, TeleportFlags, World,
+    WorldBorder,
 };
 pub use worldgen::{ChunkBuffer, ChunkGenerator, GenerationPhase, GeneratorManager};
 

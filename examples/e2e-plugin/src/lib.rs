@@ -8,10 +8,18 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use pumpkin_plugin_api::events::{EventData, EventHandler, EventPriority, PlayerJoinEvent, ServerTickStartEvent};
+use pumpkin_plugin_api::events::{
+    EventData, EventHandler, EventPriority, PlayerJoinEvent, ServerTickStartEvent,
+};
+use pumpkin_plugin_api::recipe::{
+    BrewingRecipeBuilder, SmithingTransformRecipeBuilder, SmithingTrimRecipeBuilder,
+    StonecuttingRecipeBuilder,
+};
 use pumpkin_plugin_api::scheduler::SchedulerExt;
 use pumpkin_plugin_api::services::ServiceProvider;
-use pumpkin_plugin_api::{Context, LoadOrder, Plugin, PluginMetadata, Result, register_plugin};
+use pumpkin_plugin_api::{
+    Context, ItemStack, LoadOrder, Plugin, PluginMetadata, Result, TeleportFlags, register_plugin,
+};
 
 type PlayerJoinEventData = EventData<PlayerJoinEvent>;
 type ServerTickStartEventData = EventData<ServerTickStartEvent>;
@@ -99,7 +107,12 @@ impl Plugin for E2ePlugin {
     fn on_enable(&self, context: Context) -> Result<()> {
         // Priority dispatch: Bukkit order = LOWEST first, HIGHEST last.
         context.register_event_handler(JoinAnnouncerLowest, EventPriority::Lowest, true, false)?;
-        context.register_event_handler(JoinAnnouncerHighest, EventPriority::Highest, true, false)?;
+        context.register_event_handler(
+            JoinAnnouncerHighest,
+            EventPriority::Highest,
+            true,
+            false,
+        )?;
         context.register_event_handler(TickWatcher, EventPriority::Low, false, true)?;
 
         // Async wall-clock task (new mechanism).
@@ -138,6 +151,88 @@ impl Plugin for E2ePlugin {
                 }
             }
             Err(err) => tracing::info!("E2E config-error {err}"),
+        }
+
+        // Dynamic recipe registration (new mechanism): stonecutting, smithing
+        // transform, smithing trim, and brewing.
+        match context.register_recipe(StonecuttingRecipeBuilder::new(
+            "e2e:glass_panes_from_glass",
+            "minecraft:glass",
+            ItemStack::new("minecraft:glass_pane", 4),
+        )) {
+            Ok(()) => tracing::info!("E2E recipe-stonecutting-registered"),
+            Err(err) => tracing::info!("E2E recipe-stonecutting-failed {err}"),
+        }
+
+        match context.register_recipe(
+            SmithingTransformRecipeBuilder::new(
+                "e2e:netherite_chestplate",
+                "minecraft:netherite_upgrade_smithing_template",
+                "minecraft:diamond_chestplate",
+                "minecraft:netherite_ingot",
+                ItemStack::new("minecraft:netherite_chestplate", 1),
+            )
+            .copy_components(true),
+        ) {
+            Ok(()) => tracing::info!("E2E recipe-smithing-transform-registered"),
+            Err(err) => tracing::info!("E2E recipe-smithing-transform-failed {err}"),
+        }
+
+        match context.register_recipe(SmithingTrimRecipeBuilder::new(
+            "e2e:coast_trim_iron_chestplate",
+            "minecraft:coast_armor_trim_smithing_template",
+            "minecraft:iron_chestplate",
+            "minecraft:amethyst_shard",
+        )) {
+            Ok(()) => tracing::info!("E2E recipe-smithing-trim-registered"),
+            Err(err) => tracing::info!("E2E recipe-smithing-trim-failed {err}"),
+        }
+
+        match context.register_recipe(
+            BrewingRecipeBuilder::new(
+                "e2e:splash_water",
+                "minecraft:potion",
+                "minecraft:gunpowder",
+                "minecraft:splash_potion",
+            )
+            .input_potion("minecraft:water")
+            .output_potion("minecraft:water"),
+        ) {
+            Ok(()) => tracing::info!("E2E recipe-brewing-registered"),
+            Err(err) => tracing::info!("E2E recipe-brewing-failed {err}"),
+        }
+
+        // Server build info (new mechanism).
+        let build = context.get_build_info();
+        tracing::info!(
+            "E2E build-info brand={} api={}",
+            build.brand,
+            build.plugin_api_version
+        );
+
+        // Offline player lookup (new mechanism): a nil UUID is never known to
+        // the server, so the lookup must return none.
+        match context.get_offline_player_by_uuid("00000000-0000-0000-0000-000000000000") {
+            None => tracing::info!("E2E offline-player-unknown-none"),
+            Some(info) => tracing::info!("E2E offline-player-unexpected-hit uuid={}", info.uuid),
+        }
+
+        // Teleport flags (new mechanism): no player is online in headless e2e,
+        // so this exercises construction and bit ops of the flags type only.
+        let flags = TeleportFlags::X
+            | TeleportFlags::Y
+            | TeleportFlags::Z
+            | TeleportFlags::Y_ROT
+            | TeleportFlags::X_ROT;
+        let has = |flag: TeleportFlags| (flags & flag).bits() != 0;
+        if has(TeleportFlags::X)
+            && has(TeleportFlags::Y_ROT)
+            && !has(TeleportFlags::ROTATE_DELTA)
+            && TeleportFlags::empty().bits() == 0
+        {
+            tracing::info!("E2E teleport-flags-available bits={:?}", flags.bits());
+        } else {
+            tracing::info!("E2E teleport-flags-broken {flags:?}");
         }
 
         tracing::info!("E2E on_enable ok");
