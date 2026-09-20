@@ -218,6 +218,12 @@ enum GoalCall {
     Stop,
 }
 
+#[derive(Clone, Copy)]
+enum BoolGoalCall {
+    CanStart,
+    ShouldContinue,
+}
+
 impl CustomWasmGoal {
     fn invoke(&self, mob: &dyn InternalMob, call: GoalCall) {
         let Some(entity) = current_mob_entity(mob) else {
@@ -286,15 +292,90 @@ impl CustomWasmGoal {
             server.runtime.block_on(run);
         }
     }
+
+    /// Invokes a boolean goal callback (`can_start` / `should_continue`).
+    /// Any failure (entity gone, plugin unloaded, guest trap) yields `false`,
+    /// which is the safe default: the goal does not start, or stops.
+    fn invoke_bool(&self, mob: &dyn InternalMob, call: BoolGoalCall) -> bool {
+        let Some(entity) = current_mob_entity(mob) else {
+            return false;
+        };
+        let world = entity.get_entity().world.load();
+        let Some(server) = world.server.upgrade() else {
+            return false;
+        };
+        let plugin = self.plugin.clone();
+        let goal_id = self.goal_id;
+        let run = async move {
+            let function = match plugin.plugin_instance.as_ref() {
+                PluginInstance::V0_1(instance) => match call {
+                    BoolGoalCall::CanStart => instance.func_handle_ai_goal_can_start(),
+                    BoolGoalCall::ShouldContinue => instance.func_handle_ai_goal_should_continue(),
+                },
+            };
+            plugin
+                .store
+                .call_guest(move |mut guest| {
+                    Box::pin(async move {
+                        let (server_resource, entity_resource, reps) =
+                            guest.with(|mut store| {
+                                let server = store.data_mut().server.clone().ok_or_else(|| {
+                                    wasmtime::Error::msg("Wasm plugin server is not available")
+                                })?;
+                                let server_resource = store.data_mut().add_server(server)?;
+                                let server_rep = server_resource.rep();
+                                let entity_resource = match store.data_mut().add_entity(entity) {
+                                    Ok(resource) => resource,
+                                    Err(error) => {
+                                        let _ = store.data_mut().resource_table.delete::<
+                                            crate::plugin::loader::wasm::wasm_host::state::ServerResource,
+                                        >(wasmtime::component::Resource::new_own(server_rep));
+                                        return Err(error);
+                                    }
+                                };
+                                let reps = (server_rep, entity_resource.rep());
+                                Ok::<_, wasmtime::Error>((server_resource, entity_resource, reps))
+                            })?;
+                        let result = guest
+                            .call(function, (goal_id, server_resource, entity_resource))
+                            .await
+                            .map(|(allowed,)| allowed);
+                        guest.with(|mut store| {
+                            let _ = store.data_mut().resource_table.delete::<
+                                crate::plugin::loader::wasm::wasm_host::state::ServerResource,
+                            >(wasmtime::component::Resource::new_own(reps.0));
+                            let _ = store.data_mut().resource_table.delete::<
+                                crate::plugin::loader::wasm::wasm_host::state::EntityResource,
+                            >(wasmtime::component::Resource::new_own(reps.1));
+                        });
+                        result
+                    })
+                })
+                .await
+        };
+
+        let result = if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| server.runtime.block_on(run))
+        } else {
+            server.runtime.block_on(run)
+        };
+        match result {
+            Ok(allowed) => allowed,
+            Err(error) => {
+                tracing::error!(goal_id = self.goal_id, %error, "Wasm AI goal callback failed");
+                false
+            }
+        }
+    }
 }
 
 impl Goal for CustomWasmGoal {
-    fn can_start(&mut self, _mob: &dyn InternalMob) -> bool {
-        false
+    fn can_start(&mut self, mob: &dyn InternalMob) -> bool {
+        self.invoke_bool(mob, BoolGoalCall::CanStart)
     }
 
-    fn should_continue(&mut self, _mob: &dyn InternalMob) -> bool {
-        false
+    fn should_continue(&mut self, mob: &dyn InternalMob) -> bool {
+        self.invoke_bool(mob, BoolGoalCall::ShouldContinue)
     }
 
     fn start(&mut self, mob: &dyn InternalMob) {

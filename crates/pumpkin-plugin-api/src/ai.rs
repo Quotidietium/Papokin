@@ -30,13 +30,11 @@ pub(crate) static AI_GOAL_HANDLERS: Mutex<LazyAiGoalHandlers> = Mutex::new(LazyA
     next_id: 0,
 });
 
-#[allow(dead_code)]
 pub(crate) struct LazyAiGoalHandlers {
     pub handlers: BTreeMap<u32, Arc<dyn AiGoal>>,
     pub next_id: u32,
 }
 
-#[allow(dead_code)]
 impl LazyAiGoalHandlers {
     #[must_use]
     pub fn register(&mut self, goal: Box<dyn AiGoal>) -> u32 {
@@ -49,5 +47,21 @@ impl LazyAiGoalHandlers {
     #[must_use]
     pub fn get(&self, id: u32) -> Option<Arc<dyn AiGoal>> {
         self.handlers.get(&id).map(Arc::clone)
+    }
+}
+
+/// Manager for registering custom mob AI goals with the server runtime.
+pub struct AiGoalManager;
+
+impl AiGoalManager {
+    /// Registers a custom AI goal and returns its unique goal ID.
+    ///
+    /// You can then attach the goal to a mob using
+    /// `mob.add_custom_ai_goal(priority, goal_id)`.
+    pub fn register<G: AiGoal + 'static>(goal: G) -> u32 {
+        AI_GOAL_HANDLERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(Box::new(goal))
     }
 }

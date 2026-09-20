@@ -7,9 +7,9 @@ use std::ops::Deref;
 
 pub use crate::wit::pumpkin::plugin::uuid::Uuid;
 pub use crate::wit::pumpkin::plugin::world::{
-    AgeableData, BlockDirection, CatData, CreeperData, DyeColor, EndermanData, Entity, FoxData,
-    IronGolemData, LivingEntity, Mob, MobData, SheepData, ShulkerData, SlimeData, VillagerData,
-    VillagerProfession, WolfData, ZombieData,
+    AgeableData, BlockDirection, BuiltinAiGoal, CatData, CreeperData, DyeColor, EndermanData,
+    Entity, FoxData, IronGolemData, LivingEntity, Mob, MobData, SheepData, ShulkerData, SlimeData,
+    VillagerData, VillagerProfession, WolfData, ZombieData,
 };
 
 /// Trait implemented by all specialized mob wrappers to allow generic downcasting via `.cast::<T>()`.
