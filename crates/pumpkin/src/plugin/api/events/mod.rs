@@ -142,7 +142,7 @@ pub trait Cancellable: Send + Sync {
 /// `Lowest` runs before `Low`, and `Highest` runs last, letting high-priority
 /// handlers override the changes made by earlier ones. Handlers sharing the
 /// same priority run in registration order (Bukkit-compatible ordering).
-#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd, Clone, Copy)]
 pub enum EventPriority {
     /// Highest priority level.
     Highest,
