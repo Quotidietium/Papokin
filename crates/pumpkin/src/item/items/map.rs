@@ -47,6 +47,10 @@ impl ItemBehaviour for MapItem {
                 0, // Default scale
             );
 
+            let mut map_event =
+                crate::plugin::api::events::server::map_initialize::MapInitializeEvent::new(map_id);
+            server.plugin_manager.fire_blocking(&server, &mut map_event);
+
             let mut filled_map = ItemStack::new(1, &Item::FILLED_MAP);
             filled_map.patch.push((
                 DataComponent::MapId,

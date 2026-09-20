@@ -42,6 +42,9 @@ impl ItemBehaviour for HangingEntityItem {
         _server: &Server,
     ) -> BlockActionResult {
         let world = player.world();
+        let Some(player_arc) = world.get_player_by_id(player.entity_id()) else {
+            return BlockActionResult::Fail;
+        };
         let target_pos = location.offset(face.to_offset());
         let pos = Vector3::new(
             f64::from(target_pos.0.x) + 0.5,
@@ -59,6 +62,21 @@ impl ItemBehaviour for HangingEntityItem {
                 .data
                 .store(i32::from(face.to_index()), Ordering::Relaxed);
             let painting = Arc::new(PaintingEntity::new(entity));
+            let mut place_event =
+                crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
+                    painting.clone(),
+                    Some(player_arc),
+                    location,
+                    face,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut place_event);
+            }
+            if place_event.cancelled {
+                return BlockActionResult::Fail;
+            }
             world.play_sound(Sound::EntityPaintingPlace, SoundCategory::Blocks, &pos);
             world.spawn_entity(painting);
         } else {
@@ -73,6 +91,21 @@ impl ItemBehaviour for HangingEntityItem {
             frame.set_facing(face);
             let sound = frame.get_place_sound();
             let frame_arc = Arc::new(frame);
+            let mut place_event =
+                crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
+                    frame_arc.clone(),
+                    Some(player_arc),
+                    location,
+                    face,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut place_event);
+            }
+            if place_event.cancelled {
+                return BlockActionResult::Fail;
+            }
             world.play_sound(sound, SoundCategory::Blocks, &pos);
             world.spawn_entity(frame_arc);
         }

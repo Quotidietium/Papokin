@@ -21,9 +21,30 @@ impl Ignite {
     }
 
     /// Applies the ignite effect to an entity for the given enchantment level.
-    pub fn apply_to_entity(&self, level: i32, entity: &Entity) {
+    /// When `combuster` is known, `EntityCombustByEntityEvent` is fired so
+    /// plugins can cancel or shorten the burn.
+    pub fn apply_to_entity(&self, level: i32, entity: &Entity, combuster: Option<i32>) {
         let seconds = self.duration.calculate(level);
-        entity.set_on_fire_for(seconds);
+        if let Some(combuster_id) = combuster {
+            let world = entity.world.load();
+            let mut combust_event =
+                crate::plugin::api::events::entity::entity_combust_by_entity::EntityCombustByEntityEvent::new(
+                    entity.entity_id,
+                    combuster_id,
+                    seconds,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut combust_event);
+            }
+            if combust_event.cancelled {
+                return;
+            }
+            entity.set_on_fire_for(combust_event.duration);
+        } else {
+            entity.set_on_fire_for(seconds);
+        }
         entity.set_on_fire(true);
     }
 }
@@ -33,12 +54,16 @@ impl EnchantmentEntityEffectExt for Ignite {
         &self,
         _world: &Arc<World>,
         enchantment_level: i32,
-        _owner: Option<&Arc<Player>>,
+        owner: Option<&Arc<Player>>,
         entity: Option<&Entity>,
         _position: Vector3<f64>,
     ) {
         if let Some(entity) = entity {
-            self.apply_to_entity(enchantment_level, entity);
+            self.apply_to_entity(
+                enchantment_level,
+                entity,
+                owner.map(|player| player.get_entity().entity_id),
+            );
         }
     }
 }

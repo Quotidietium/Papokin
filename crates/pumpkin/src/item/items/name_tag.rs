@@ -21,8 +21,27 @@ impl ItemBehaviour for NameTagItem {
         if entity.entity_type.saveable
             && let Some(name) = item.get_data_component::<CustomNameImpl>()
         {
+            let world = entity.world.load();
+            let Some(player_arc) = world.get_player_by_id(player.entity_id()) else {
+                return;
+            };
+            let mut name_event =
+                crate::plugin::api::events::player::player_name_entity::PlayerNameEntityEvent {
+                    player: player_arc,
+                    entity_id: entity.entity_id,
+                    name: name.name.clone(),
+                    cancelled: false,
+                };
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut name_event);
+            }
+            if name_event.cancelled {
+                return;
+            }
             // TODO
-            entity.set_custom_name(name.name.clone());
+            entity.set_custom_name(name_event.name);
             item.decrement_unless_creative(player.gamemode.load(), 1);
         }
     }

@@ -220,7 +220,7 @@ impl SpearItem {
             Ordering::Relaxed,
         );
         if was_hurt {
-            Self::apply_post_damage_effects(stack, target_entity);
+            Self::apply_post_damage_effects(stack, player.get_entity(), target_entity);
         }
         if target.get_living_entity().is_some()
             && let Some(weapon) = stack.get_data_component::<WeaponImpl>()
@@ -435,13 +435,27 @@ impl SpearItem {
             .unwrap_or(0)
     }
 
-    fn apply_post_damage_effects(stack: &ItemStack, target: &Entity) {
+    fn apply_post_damage_effects(stack: &ItemStack, attacker: &Entity, target: &Entity) {
         let Some(enchantments) = stack.get_data_component::<EnchantmentsImpl>() else {
             return;
         };
         for (enchantment, level) in enchantments.enchantment.iter() {
             if **enchantment == Enchantment::FIRE_ASPECT {
-                target.set_on_fire_for_ticks(u32::try_from(*level).unwrap_or(0) * 80);
+                let mut combust_event =
+                    crate::plugin::api::events::entity::entity_combust_by_entity::EntityCombustByEntityEvent::new(
+                        target.entity_id,
+                        attacker.entity_id,
+                        (u32::try_from(*level).unwrap_or(0) * 80) as f32 / 20.0,
+                    );
+                let world = target.world.load();
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut combust_event);
+                }
+                if !combust_event.cancelled {
+                    target.set_on_fire_for_ticks((combust_event.duration * 20.0).max(0.0) as u32);
+                }
             }
         }
     }
