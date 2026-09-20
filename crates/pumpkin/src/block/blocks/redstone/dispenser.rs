@@ -847,7 +847,7 @@ impl DispenserBlock {
         let front_block = ctx.world.get_block(&front);
 
         let ignited = if front_block == &Block::TNT {
-            TNTBlock::prime(ctx.world, &front)
+            TNTBlock::prime(ctx.world, &front, "DISPENSER")
         } else {
             Ignition::ignite_block(
                 |world: Arc<World>, pos: BlockPos, new_state_id: BlockStateId| {
@@ -934,7 +934,7 @@ impl DispenserBlock {
     }
 
     fn dispense_shears(ctx: &DispenseContext<'_>, item: &mut ItemStack) {
-        if Self::shear_beehive(ctx) || Self::shear_entity_in_front(ctx) {
+        if Self::shear_beehive(ctx) || Self::shear_entity_in_front(ctx, item) {
             // `damage_item` already consumes the tool from the stack when it breaks.
             let _ = item.damage_item(1);
             Self::play_dispense_effects(ctx, WorldEvent::SoundDispenserDispense);
@@ -973,7 +973,7 @@ impl DispenserBlock {
         true
     }
 
-    fn shear_entity_in_front(ctx: &DispenseContext<'_>) -> bool {
+    fn shear_entity_in_front(ctx: &DispenseContext<'_>, item: &ItemStack) -> bool {
         let target_box = BoundingBox::from_block(&Self::target_position(ctx));
 
         for entity in ctx.world.get_entities_at_box(&target_box) {
@@ -981,6 +981,20 @@ impl DispenserBlock {
                 continue;
             };
             if sheep.is_sheared() || sheep.is_baby() || !entity.get_entity().is_alive() {
+                continue;
+            }
+
+            let mut event =
+                crate::plugin::api::events::block::block_shear_entity::BlockShearEntityEvent::new(
+                    *ctx.position,
+                    ctx.world.clone(),
+                    entity.clone(),
+                    item.clone(),
+                );
+            if let Some(server) = ctx.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
                 continue;
             }
 
@@ -1195,6 +1209,20 @@ impl DispenserBlock {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !equipment.get(slot).is_empty() {
+                continue;
+            }
+
+            let mut event =
+                crate::plugin::api::events::block::block_dispense_armor::BlockDispenseArmorEvent::new(
+                    *ctx.position,
+                    ctx.world.clone(),
+                    entity.clone(),
+                    item.clone(),
+                );
+            if let Some(server) = ctx.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
                 continue;
             }
 

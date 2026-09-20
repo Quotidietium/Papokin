@@ -242,6 +242,22 @@ impl BlockBehaviour for DoorBlock {
         }
     }
 
+    fn extra_placed_blocks(
+        &self,
+        _world: &World,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        let mut door_props = DoorProperties::from_state_id(state_id);
+        door_props.half = DoubleBlockHalf::Upper;
+
+        vec![(
+            position.offset(BlockDirection::Up.to_offset()),
+            door_props.to_state_id(block),
+        )]
+    }
+
     fn normal_use(&self, args: NormalUseArgs<'_>) -> BlockActionResult {
         {
             if !can_open_door(args.block) {

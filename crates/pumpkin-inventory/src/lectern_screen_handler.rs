@@ -22,6 +22,12 @@ pub trait LecternController: Send + Sync {
 
     /// Restores the bookless block state after the book was taken.
     fn on_book_taken(&self);
+
+    /// Called when a player clicks "take book", before the book is removed.
+    /// Returns `false` to veto the take.
+    fn on_book_take_click(&self, _player: &dyn InventoryPlayer) -> bool {
+        true
+    }
 }
 
 /// Exposes the current page as container property 0 (see `window_property::Lectern`).
@@ -101,10 +107,14 @@ impl ScreenHandler for LecternScreenHandler {
                 true
             }
             Self::TAKE_BOOK_BUTTON_ID => {
-                let stack = self.inventory.remove_stack(0);
+                let stack = self.inventory.get_stack(0);
                 if stack.is_empty() {
                     return false;
                 }
+                if !self.controller.on_book_take_click(player) {
+                    return false;
+                }
+                let stack = self.inventory.remove_stack(0);
                 self.inventory.mark_dirty();
                 self.controller.on_book_taken();
                 offer_or_drop_stack(player, stack);

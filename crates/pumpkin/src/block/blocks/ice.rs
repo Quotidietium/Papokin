@@ -16,6 +16,17 @@ use crate::world::World;
 
 /// Melts ice at the given position into water (or removes it where water evaporates).
 pub fn melt(world: &Arc<World>, position: &BlockPos) {
+    let mut event = crate::plugin::api::events::block::block_fade::BlockFadeEvent::new(
+        *position,
+        world.get_block(position),
+    );
+    if let Some(server) = world.server.upgrade() {
+        server.plugin_manager.fire_blocking(&server, &mut event);
+    }
+    if event.cancelled {
+        return;
+    }
+
     if world.dimension.water_evaporates {
         world.set_block_state(position, BlockStateId::AIR, BlockFlags::NOTIFY_ALL);
     } else {

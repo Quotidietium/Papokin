@@ -352,6 +352,21 @@ pub trait FlowingFluid: Send + Sync {
             return;
         }
 
+        let mut level_event =
+            crate::plugin::api::events::block::fluid_level_change::FluidLevelChangeEvent::new(
+                *pos,
+                world.clone(),
+                state_id,
+            );
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut level_event);
+        }
+        if level_event.cancelled {
+            return;
+        }
+
         world.set_block_state(pos, state_id, BlockFlags::NOTIFY_ALL);
 
         // Check for infinite source formation after placing new fluid

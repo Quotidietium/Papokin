@@ -31,14 +31,14 @@ const DEFAULT_FUSE: u32 = 80;
 const DEFAULT_POWER: f32 = 4.0;
 
 impl TNTBlock {
-    pub fn prime(world: &Arc<World>, location: &BlockPos) -> bool {
+    pub fn prime(world: &Arc<World>, location: &BlockPos, reason: &str) -> bool {
         if !world.level_info.load().game_rules.tnt_explodes {
             return false;
         }
 
         let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
             *location,
-            "REDSTONE".to_string(),
+            reason.to_string(),
         );
         if let Some(server) = world.server.upgrade() {
             server.plugin_manager.fire_blocking(&server, &mut event);
@@ -87,7 +87,7 @@ impl BlockBehaviour for TNTBlock {
             return BlockActionResult::PassToDefaultBlockAction;
         }
 
-        if Self::prime(args.world, args.position) {
+        if Self::prime(args.world, args.position, "PLAYER_IGNITE") {
             if args.player.gamemode.load() != GameMode::Creative {
                 if item_id == Item::FLINT_AND_STEEL.id {
                     let _ = args.item_stack.damage_item(1);
@@ -111,13 +111,13 @@ impl BlockBehaviour for TNTBlock {
         if args.block != Block::from_state_id(args.old_state_id)
             && block_receives_redstone_power(args.world, args.position)
         {
-            Self::prime(args.world, args.position);
+            Self::prime(args.world, args.position, "REDSTONE");
         }
     }
 
     fn on_neighbor_update(&self, args: OnNeighborUpdateArgs<'_>) {
         if block_receives_redstone_power(args.world, args.position) {
-            Self::prime(args.world, args.position);
+            Self::prime(args.world, args.position, "REDSTONE");
         }
     }
 
@@ -125,14 +125,14 @@ impl BlockBehaviour for TNTBlock {
         if args.player.gamemode.load() != GameMode::Creative {
             let props = TntLikeProperties::from_state_id(args.state.id);
             if props.r#unstable {
-                Self::prime(args.world, args.position);
+                Self::prime(args.world, args.position, "EXPLOSION");
             }
         }
     }
 
     fn on_projectile_hit(&self, args: OnProjectileHitArgs<'_>) {
         if args.projectile.get_entity().is_on_fire() {
-            Self::prime(args.world, args.position);
+            Self::prime(args.world, args.position, "FIRE");
         }
     }
 
@@ -140,6 +140,18 @@ impl BlockBehaviour for TNTBlock {
         if !args.world.level_info.load().game_rules.tnt_explodes {
             return;
         }
+
+        let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
+            *args.position,
+            "EXPLOSION".to_string(),
+        );
+        if let Some(server) = args.world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return;
+        }
+
         let spawn_pos = Vector3::new(
             args.position.0.x as f64 + 0.5,
             args.position.0.y as f64,

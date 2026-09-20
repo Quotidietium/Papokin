@@ -135,6 +135,21 @@ pub trait BlockBehaviour: Send + Sync {
     /// onBlockAdded in source code
     fn placed(&self, _args: PlacedArgs<'_>) {}
 
+    /// Additional blocks that are placed alongside the main block during a multi-block
+    /// placement (e.g. the upper half of a door, the head of a bed, the top of a tall plant).
+    ///
+    /// The main block is already included by the caller; implementations only return the
+    /// extra `(position, state)` pairs that [`Self::placed`] is about to place.
+    fn extra_placed_blocks(
+        &self,
+        _world: &crate::world::World,
+        _block: &Block,
+        _position: &BlockPos,
+        _state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        Vec::new()
+    }
+
     fn player_placed(&self, _args: PlayerPlacedArgs<'_>) {}
 
     fn on_landed_upon(&self, args: OnLandedUponArgs<'_>) {

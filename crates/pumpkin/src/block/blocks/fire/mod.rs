@@ -135,7 +135,20 @@ impl FireBlockBase {
 
             // Apply fire ticks
             if base_entity.fire_ticks.load(Ordering::Relaxed) >= 0 {
-                args.entity.set_on_fire_for(8.0);
+                let mut combust_event =
+                    crate::plugin::api::events::entity::entity_combust_by_block::EntityCombustByBlockEvent::new(
+                        base_entity.entity_id,
+                        *args.position,
+                        8.0,
+                    );
+                if let Some(server) = args.world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut combust_event);
+                }
+                if !combust_event.cancelled {
+                    args.entity.set_on_fire_for(combust_event.duration);
+                }
             }
 
             // Regular fire vs soul fire damage

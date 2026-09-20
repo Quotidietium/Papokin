@@ -183,7 +183,21 @@ impl FluidBehaviour for FlowingLava {
         let base_entity = entity.get_entity();
         if !base_entity.entity_type.fire_immune && !base_entity.fire_immune.load(Ordering::Relaxed)
         {
-            entity.set_on_fire_for(15.0);
+            let world = base_entity.world.load();
+            let mut combust_event =
+                crate::plugin::api::events::entity::entity_combust_by_block::EntityCombustByBlockEvent::new(
+                    base_entity.entity_id,
+                    BlockPos::floored_v(base_entity.pos.load()),
+                    15.0,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut combust_event);
+            }
+            if !combust_event.cancelled {
+                entity.set_on_fire_for(combust_event.duration);
+            }
 
             // Also apply lava damage
             base_entity.damage(entity, 4.0, DamageType::LAVA);

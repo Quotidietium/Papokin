@@ -4,6 +4,7 @@ use pumpkin_data::BlockDirection;
 use pumpkin_data::BlockId;
 use pumpkin_data::BlockStateId;
 use pumpkin_data::block_properties::{DoubleBlockHalf, TallSeagrassLikeProperties};
+use pumpkin_util::math::position::BlockPos;
 use pumpkin_world::world::BlockFlags;
 
 use crate::block::{
@@ -85,6 +86,22 @@ impl BlockBehaviour for TallPlantBlock {
                 BlockFlags::NOTIFY_ALL | BlockFlags::SKIP_BLOCK_ADDED_CALLBACK,
             );
         }
+    }
+
+    fn extra_placed_blocks(
+        &self,
+        _world: &crate::world::World,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        let mut tall_plant_props = TallSeagrassLikeProperties::from_state_id(state_id);
+        tall_plant_props.half = DoubleBlockHalf::Upper;
+
+        vec![(
+            position.offset(BlockDirection::Up.to_offset()),
+            tall_plant_props.to_state_id(block),
+        )]
     }
 
     fn broken(&self, args: BrokenArgs<'_>) {

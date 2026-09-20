@@ -71,6 +71,37 @@ impl LecternController for LecternPageController {
         }
         LecternBlock::set_has_book(&self.world, &self.position, false);
     }
+
+    fn on_book_take_click(&self, player: &dyn InventoryPlayer) -> bool {
+        let Some(book) = self
+            .entity()
+            .map(|entity| pumpkin_inventory::Inventory::get_stack(entity, 0))
+        else {
+            return true;
+        };
+        let Some(entity_player) = player
+            .as_any()
+            .downcast_ref::<crate::entity::player::Player>()
+        else {
+            return true;
+        };
+        let Some(entity_player) = self.world.get_player_by_id(entity_player.entity_id()) else {
+            return true;
+        };
+        let mut take_event =
+            crate::plugin::api::events::player::player_take_lectern_book::PlayerTakeLecternBookEvent {
+                player: entity_player,
+                block_pos: self.position,
+                book,
+                cancelled: false,
+            };
+        if let Some(server) = self.world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut take_event);
+        }
+        !take_event.cancelled
+    }
 }
 
 struct LecternScreenFactory {

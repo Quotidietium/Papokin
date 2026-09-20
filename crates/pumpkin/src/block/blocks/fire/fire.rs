@@ -170,7 +170,7 @@ impl FireBlock {
             }
 
             if old_block == &Block::TNT {
-                TNTBlock::prime(world, pos);
+                TNTBlock::prime(world, pos, "FIRE");
             }
         }
     }

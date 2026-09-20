@@ -77,6 +77,17 @@ impl BlockBehaviour for LayeredSnowBlock {
         // Snow layers melt when lit by block light above level 11,
         // e.g. from a nearby torch.
         if args.world.get_block_light_level(args.position).unwrap_or(0) > 11 {
+            let mut event = crate::plugin::api::events::block::block_fade::BlockFadeEvent::new(
+                *args.position,
+                args.world.get_block(args.position),
+            );
+            if let Some(server) = args.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+
             args.world
                 .break_block(args.position, None, BlockFlags::empty());
         }

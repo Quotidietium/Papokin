@@ -99,8 +99,19 @@ impl BlockBehaviour for VaultBlock {
                 ItemStack::new(2, &Item::IRON_INGOT),
             ];
 
-            for stack in loot_stacks {
-                args.world.drop_stack(args.position, stack);
+            let mut event =
+                crate::plugin::api::events::block::block_dispense_loot::BlockDispenseLootEvent::new(
+                    *args.position,
+                    args.world.clone(),
+                    loot_stacks,
+                );
+            if let Some(server) = args.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if !event.cancelled {
+                for stack in event.items {
+                    args.world.drop_stack(args.position, stack);
+                }
             }
 
             props.vault_state = VaultState::Active;

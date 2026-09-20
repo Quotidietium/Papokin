@@ -790,6 +790,27 @@ impl BlockRegistry {
             return Ok(None);
         }
 
+        let extra_blocks =
+            self.extra_placed_blocks(&world, placed_block, &final_block_pos, new_state);
+        if !extra_blocks.is_empty() {
+            let mut placed_blocks = Vec::with_capacity(extra_blocks.len() + 1);
+            placed_blocks.push((final_block_pos, new_state));
+            placed_blocks.extend(extra_blocks);
+
+            let mut multi_event =
+                crate::plugin::block::block_multi_place::BlockMultiPlaceEvent::new(
+                    player.clone(),
+                    world.clone(),
+                    placed_blocks,
+                );
+            server
+                .plugin_manager
+                .fire_blocking(server, &mut multi_event);
+            if multi_event.cancelled {
+                return Ok(None);
+            }
+        }
+
         let _replaced_id =
             world.set_block_state(&final_block_pos, new_state, BlockFlags::NOTIFY_ALL);
 
@@ -1121,6 +1142,19 @@ impl BlockRegistry {
             });
         }
         block.default_state.id
+    }
+
+    pub fn extra_placed_blocks(
+        &self,
+        world: &World,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        self.get_pumpkin_block(block.id)
+            .map_or_else(Vec::new, |pumpkin_block| {
+                pumpkin_block.extra_placed_blocks(world, block, position, state_id)
+            })
     }
 
     pub fn player_placed(

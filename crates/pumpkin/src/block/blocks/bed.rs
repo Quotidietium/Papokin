@@ -120,6 +120,23 @@ impl BlockBehaviour for BedBlock {
         }
     }
 
+    fn extra_placed_blocks(
+        &self,
+        _world: &World,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        let mut bed_head_props = BedProperties::default(block);
+        bed_head_props.facing = BedProperties::from_state_id(state_id).facing;
+        bed_head_props.part = BedPart::Head;
+
+        vec![(
+            position.offset(bed_head_props.facing.to_offset()),
+            bed_head_props.to_state_id(block),
+        )]
+    }
+
     fn broken(&self, args: BrokenArgs<'_>) {
         let bed_props = BedProperties::from_state_id(args.state.id);
         let other_half_pos = if bed_props.part == BedPart::Head {
