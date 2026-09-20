@@ -1,0 +1,20 @@
+[package]
+name = "pumpkin-e2e-plugin"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Detached from the Pumpkin workspace: plugins are built standalone against the
+# published/path SDK, exactly like third-party plugins.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pumpkin-plugin-api = { path = "../../crates/pumpkin-plugin-api" }
+tracing = "0.1.44"
+
+[profile.dev]
+opt-level = 1
