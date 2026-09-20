@@ -2928,8 +2928,12 @@ impl World {
             client.send_game_packet(data).await;
         }
 
+        let dynamic_recipes = server.recipe_manager.get_dynamic_recipes_internal();
+        let bedrock_crafting = crate::net::bedrock::recipe::crafting_data(&dynamic_recipes);
         let crafting_data = pumpkin_protocol::bedrock::client::CCraftingData {
-            recipes: crate::net::bedrock::recipe::crafting_data().to_vec(),
+            recipes: bedrock_crafting.recipes,
+            potion_mixes: bedrock_crafting.potion_mixes,
+            container_mixes: bedrock_crafting.container_mixes,
             clean_recipes: false,
         };
         if let Ok(data) = client.serialize_packet(&crafting_data) {
