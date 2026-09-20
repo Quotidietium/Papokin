@@ -73,6 +73,52 @@ interface recipe {
         campfire,
     }
 
+    /// Represents a stonecutting recipe.
+    record stonecutting-recipe {
+        /// The input ingredient.
+        ingredient: ingredient,
+        /// The resulting item stack.
+        output: item-stack,
+    }
+
+    /// Represents a smithing transform recipe (e.g. netherite upgrades).
+    record smithing-transform-recipe {
+        /// The template item (e.g. a netherite upgrade smithing template).
+        template: ingredient,
+        /// The base item to transform.
+        base: ingredient,
+        /// The addition item consumed by the transformation.
+        addition: ingredient,
+        /// The resulting item stack.
+        output: item-stack,
+        /// Whether to copy data components from the base item to the result.
+        copy-components: bool,
+    }
+
+    /// Represents a smithing trim recipe (cosmetic armor trims).
+    record smithing-trim-recipe {
+        /// The trim template item.
+        template: ingredient,
+        /// The base item to trim (typically armor).
+        base: ingredient,
+        /// The trim material item (e.g. "minecraft:diamond").
+        addition: ingredient,
+    }
+
+    /// Represents a brewing recipe.
+    record brewing-recipe {
+        /// The container item id (e.g. "minecraft:potion").
+        input-item: string,
+        /// The required input potion type id (e.g. "minecraft:water"), if any.
+        input-potion: option<string>,
+        /// The reagent item id (e.g. "minecraft:blaze_powder").
+        reagent: string,
+        /// The resulting container item id.
+        output-item: string,
+        /// The resulting potion type id, if any.
+        output-potion: option<string>,
+    }
+
     /// Common interface for registering recipes.
     resource recipe-manager {
         /// Registers a shaped crafting recipe.
@@ -83,6 +129,18 @@ interface recipe {
 
         /// Registers a cooking recipe.
         register-cooking: func(id: string, station-type: cooking-type, recipe: cooking-recipe);
+
+        /// Registers a stonecutting recipe.
+        register-stonecutting: func(id: string, recipe: stonecutting-recipe);
+
+        /// Registers a smithing transform recipe.
+        register-smithing-transform: func(id: string, recipe: smithing-transform-recipe);
+
+        /// Registers a smithing trim recipe.
+        register-smithing-trim: func(id: string, recipe: smithing-trim-recipe);
+
+        /// Registers a brewing recipe.
+        register-brewing: func(id: string, recipe: brewing-recipe);
     }
 }
 

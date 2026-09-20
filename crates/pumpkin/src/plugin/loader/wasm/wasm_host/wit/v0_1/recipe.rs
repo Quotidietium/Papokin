@@ -1,14 +1,17 @@
 use crate::plugin::loader::wasm::wasm_host::state::PluginHostState;
 use crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::recipe::{
-    CookingRecipe as WitCookingRecipe, CookingType as WitCookingType, Host as RecipeHost,
-    HostRecipeManager, Ingredient as WitIngredient, RecipeCategory as WitRecipeCategory,
+    BrewingRecipe as WitBrewingRecipe, CookingRecipe as WitCookingRecipe,
+    CookingType as WitCookingType, Host as RecipeHost, HostRecipeManager,
+    Ingredient as WitIngredient, RecipeCategory as WitRecipeCategory,
     RecipeManager as WitRecipeManager, ShapedRecipe as WitShapedRecipe,
-    ShapelessRecipe as WitShapelessRecipe,
+    ShapelessRecipe as WitShapelessRecipe, SmithingTransformRecipe as WitSmithingTransformRecipe,
+    SmithingTrimRecipe as WitSmithingTrimRecipe, StonecuttingRecipe as WitStonecuttingRecipe,
 };
 use pumpkin_data::recipes::RecipeCategoryTypes;
 use pumpkin_protocol::codec::recipe::{
-    DynamicRecipe, OwnedCookingRecipe, OwnedCookingRecipeType, OwnedCraftingRecipe,
-    OwnedRecipeIngredient, OwnedRecipeResult,
+    DynamicRecipe, OwnedBrewingRecipe, OwnedCookingRecipe, OwnedCookingRecipeType,
+    OwnedCraftingRecipe, OwnedRecipeIngredient, OwnedRecipeResult, OwnedSmithingRecipe,
+    OwnedStonecuttingRecipe,
 };
 use wasmtime::component::Resource;
 
@@ -140,6 +143,113 @@ impl HostRecipeManager for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
         server.recipe_manager.add_recipe(dynamic_recipe);
+        Ok(())
+    }
+
+    async fn register_stonecutting(
+        &mut self,
+        _res: Resource<WitRecipeManager>,
+        id: String,
+        recipe: WitStonecuttingRecipe,
+    ) -> wasmtime::Result<()> {
+        let result_stack = self.get_item_stack(&recipe.output)?;
+        let result_stack = result_stack.lock().await;
+
+        let owned_recipe = OwnedStonecuttingRecipe {
+            recipe_id: id,
+            ingredient: to_owned_ingredient(recipe.ingredient),
+            result: OwnedRecipeResult {
+                item_id: result_stack.item.registry_key.to_string(),
+                count: result_stack.item_count,
+            },
+        };
+
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        server
+            .recipe_manager
+            .add_recipe(DynamicRecipe::Stonecutting(owned_recipe));
+        Ok(())
+    }
+
+    async fn register_smithing_transform(
+        &mut self,
+        _res: Resource<WitRecipeManager>,
+        id: String,
+        recipe: WitSmithingTransformRecipe,
+    ) -> wasmtime::Result<()> {
+        let result_stack = self.get_item_stack(&recipe.output)?;
+        let result_stack = result_stack.lock().await;
+
+        let owned_recipe = OwnedSmithingRecipe::Transform {
+            recipe_id: id,
+            template: to_owned_ingredient(recipe.template),
+            base: to_owned_ingredient(recipe.base),
+            addition: to_owned_ingredient(recipe.addition),
+            result: OwnedRecipeResult {
+                item_id: result_stack.item.registry_key.to_string(),
+                count: result_stack.item_count,
+            },
+            copy_components: recipe.copy_components,
+        };
+
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        server
+            .recipe_manager
+            .add_recipe(DynamicRecipe::Smithing(owned_recipe));
+        Ok(())
+    }
+
+    async fn register_smithing_trim(
+        &mut self,
+        _res: Resource<WitRecipeManager>,
+        id: String,
+        recipe: WitSmithingTrimRecipe,
+    ) -> wasmtime::Result<()> {
+        let owned_recipe = OwnedSmithingRecipe::Trim {
+            recipe_id: id,
+            template: to_owned_ingredient(recipe.template),
+            base: to_owned_ingredient(recipe.base),
+            addition: to_owned_ingredient(recipe.addition),
+        };
+
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        server
+            .recipe_manager
+            .add_recipe(DynamicRecipe::Smithing(owned_recipe));
+        Ok(())
+    }
+
+    async fn register_brewing(
+        &mut self,
+        _res: Resource<WitRecipeManager>,
+        id: String,
+        recipe: WitBrewingRecipe,
+    ) -> wasmtime::Result<()> {
+        let owned_recipe = OwnedBrewingRecipe {
+            recipe_id: id,
+            input_item: recipe.input_item,
+            input_potion: recipe.input_potion,
+            reagent: recipe.reagent,
+            output_item: recipe.output_item,
+            output_potion: recipe.output_potion,
+        };
+
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        server
+            .recipe_manager
+            .add_recipe(DynamicRecipe::Brewing(owned_recipe));
         Ok(())
     }
 

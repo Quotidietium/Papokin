@@ -1,8 +1,9 @@
 //! Plugin recipe registration and builder utilities.
 //!
 //! This module provides a fluent, type-safe API for defining and registering custom
-//! crafting recipes (shaped and shapeless) as well as cooking recipes (smelting, blasting,
-//! smoking, and campfire).
+//! crafting recipes (shaped and shapeless), cooking recipes (smelting, blasting,
+//! smoking, and campfire), stonecutting recipes, smithing transform and trim recipes,
+//! and brewing recipes.
 //!
 //! # Examples
 //!
@@ -72,12 +73,80 @@
 //!     ).expect("failed to register smelting recipe");
 //! }
 //! ```
+//!
+//! ## Registering a Stonecutting Recipe
+//! ```rust,ignore
+//! use pumpkin_plugin_api::{recipe::StonecuttingRecipeBuilder, ItemStack, Server};
+//!
+//! fn register_recipes(server: &Server) {
+//!     server.register_recipe(
+//!         StonecuttingRecipeBuilder::new(
+//!             "my_plugin:glass_panes",
+//!             "minecraft:glass",
+//!             ItemStack::new("minecraft:glass_pane", 4),
+//!         )
+//!     ).expect("failed to register stonecutting recipe");
+//! }
+//! ```
+//!
+//! ## Registering a Smithing Transform Recipe
+//! ```rust,ignore
+//! use pumpkin_plugin_api::{recipe::SmithingTransformRecipeBuilder, ItemStack, Server};
+//!
+//! fn register_recipes(server: &Server) {
+//!     server.register_recipe(
+//!         SmithingTransformRecipeBuilder::new(
+//!             "my_plugin:netherite_chestplate",
+//!             "minecraft:netherite_upgrade_smithing_template",
+//!             "minecraft:diamond_chestplate",
+//!             "minecraft:netherite_ingot",
+//!             ItemStack::new("minecraft:netherite_chestplate", 1),
+//!         )
+//!         .copy_components(true)
+//!     ).expect("failed to register smithing transform recipe");
+//! }
+//! ```
+//!
+//! ## Registering a Smithing Trim Recipe
+//! ```rust,ignore
+//! use pumpkin_plugin_api::{recipe::SmithingTrimRecipeBuilder, Server};
+//!
+//! fn register_recipes(server: &Server) {
+//!     server.register_recipe(
+//!         SmithingTrimRecipeBuilder::new(
+//!             "my_plugin:coast_trim",
+//!             "minecraft:coast_armor_trim_smithing_template",
+//!             "minecraft:iron_chestplate",
+//!             "minecraft:amethyst_shard",
+//!         )
+//!     ).expect("failed to register smithing trim recipe");
+//! }
+//! ```
+//!
+//! ## Registering a Brewing Recipe
+//! ```rust,ignore
+//! use pumpkin_plugin_api::{recipe::BrewingRecipeBuilder, Server};
+//!
+//! fn register_recipes(server: &Server) {
+//!     server.register_recipe(
+//!         BrewingRecipeBuilder::new(
+//!             "my_plugin:splash_water",
+//!             "minecraft:potion",
+//!             "minecraft:gunpowder",
+//!             "minecraft:splash_potion",
+//!         )
+//!         .input_potion("minecraft:water")
+//!         .output_potion("minecraft:water")
+//!     ).expect("failed to register brewing recipe");
+//! }
+//! ```
 
 use std::collections::HashMap;
 
 pub use crate::wit::pumpkin::plugin::recipe::{
-    CookingRecipe, CookingType, Ingredient as WitIngredient, RecipeCategory, RecipeManager,
-    ShapedRecipe, ShapelessRecipe,
+    BrewingRecipe, CookingRecipe, CookingType, Ingredient as WitIngredient, RecipeCategory,
+    RecipeManager, ShapedRecipe, ShapelessRecipe, SmithingTransformRecipe, SmithingTrimRecipe,
+    StonecuttingRecipe,
 };
 use crate::{Context, ItemStack, Server};
 
@@ -238,6 +307,19 @@ impl From<WitIngredient> for Ingredient {
     }
 }
 
+/// Normalizes an item or potion identifier to a fully namespaced registry key.
+///
+/// If no namespace is provided (e.g., `"potion"`), `"minecraft:"` is prepended.
+/// Empty strings are returned unchanged so validation can flag them.
+fn normalize_id(id: impl AsRef<str>) -> String {
+    let s = id.as_ref();
+    if s.is_empty() || s.contains(':') {
+        s.to_string()
+    } else {
+        format!("minecraft:{s}")
+    }
+}
+
 /// Errors that can occur when building or validating a recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecipeError {
@@ -267,6 +349,8 @@ pub enum RecipeError {
     TooManyIngredients(usize),
     /// No input ingredient provided for cooking recipe.
     MissingCookingInput,
+    /// A required brewing recipe field is empty.
+    EmptyBrewingField(&'static str),
 }
 
 impl std::fmt::Display for RecipeError {
@@ -298,6 +382,9 @@ impl std::fmt::Display for RecipeError {
                 )
             }
             Self::MissingCookingInput => write!(f, "cooking recipe requires an input ingredient"),
+            Self::EmptyBrewingField(field) => {
+                write!(f, "brewing recipe field '{field}' cannot be empty")
+            }
         }
     }
 }
@@ -811,6 +898,443 @@ impl CookingRecipeBuilder {
     }
 }
 
+/// Builder for constructing and registering stonecutting recipes.
+pub struct StonecuttingRecipeBuilder {
+    id: String,
+    ingredient: Ingredient,
+    output: ItemStack,
+}
+
+impl StonecuttingRecipeBuilder {
+    /// Creates a new stonecutting recipe builder with a unique recipe ID, input ingredient,
+    /// and output item stack.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        ingredient: impl Into<Ingredient>,
+        output: ItemStack,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            ingredient: ingredient.into(),
+            output,
+        }
+    }
+
+    /// Sets the input ingredient.
+    #[must_use]
+    pub fn ingredient(mut self, ingredient: impl Into<Ingredient>) -> Self {
+        self.ingredient = ingredient.into();
+        self
+    }
+
+    /// Alias for [`StonecuttingRecipeBuilder::ingredient`].
+    #[must_use]
+    pub fn input(self, ingredient: impl Into<Ingredient>) -> Self {
+        self.ingredient(ingredient)
+    }
+
+    /// Validates the recipe configuration.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if the ID is empty.
+    pub fn validate(&self) -> Result<(), RecipeError> {
+        if self.id.is_empty() {
+            return Err(RecipeError::EmptyId);
+        }
+        Ok(())
+    }
+
+    /// Builds the stonecutting recipe structure after validating.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn build(self) -> Result<(String, StonecuttingRecipe), RecipeError> {
+        self.validate()?;
+        let recipe = StonecuttingRecipe {
+            ingredient: self.ingredient.into(),
+            output: self.output,
+        };
+        Ok((self.id, recipe))
+    }
+
+    /// Registers this stonecutting recipe directly with the provided [`RecipeManager`].
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_stonecutting(&id, recipe);
+        Ok(())
+    }
+
+    /// Registers this stonecutting recipe with the server.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_server(self, server: &Server) -> Result<(), RecipeError> {
+        let manager = server.get_recipe_manager();
+        self.register(&manager)
+    }
+
+    /// Registers this stonecutting recipe with the plugin context.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_context(self, context: &Context) -> Result<(), RecipeError> {
+        let manager = context.get_recipe_manager();
+        self.register(&manager)
+    }
+}
+
+/// Builder for constructing and registering smithing transform recipes (e.g. netherite upgrades).
+pub struct SmithingTransformRecipeBuilder {
+    id: String,
+    template: Ingredient,
+    base: Ingredient,
+    addition: Ingredient,
+    output: ItemStack,
+    copy_components: bool,
+}
+
+impl SmithingTransformRecipeBuilder {
+    /// Creates a new smithing transform recipe builder with a unique recipe ID, the template,
+    /// base, and addition ingredients, and the output item stack.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        template: impl Into<Ingredient>,
+        base: impl Into<Ingredient>,
+        addition: impl Into<Ingredient>,
+        output: ItemStack,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            template: template.into(),
+            base: base.into(),
+            addition: addition.into(),
+            output,
+            copy_components: false,
+        }
+    }
+
+    /// Sets the template item (e.g. a netherite upgrade smithing template).
+    #[must_use]
+    pub fn template(mut self, template: impl Into<Ingredient>) -> Self {
+        self.template = template.into();
+        self
+    }
+
+    /// Sets the base item to transform.
+    #[must_use]
+    pub fn base(mut self, base: impl Into<Ingredient>) -> Self {
+        self.base = base.into();
+        self
+    }
+
+    /// Sets the addition item consumed by the transformation.
+    #[must_use]
+    pub fn addition(mut self, addition: impl Into<Ingredient>) -> Self {
+        self.addition = addition.into();
+        self
+    }
+
+    /// Sets whether to copy data components from the base item to the result (default `false`).
+    #[must_use]
+    pub const fn copy_components(mut self, copy: bool) -> Self {
+        self.copy_components = copy;
+        self
+    }
+
+    /// Validates the recipe configuration.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if the ID is empty.
+    pub fn validate(&self) -> Result<(), RecipeError> {
+        if self.id.is_empty() {
+            return Err(RecipeError::EmptyId);
+        }
+        Ok(())
+    }
+
+    /// Builds the smithing transform recipe structure after validating.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn build(self) -> Result<(String, SmithingTransformRecipe), RecipeError> {
+        self.validate()?;
+        let recipe = SmithingTransformRecipe {
+            template: self.template.into(),
+            base: self.base.into(),
+            addition: self.addition.into(),
+            output: self.output,
+            copy_components: self.copy_components,
+        };
+        Ok((self.id, recipe))
+    }
+
+    /// Registers this smithing transform recipe directly with the provided [`RecipeManager`].
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_smithing_transform(&id, recipe);
+        Ok(())
+    }
+
+    /// Registers this smithing transform recipe with the server.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_server(self, server: &Server) -> Result<(), RecipeError> {
+        let manager = server.get_recipe_manager();
+        self.register(&manager)
+    }
+
+    /// Registers this smithing transform recipe with the plugin context.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_context(self, context: &Context) -> Result<(), RecipeError> {
+        let manager = context.get_recipe_manager();
+        self.register(&manager)
+    }
+}
+
+/// Builder for constructing and registering smithing trim recipes (cosmetic armor trims).
+pub struct SmithingTrimRecipeBuilder {
+    id: String,
+    template: Ingredient,
+    base: Ingredient,
+    addition: Ingredient,
+}
+
+impl SmithingTrimRecipeBuilder {
+    /// Creates a new smithing trim recipe builder with a unique recipe ID and the template,
+    /// base, and addition (trim material) ingredients.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        template: impl Into<Ingredient>,
+        base: impl Into<Ingredient>,
+        addition: impl Into<Ingredient>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            template: template.into(),
+            base: base.into(),
+            addition: addition.into(),
+        }
+    }
+
+    /// Sets the trim template item.
+    #[must_use]
+    pub fn template(mut self, template: impl Into<Ingredient>) -> Self {
+        self.template = template.into();
+        self
+    }
+
+    /// Sets the base item to trim (typically armor).
+    #[must_use]
+    pub fn base(mut self, base: impl Into<Ingredient>) -> Self {
+        self.base = base.into();
+        self
+    }
+
+    /// Sets the trim material item (e.g. `"minecraft:diamond"`).
+    #[must_use]
+    pub fn addition(mut self, addition: impl Into<Ingredient>) -> Self {
+        self.addition = addition.into();
+        self
+    }
+
+    /// Validates the recipe configuration.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if the ID is empty.
+    pub fn validate(&self) -> Result<(), RecipeError> {
+        if self.id.is_empty() {
+            return Err(RecipeError::EmptyId);
+        }
+        Ok(())
+    }
+
+    /// Builds the smithing trim recipe structure after validating.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn build(self) -> Result<(String, SmithingTrimRecipe), RecipeError> {
+        self.validate()?;
+        let recipe = SmithingTrimRecipe {
+            template: self.template.into(),
+            base: self.base.into(),
+            addition: self.addition.into(),
+        };
+        Ok((self.id, recipe))
+    }
+
+    /// Registers this smithing trim recipe directly with the provided [`RecipeManager`].
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_smithing_trim(&id, &recipe);
+        Ok(())
+    }
+
+    /// Registers this smithing trim recipe with the server.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_server(self, server: &Server) -> Result<(), RecipeError> {
+        let manager = server.get_recipe_manager();
+        self.register(&manager)
+    }
+
+    /// Registers this smithing trim recipe with the plugin context.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_context(self, context: &Context) -> Result<(), RecipeError> {
+        let manager = context.get_recipe_manager();
+        self.register(&manager)
+    }
+}
+
+/// Builder for constructing and registering brewing recipes.
+pub struct BrewingRecipeBuilder {
+    id: String,
+    input_item: String,
+    input_potion: Option<String>,
+    reagent: String,
+    output_item: String,
+    output_potion: Option<String>,
+}
+
+impl BrewingRecipeBuilder {
+    /// Creates a new brewing recipe builder with a unique recipe ID, the container item id,
+    /// the reagent item id, and the resulting container item id.
+    ///
+    /// Item ids without a namespace are normalized to the `minecraft:` namespace.
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        input_item: impl Into<String>,
+        reagent: impl Into<String>,
+        output_item: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            input_item: normalize_id(input_item.into()),
+            input_potion: None,
+            reagent: normalize_id(reagent.into()),
+            output_item: normalize_id(output_item.into()),
+            output_potion: None,
+        }
+    }
+
+    /// Sets the container item id (e.g. `"minecraft:potion"`).
+    #[must_use]
+    pub fn input_item(mut self, input_item: impl Into<String>) -> Self {
+        self.input_item = normalize_id(input_item.into());
+        self
+    }
+
+    /// Sets the required input potion type id (e.g. `"minecraft:water"`).
+    #[must_use]
+    pub fn input_potion(mut self, potion: impl Into<String>) -> Self {
+        self.input_potion = Some(normalize_id(potion.into()));
+        self
+    }
+
+    /// Sets the reagent item id (e.g. `"minecraft:blaze_powder"`).
+    #[must_use]
+    pub fn reagent(mut self, reagent: impl Into<String>) -> Self {
+        self.reagent = normalize_id(reagent.into());
+        self
+    }
+
+    /// Sets the resulting container item id.
+    #[must_use]
+    pub fn output_item(mut self, output_item: impl Into<String>) -> Self {
+        self.output_item = normalize_id(output_item.into());
+        self
+    }
+
+    /// Sets the resulting potion type id.
+    #[must_use]
+    pub fn output_potion(mut self, potion: impl Into<String>) -> Self {
+        self.output_potion = Some(normalize_id(potion.into()));
+        self
+    }
+
+    /// Validates the recipe configuration.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if the ID is empty or a required field is empty.
+    pub fn validate(&self) -> Result<(), RecipeError> {
+        if self.id.is_empty() {
+            return Err(RecipeError::EmptyId);
+        }
+        if self.input_item.is_empty() {
+            return Err(RecipeError::EmptyBrewingField("input_item"));
+        }
+        if self.reagent.is_empty() {
+            return Err(RecipeError::EmptyBrewingField("reagent"));
+        }
+        if self.output_item.is_empty() {
+            return Err(RecipeError::EmptyBrewingField("output_item"));
+        }
+        Ok(())
+    }
+
+    /// Builds the brewing recipe structure after validating.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn build(self) -> Result<(String, BrewingRecipe), RecipeError> {
+        self.validate()?;
+        let recipe = BrewingRecipe {
+            input_item: self.input_item,
+            input_potion: self.input_potion,
+            reagent: self.reagent,
+            output_item: self.output_item,
+            output_potion: self.output_potion,
+        };
+        Ok((self.id, recipe))
+    }
+
+    /// Registers this brewing recipe directly with the provided [`RecipeManager`].
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_brewing(&id, &recipe);
+        Ok(())
+    }
+
+    /// Registers this brewing recipe with the server.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_server(self, server: &Server) -> Result<(), RecipeError> {
+        let manager = server.get_recipe_manager();
+        self.register(&manager)
+    }
+
+    /// Registers this brewing recipe with the plugin context.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_to_context(self, context: &Context) -> Result<(), RecipeError> {
+        let manager = context.get_recipe_manager();
+        self.register(&manager)
+    }
+}
+
 /// Trait for recipe types that can be registered with a [`RecipeManager`].
 pub trait RegistrableRecipe {
     /// Registers this recipe with the provided recipe manager.
@@ -844,6 +1368,38 @@ impl RegistrableRecipe for CookingRecipeBuilder {
     }
 }
 
+impl RegistrableRecipe for StonecuttingRecipeBuilder {
+    fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_stonecutting(&id, recipe);
+        Ok(())
+    }
+}
+
+impl RegistrableRecipe for SmithingTransformRecipeBuilder {
+    fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_smithing_transform(&id, recipe);
+        Ok(())
+    }
+}
+
+impl RegistrableRecipe for SmithingTrimRecipeBuilder {
+    fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_smithing_trim(&id, &recipe);
+        Ok(())
+    }
+}
+
+impl RegistrableRecipe for BrewingRecipeBuilder {
+    fn register(self, manager: &RecipeManager) -> Result<(), RecipeError> {
+        let (id, recipe) = self.build()?;
+        manager.register_brewing(&id, &recipe);
+        Ok(())
+    }
+}
+
 impl Context {
     /// Returns the global recipe manager for registering custom recipes.
     #[must_use]
@@ -853,7 +1409,10 @@ impl Context {
 
     /// Registers a custom recipe with the server.
     ///
-    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`], [`CookingRecipeBuilder`]).
+    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`],
+    /// [`CookingRecipeBuilder`], [`StonecuttingRecipeBuilder`],
+    /// [`SmithingTransformRecipeBuilder`], [`SmithingTrimRecipeBuilder`],
+    /// [`BrewingRecipeBuilder`]).
     ///
     /// # Errors
     /// Returns [`RecipeError`] if validation fails.
@@ -887,6 +1446,50 @@ impl Context {
     pub fn register_cooking_recipe(
         &self,
         builder: CookingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a stonecutting recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_stonecutting_recipe(
+        &self,
+        builder: StonecuttingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a smithing transform recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_transform_recipe(
+        &self,
+        builder: SmithingTransformRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a smithing trim recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_trim_recipe(
+        &self,
+        builder: SmithingTrimRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a brewing recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_brewing_recipe(
+        &self,
+        builder: BrewingRecipeBuilder,
     ) -> Result<(), RecipeError> {
         self.register_recipe(builder)
     }
@@ -895,7 +1498,10 @@ impl Context {
 impl Server {
     /// Registers a custom recipe with the server.
     ///
-    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`], [`CookingRecipeBuilder`]).
+    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`],
+    /// [`CookingRecipeBuilder`], [`StonecuttingRecipeBuilder`],
+    /// [`SmithingTransformRecipeBuilder`], [`SmithingTrimRecipeBuilder`],
+    /// [`BrewingRecipeBuilder`]).
     ///
     /// # Errors
     /// Returns [`RecipeError`] if validation fails.
@@ -932,12 +1538,59 @@ impl Server {
     ) -> Result<(), RecipeError> {
         self.register_recipe(builder)
     }
+
+    /// Registers a stonecutting recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_stonecutting_recipe(
+        &self,
+        builder: StonecuttingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a smithing transform recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_transform_recipe(
+        &self,
+        builder: SmithingTransformRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a smithing trim recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_trim_recipe(
+        &self,
+        builder: SmithingTrimRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
+
+    /// Registers a brewing recipe.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_brewing_recipe(
+        &self,
+        builder: BrewingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register_recipe(builder)
+    }
 }
 
 impl RecipeManager {
     /// Registers a custom recipe with the server.
     ///
-    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`], [`CookingRecipeBuilder`]).
+    /// Accepts any recipe builder ([`ShapedRecipeBuilder`], [`ShapelessRecipeBuilder`],
+    /// [`CookingRecipeBuilder`], [`StonecuttingRecipeBuilder`],
+    /// [`SmithingTransformRecipeBuilder`], [`SmithingTrimRecipeBuilder`],
+    /// [`BrewingRecipeBuilder`]).
     ///
     /// # Examples
     /// ```rust,ignore
@@ -981,6 +1634,50 @@ impl RecipeManager {
     pub fn register_cooking_recipe(
         &self,
         builder: CookingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register(builder)
+    }
+
+    /// Registers a stonecutting recipe from a builder.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_stonecutting_recipe(
+        &self,
+        builder: StonecuttingRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register(builder)
+    }
+
+    /// Registers a smithing transform recipe from a builder.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_transform_recipe(
+        &self,
+        builder: SmithingTransformRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register(builder)
+    }
+
+    /// Registers a smithing trim recipe from a builder.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_smithing_trim_recipe(
+        &self,
+        builder: SmithingTrimRecipeBuilder,
+    ) -> Result<(), RecipeError> {
+        self.register(builder)
+    }
+
+    /// Registers a brewing recipe from a builder.
+    ///
+    /// # Errors
+    /// Returns [`RecipeError`] if validation fails.
+    pub fn register_brewing_recipe(
+        &self,
+        builder: BrewingRecipeBuilder,
     ) -> Result<(), RecipeError> {
         self.register(builder)
     }
@@ -1093,5 +1790,79 @@ mod tests {
         assert_eq!(campfire.cooking_time, 600);
         assert_eq!(campfire.cooking_type, CookingType::Campfire);
         std::mem::forget(campfire);
+    }
+
+    #[test]
+    fn stonecutting_recipe_validation_errors() {
+        let dummy_output = unsafe { std::mem::zeroed() };
+        let builder = StonecuttingRecipeBuilder::new("", "glass", dummy_output);
+        assert_eq!(builder.validate(), Err(RecipeError::EmptyId));
+        std::mem::forget(builder);
+
+        let dummy_output = unsafe { std::mem::zeroed() };
+        let builder = StonecuttingRecipeBuilder::new("test:cut", "glass", dummy_output);
+        assert_eq!(builder.validate(), Ok(()));
+        std::mem::forget(builder);
+    }
+
+    #[test]
+    fn smithing_recipe_defaults() {
+        let dummy_output = unsafe { std::mem::zeroed() };
+        let transform = SmithingTransformRecipeBuilder::new(
+            "test:netherite",
+            "netherite_upgrade_smithing_template",
+            "diamond_chestplate",
+            "netherite_ingot",
+            dummy_output,
+        );
+        assert!(!transform.copy_components);
+        assert_eq!(transform.validate(), Ok(()));
+        std::mem::forget(transform);
+
+        let trim = SmithingTrimRecipeBuilder::new(
+            "test:trim",
+            "coast_armor_trim_smithing_template",
+            "iron_chestplate",
+            "amethyst_shard",
+        );
+        assert_eq!(trim.validate(), Ok(()));
+
+        let trim = SmithingTrimRecipeBuilder::new("", "template", "base", "addition");
+        assert_eq!(trim.validate(), Err(RecipeError::EmptyId));
+    }
+
+    #[test]
+    fn brewing_recipe_validation_and_normalization() {
+        let builder =
+            BrewingRecipeBuilder::new("test:brew", "potion", "gunpowder", "splash_potion")
+                .input_potion("water")
+                .output_potion("minecraft:thick");
+        assert_eq!(builder.validate(), Ok(()));
+        assert_eq!(builder.input_item, "minecraft:potion");
+        assert_eq!(builder.reagent, "minecraft:gunpowder");
+        assert_eq!(builder.output_item, "minecraft:splash_potion");
+        assert_eq!(builder.input_potion.as_deref(), Some("minecraft:water"));
+        assert_eq!(builder.output_potion.as_deref(), Some("minecraft:thick"));
+
+        let builder = BrewingRecipeBuilder::new("", "potion", "gunpowder", "splash_potion");
+        assert_eq!(builder.validate(), Err(RecipeError::EmptyId));
+
+        let builder = BrewingRecipeBuilder::new("test:brew", "", "gunpowder", "splash_potion");
+        assert_eq!(
+            builder.validate(),
+            Err(RecipeError::EmptyBrewingField("input_item"))
+        );
+
+        let builder = BrewingRecipeBuilder::new("test:brew", "potion", "", "splash_potion");
+        assert_eq!(
+            builder.validate(),
+            Err(RecipeError::EmptyBrewingField("reagent"))
+        );
+
+        let builder = BrewingRecipeBuilder::new("test:brew", "potion", "gunpowder", "");
+        assert_eq!(
+            builder.validate(),
+            Err(RecipeError::EmptyBrewingField("output_item"))
+        );
     }
 }
