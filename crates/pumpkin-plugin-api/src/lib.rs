@@ -33,6 +33,10 @@
 //!             description: "An example plugin.".into(),
 //!             dependencies: vec![],
 //!             permissions: vec![permissions::NETWORK_DNS.into()],
+//!             load_after: vec!["some-lib".into()],
+//!             load_before: vec![],
+//!             provides: vec![],
+//!             load_order: LoadOrder::PostWorld,
 //!         }
 //!     }
 //! }
@@ -79,6 +83,8 @@ use std::sync::OnceLock;
 pub mod block;
 /// Plugin command registration and handling utilities.
 pub mod commands;
+/// Plugin configuration files (getConfig equivalent).
+pub mod config;
 /// Datapack management and query utilities.
 pub mod datapack;
 /// Display and interaction entity utilities and builders.
@@ -95,6 +101,8 @@ pub(crate) mod generated;
 pub mod inventory;
 /// Typed item definitions and `ItemStack` construction helpers.
 pub mod item;
+/// Plugin messaging channels (Messenger equivalent).
+pub mod messaging;
 /// Specialized mob entity wrappers and helpers.
 pub mod mobs;
 /// Constants for plugin permissions.
@@ -105,6 +113,8 @@ pub mod permissions;
 pub mod recipe;
 /// Scheduler utilities.
 pub mod scheduler;
+/// Cross-plugin service registry (ServicesManager equivalent).
+pub mod services;
 /// Scoreboard team management and builder utilities.
 pub mod team;
 /// Custom world and chunk generation utilities and traits.
@@ -227,11 +237,27 @@ pub struct PluginMetadata {
     pub authors: Vec<String>,
     /// A short description of what the plugin does.
     pub description: String,
-    /// The list of plugin dependencies.
+    /// Hard dependencies: the plugin fails to load when any of these plugins is
+    /// missing. May reference capability names declared in other plugins'
+    /// `provides`.
     pub dependencies: Vec<String>,
     /// The list of permissions requested by the plugin.
     pub permissions: Vec<String>,
+    /// Soft ordering edges: load this plugin after the named plugins when they
+    /// are present. Missing names are ignored.
+    pub load_after: Vec<String>,
+    /// Soft ordering edges: load this plugin before the named plugins when they
+    /// are present. Missing names are ignored.
+    pub load_before: Vec<String>,
+    /// Capability aliases this plugin satisfies for other plugins' dependency
+    /// edges.
+    pub provides: Vec<String>,
+    /// The startup phase this plugin loads in.
+    pub load_order: LoadOrder,
 }
+
+/// When a plugin should be loaded relative to server startup.
+pub use wit::exports::pumpkin::plugin::metadata::LoadOrder;
 
 impl wit::exports::pumpkin::plugin::metadata::Guest for Component {
     /// Returns the plugin metadata to the host.
@@ -244,6 +270,10 @@ impl wit::exports::pumpkin::plugin::metadata::Guest for Component {
             description: metadata.description,
             dependencies: metadata.dependencies,
             permissions: metadata.permissions,
+            load_after: metadata.load_after,
+            load_before: metadata.load_before,
+            provides: metadata.provides,
+            load_order: metadata.load_order,
         }
     }
 }
@@ -252,6 +282,16 @@ impl wit::Guest for Component {
     /// WIT entry point — delegates to [`Plugin::on_load`].
     fn on_load(context: Context) -> Result<(), String> {
         plugin().on_load(context)
+    }
+
+    /// WIT entry point — delegates to [`Plugin::on_enable`].
+    fn on_enable(context: Context) -> Result<(), String> {
+        plugin().on_enable(context)
+    }
+
+    /// WIT entry point — delegates to [`Plugin::on_disable`].
+    fn on_disable(context: Context) -> Result<(), String> {
+        plugin().on_disable(context)
     }
 
     /// WIT entry point — delegates to [`Plugin::on_unload`].
@@ -398,6 +438,11 @@ impl wit::Guest for Component {
         plugin().handle_ipc_message(sender, message)
     }
 
+    /// WIT entry point — dispatches a player plugin message on a registered channel.
+    fn handle_plugin_message(player_uuid: String, channel: String, data: Vec<u8>) {
+        plugin().on_plugin_message(&player_uuid, &channel, &data);
+    }
+
     fn handle_generate_phase(
         generator_id: u32,
         phase: wit::pumpkin::plugin::world::GenerationPhase,
@@ -449,10 +494,36 @@ pub trait Plugin: Send + Sync {
     /// Returns the metadata for this plugin.
     fn metadata(&self) -> PluginMetadata;
 
+    /// Returns the plugin's default config as a TOML string, used by
+    /// [`Context::load_config`](crate::Context::load_config) to merge over the
+    /// stored config file. Return an empty string when the plugin ships no
+    /// defaults.
+    fn config_defaults(&self) -> String {
+        String::new()
+    }
+
     /// Called when the plugin is loaded by the server.
     ///
     /// Use this to register event handlers, commands, and perform any setup work.
     fn on_load(&self, _context: Context) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called to enable the plugin after a successful load.
+    ///
+    /// A failing enable does not unload the plugin: it stays loaded but
+    /// inactive — its event handlers and commands are unregistered. This maps
+    /// to Paper's `onEnable` failure grading.
+    fn on_enable(&self, _context: Context) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called to disable an active plugin, before [`on_unload`](Plugin::on_unload)
+    /// during unload and shutdown.
+    ///
+    /// Use this to pause work and release runtime resources while keeping the
+    /// plugin's stored data intact.
+    fn on_disable(&self, _context: Context) -> Result<()> {
         Ok(())
     }
 
@@ -471,6 +542,12 @@ pub trait Plugin: Send + Sync {
     ) -> Result<wit::IpcMessage, String> {
         Err("This plugin cannot receive messages.".to_string())
     }
+
+    /// Called when a player sends a plugin message on a channel this plugin
+    /// registered via the messaging interface.
+    ///
+    /// The default implementation discards the message.
+    fn on_plugin_message(&self, _player_uuid: &str, _channel: &str, _data: &[u8]) {}
 }
 
 #[doc(hidden)]
@@ -492,6 +569,11 @@ fn plugin() -> &'static dyn Plugin {
         .get()
         .map(Box::as_ref)
         .expect("PLUGIN must be initialized with register_plugin before use")
+}
+
+/// Returns the registered plugin's [`Plugin::config_defaults`] string.
+pub(crate) fn config_defaults() -> String {
+    plugin().config_defaults()
 }
 
 /// The singleton plugin instance, initialised by [`register_plugin`].

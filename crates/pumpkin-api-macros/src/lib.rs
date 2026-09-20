@@ -92,6 +92,10 @@ pub fn plugin_impl(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 description: env!("CARGO_PKG_DESCRIPTION").to_string(),
                 dependencies: Vec::new(),
                 permissions: Vec::new(),
+                load_after: Vec::new(),
+                load_before: Vec::new(),
+                provides: Vec::new(),
+                load_order: pumpkin::plugin::LoadOrder::PostWorld,
             }
         });
 

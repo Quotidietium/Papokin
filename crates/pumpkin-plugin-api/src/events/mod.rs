@@ -127,6 +127,7 @@ impl Context {
         handler: H,
         event_priority: EventPriority,
         blocking: bool,
+        ignore_cancelled: bool,
     ) -> Result<u32> {
         let id = NEXT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
         let wrapped = HandlerWrapper {
@@ -138,7 +139,13 @@ impl Context {
             .map_err(|e| e.to_string())?
             .insert(id, Arc::new(wrapped));
 
-        self.register_event(id, E::EVENT_TYPE, event_priority, blocking);
+        self.register_event(
+            id,
+            E::EVENT_TYPE,
+            event_priority,
+            blocking,
+            ignore_cancelled,
+        );
         Ok(id)
     }
 }
