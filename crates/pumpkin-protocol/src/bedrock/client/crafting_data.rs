@@ -196,9 +196,119 @@ impl PacketWrite for BedrockShapedRecipe {
 }
 
 #[derive(Clone, Debug)]
+pub struct BedrockFurnaceRecipe {
+    pub recipe_id: String,
+    pub input: ItemDescriptorCount,
+    pub output: NetworkItemDescriptor,
+    pub block: String,
+    pub recipe_network_id: VarUInt,
+}
+
+impl PacketWrite for BedrockFurnaceRecipe {
+    fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        self.recipe_id.write(writer)?;
+        self.input.write(writer)?;
+        self.output.write_item_instance(writer)?;
+        self.block.write(writer)?;
+        self.recipe_network_id.write(writer)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BedrockSmithingTransformRecipe {
+    pub recipe_id: String,
+    pub template: ItemDescriptorCount,
+    pub base: ItemDescriptorCount,
+    pub addition: ItemDescriptorCount,
+    pub result: NetworkItemDescriptor,
+    pub block: String,
+    pub recipe_network_id: VarUInt,
+}
+
+impl PacketWrite for BedrockSmithingTransformRecipe {
+    fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        self.recipe_id.write(writer)?;
+        self.template.write(writer)?;
+        self.base.write(writer)?;
+        self.addition.write(writer)?;
+        self.result.write_item_instance(writer)?;
+        self.block.write(writer)?;
+        self.recipe_network_id.write(writer)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BedrockSmithingTrimRecipe {
+    pub recipe_id: String,
+    pub template: ItemDescriptorCount,
+    pub base: ItemDescriptorCount,
+    pub addition: ItemDescriptorCount,
+    pub block: String,
+    pub recipe_network_id: VarUInt,
+}
+
+impl PacketWrite for BedrockSmithingTrimRecipe {
+    fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        self.recipe_id.write(writer)?;
+        self.template.write(writer)?;
+        self.base.write(writer)?;
+        self.addition.write(writer)?;
+        self.block.write(writer)?;
+        self.recipe_network_id.write(writer)?;
+        Ok(())
+    }
+}
+
+/// Bedrock potion mix (brewing) recipe: input potion item id + meta, reagent
+/// item id + meta and output potion item id + meta.
+#[derive(Clone, Debug)]
+pub struct PotionMixRecipe {
+    pub input_id: VarInt,
+    pub input_meta: VarInt,
+    pub reagent_id: VarInt,
+    pub reagent_meta: VarInt,
+    pub output_id: VarInt,
+    pub output_meta: VarInt,
+}
+
+impl PacketWrite for PotionMixRecipe {
+    fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        self.input_id.write(writer)?;
+        self.input_meta.write(writer)?;
+        self.reagent_id.write(writer)?;
+        self.reagent_meta.write(writer)?;
+        self.output_id.write(writer)?;
+        self.output_meta.write(writer)?;
+        Ok(())
+    }
+}
+
+/// Bedrock container mix recipe (e.g. drinkable potion + gunpowder -> splash).
+#[derive(Clone, Debug)]
+pub struct ContainerMixRecipe {
+    pub input_id: VarInt,
+    pub reagent_id: VarInt,
+    pub output_id: VarInt,
+}
+
+impl PacketWrite for ContainerMixRecipe {
+    fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        self.input_id.write(writer)?;
+        self.reagent_id.write(writer)?;
+        self.output_id.write(writer)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum BedrockRecipe {
     Shapeless(BedrockShapelessRecipe),
     Shaped(BedrockShapedRecipe),
+    Furnace(BedrockFurnaceRecipe),
+    SmithingTransform(BedrockSmithingTransformRecipe),
+    SmithingTrim(BedrockSmithingTrimRecipe),
 }
 
 impl PacketWrite for BedrockRecipe {
@@ -212,6 +322,18 @@ impl PacketWrite for BedrockRecipe {
                 VarInt(1).write(writer)?; // type 1: Shaped
                 recipe.write(writer)?;
             }
+            Self::Furnace(recipe) => {
+                VarInt(2).write(writer)?; // type 2: Furnace
+                recipe.write(writer)?;
+            }
+            Self::SmithingTransform(recipe) => {
+                VarInt(8).write(writer)?; // type 8: SmithingTransform
+                recipe.write(writer)?;
+            }
+            Self::SmithingTrim(recipe) => {
+                VarInt(9).write(writer)?; // type 9: SmithingTrim
+                recipe.write(writer)?;
+            }
         }
         Ok(())
     }
@@ -220,17 +342,21 @@ impl PacketWrite for BedrockRecipe {
 #[packet(52)]
 pub struct CCraftingData {
     pub recipes: Vec<BedrockRecipe>,
+    pub potion_mixes: Vec<PotionMixRecipe>,
+    pub container_mixes: Vec<ContainerMixRecipe>,
     pub clean_recipes: bool,
 }
 
 impl PacketWrite for CCraftingData {
     fn write<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        // The 1.26.40 packet carries one array per recipe type, written without
+        // the per-entry type prefix.
         let shaped = self
             .recipes
             .iter()
             .filter_map(|recipe| match recipe {
                 BedrockRecipe::Shaped(recipe) => Some(recipe),
-                BedrockRecipe::Shapeless(_) => None,
+                _ => None,
             })
             .collect::<Vec<_>>();
         VarUInt(shaped.len() as u32).write(writer)?;
@@ -243,7 +369,7 @@ impl PacketWrite for CCraftingData {
             .iter()
             .filter_map(|recipe| match recipe {
                 BedrockRecipe::Shapeless(recipe) => Some(recipe),
-                BedrockRecipe::Shaped(_) => None,
+                _ => None,
             })
             .collect::<Vec<_>>();
         VarUInt(shapeless.len() as u32).write(writer)?;
@@ -251,10 +377,52 @@ impl PacketWrite for CCraftingData {
             recipe.write(writer)?;
         }
 
-        // Multi, user, chemistry, smithing, potion, container and material arrays.
-        for _ in 0..9 {
+        // Furnace recipes have no array in 1.26.40; the client knows smelting
+        // from its own data, so BedrockRecipe::Furnace entries go nowhere here.
+
+        // Multi, user-data shapeless and chemistry recipe arrays.
+        for _ in 0..4 {
             VarUInt(0).write(writer)?;
         }
+
+        let smithing_transforms = self
+            .recipes
+            .iter()
+            .filter_map(|recipe| match recipe {
+                BedrockRecipe::SmithingTransform(recipe) => Some(recipe),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        VarUInt(smithing_transforms.len() as u32).write(writer)?;
+        for recipe in smithing_transforms {
+            recipe.write(writer)?;
+        }
+
+        let smithing_trims = self
+            .recipes
+            .iter()
+            .filter_map(|recipe| match recipe {
+                BedrockRecipe::SmithingTrim(recipe) => Some(recipe),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        VarUInt(smithing_trims.len() as u32).write(writer)?;
+        for recipe in smithing_trims {
+            recipe.write(writer)?;
+        }
+
+        VarUInt(self.potion_mixes.len() as u32).write(writer)?;
+        for recipe in &self.potion_mixes {
+            recipe.write(writer)?;
+        }
+
+        VarUInt(self.container_mixes.len() as u32).write(writer)?;
+        for recipe in &self.container_mixes {
+            recipe.write(writer)?;
+        }
+
+        // Material reducer array.
+        VarUInt(0).write(writer)?;
 
         // clean_recipes
         self.clean_recipes.write(writer)?;

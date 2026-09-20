@@ -84,8 +84,35 @@ pub struct OwnedBrewingRecipe {
 }
 
 #[derive(Clone, Debug)]
+pub struct OwnedStonecuttingRecipe {
+    pub recipe_id: String,
+    pub ingredient: OwnedRecipeIngredient,
+    pub result: OwnedRecipeResult,
+}
+
+#[derive(Clone, Debug)]
+pub enum OwnedSmithingRecipe {
+    Transform {
+        recipe_id: String,
+        template: OwnedRecipeIngredient,
+        base: OwnedRecipeIngredient,
+        addition: OwnedRecipeIngredient,
+        result: OwnedRecipeResult,
+        copy_components: bool,
+    },
+    Trim {
+        recipe_id: String,
+        template: OwnedRecipeIngredient,
+        base: OwnedRecipeIngredient,
+        addition: OwnedRecipeIngredient,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub enum DynamicRecipe {
     Crafting(OwnedCraftingRecipe),
     Cooking(OwnedCookingRecipeType),
     Brewing(OwnedBrewingRecipe),
+    Stonecutting(OwnedStonecuttingRecipe),
+    Smithing(OwnedSmithingRecipe),
 }

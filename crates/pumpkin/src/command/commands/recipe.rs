@@ -47,6 +47,15 @@ fn get_recipe_id(recipe: &DynamicRecipe) -> String {
             }
         },
         DynamicRecipe::Brewing(brewing) => brewing.recipe_id.clone(),
+        DynamicRecipe::Stonecutting(stonecutting) => stonecutting.recipe_id.clone(),
+        DynamicRecipe::Smithing(smithing) => match smithing {
+            pumpkin_protocol::codec::recipe::OwnedSmithingRecipe::Transform {
+                recipe_id, ..
+            }
+            | pumpkin_protocol::codec::recipe::OwnedSmithingRecipe::Trim { recipe_id, .. } => {
+                recipe_id.clone()
+            }
+        },
     }
 }
 

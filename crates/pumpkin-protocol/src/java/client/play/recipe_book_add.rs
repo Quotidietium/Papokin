@@ -20,6 +20,8 @@ use pumpkin_data::slot_display_id_remap::remap_slot_display_id_for_version;
 const RECIPE_DISPLAY_SHAPELESS: i32 = 0;
 const RECIPE_DISPLAY_SHAPED: i32 = 1;
 const RECIPE_DISPLAY_FURNACE: i32 = 2;
+const RECIPE_DISPLAY_STONECUTTER: i32 = 3;
+const RECIPE_DISPLAY_SMITHING: i32 = 4;
 
 // Slot Display base type IDs (26.2)
 const SLOT_DISPLAY_EMPTY: u32 = 0;
@@ -42,6 +44,8 @@ const CATEGORY_FURNACE_MISC: i32 = 6;
 const CATEGORY_BLAST_FURNACE_BLOCKS: i32 = 7;
 const CATEGORY_BLAST_FURNACE_MISC: i32 = 8;
 const CATEGORY_SMOKER_FOOD: i32 = 9;
+const CATEGORY_STONECUTTER: i32 = 10;
+const CATEGORY_SMITHING: i32 = 11;
 const CATEGORY_CAMPFIRE: i32 = 12;
 
 use crate::codec::recipe::DynamicRecipe;
@@ -707,6 +711,22 @@ impl ClientPacket for CRecipeBookAdd<'_> {
                     // Brewing recipes are not displayed in the recipe book
                     continue;
                 }
+                DynamicRecipe::Stonecutting(stonecutting) => {
+                    let flags = entry_flags(self.replace, true, highlight);
+                    write_dynamic_stonecutting_entry(
+                        &mut write,
+                        display_id,
+                        *version,
+                        flags,
+                        stonecutting,
+                    )?;
+                }
+                DynamicRecipe::Smithing(smithing) => {
+                    let flags = entry_flags(self.replace, true, highlight);
+                    write_dynamic_smithing_entry(
+                        &mut write, display_id, *version, flags, smithing,
+                    )?;
+                }
             }
             display_id += 1;
         }
@@ -969,6 +989,90 @@ fn write_dynamic_cooking_entry(
     Ok(())
 }
 
+fn write_dynamic_stonecutting_entry(
+    write: &mut impl Write,
+    display_id: i32,
+    version: JavaMinecraftVersion,
+    flags: u8,
+    recipe: &crate::codec::recipe::OwnedStonecuttingRecipe,
+) -> Result<(), WritingError> {
+    let stonecutter = Item::from_registry_key("minecraft:stonecutter")
+        .ok_or_else(|| WritingError::Message("stonecutter item must exist".into()))?;
+
+    write.write_var_int(&VarInt(display_id))?;
+    write.write_var_int(&VarInt(RECIPE_DISPLAY_STONECUTTER))?;
+    // ingredient
+    write_dynamic_ingredient_slot_display(write, &recipe.ingredient, version)?;
+    // result
+    write_dynamic_result_slot_display(write, &recipe.result, version)?;
+    // craftingStation
+    write_item_slot_display(write, stonecutter, version)?;
+    // group: none
+    write_optional_var_int(write, None)?;
+    // category
+    write.write_var_int(&VarInt(CATEGORY_STONECUTTER))?;
+    // craftingRequirements: the single ingredient
+    write.write_bool(true)?;
+    write.write_var_int(&VarInt(1))?;
+    write_dynamic_ingredient_holderset(write, &recipe.ingredient, version)?;
+    write.write_u8(flags)?;
+    Ok(())
+}
+
+fn write_dynamic_smithing_entry(
+    write: &mut impl Write,
+    display_id: i32,
+    version: JavaMinecraftVersion,
+    flags: u8,
+    recipe: &crate::codec::recipe::OwnedSmithingRecipe,
+) -> Result<(), WritingError> {
+    let smithing_table = Item::from_registry_key("minecraft:smithing_table")
+        .ok_or_else(|| WritingError::Message("smithing_table item must exist".into()))?;
+
+    let (template, base, addition, result) = match recipe {
+        crate::codec::recipe::OwnedSmithingRecipe::Transform {
+            template,
+            base,
+            addition,
+            result,
+            ..
+        } => (template, base, addition, Some(result)),
+        crate::codec::recipe::OwnedSmithingRecipe::Trim {
+            template,
+            base,
+            addition,
+            ..
+        } => (template, base, addition, None),
+    };
+
+    write.write_var_int(&VarInt(display_id))?;
+    write.write_var_int(&VarInt(RECIPE_DISPLAY_SMITHING))?;
+    // template, base, addition
+    write_dynamic_ingredient_slot_display(write, template, version)?;
+    write_dynamic_ingredient_slot_display(write, base, version)?;
+    write_dynamic_ingredient_slot_display(write, addition, version)?;
+    // result: trims keep the base item, so the base stands in as the display result
+    if let Some(result) = result {
+        write_dynamic_result_slot_display(write, result, version)?;
+    } else {
+        write_dynamic_ingredient_slot_display(write, base, version)?;
+    }
+    // craftingStation
+    write_item_slot_display(write, smithing_table, version)?;
+    // group: none
+    write_optional_var_int(write, None)?;
+    // category
+    write.write_var_int(&VarInt(CATEGORY_SMITHING))?;
+    // craftingRequirements: template + base + addition
+    write.write_bool(true)?;
+    write.write_var_int(&VarInt(3))?;
+    write_dynamic_ingredient_holderset(write, template, version)?;
+    write_dynamic_ingredient_holderset(write, base, version)?;
+    write_dynamic_ingredient_holderset(write, addition, version)?;
+    write.write_u8(flags)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -992,6 +1096,103 @@ mod tests {
     #[test]
     fn vanilla_recipes_serialize_for_every_recipe_book_version() {
         let packet = CRecipeBookAdd::new(true, &[]);
+        for version in [JavaMinecraftVersion::V_1_21_2, JavaMinecraftVersion::V_26_3] {
+            packet.write_packet_data(Vec::new(), &version).unwrap();
+        }
+    }
+
+    #[test]
+    fn dynamic_stonecutting_entry_uses_stonecutter_display_and_category() {
+        use crate::codec::recipe::{
+            OwnedRecipeIngredient, OwnedRecipeResult, OwnedStonecuttingRecipe,
+        };
+
+        let recipe = OwnedStonecuttingRecipe {
+            recipe_id: "test:stone_bricks_from_stone".to_string(),
+            ingredient: OwnedRecipeIngredient::Simple("minecraft:stone".to_string()),
+            result: OwnedRecipeResult {
+                item_id: "minecraft:stone_bricks".to_string(),
+                count: 1,
+            },
+        };
+
+        for version in [JavaMinecraftVersion::V_1_21_2, JavaMinecraftVersion::V_26_3] {
+            let mut bytes = Vec::new();
+            write_dynamic_stonecutting_entry(&mut bytes, 0, version, 0, &recipe).unwrap();
+            // display id 0, then the stonecutter display type
+            assert_eq!(bytes[0], 0);
+            assert_eq!(bytes[1], RECIPE_DISPLAY_STONECUTTER as u8);
+            // group none (0), category stonecutter, present requirements with one holder set of one
+            assert!(
+                bytes
+                    .windows(5)
+                    .any(|w| w == [0, CATEGORY_STONECUTTER as u8, 1, 1, 2]),
+                "missing stonecutter category in {bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_smithing_transform_entry_uses_smithing_display_and_category() {
+        use crate::codec::recipe::{OwnedRecipeIngredient, OwnedRecipeResult, OwnedSmithingRecipe};
+
+        let recipe = OwnedSmithingRecipe::Transform {
+            recipe_id: "test:netherite_upgrade".to_string(),
+            template: OwnedRecipeIngredient::Simple(
+                "minecraft:netherite_upgrade_smithing_template".to_string(),
+            ),
+            base: OwnedRecipeIngredient::Simple("minecraft:diamond_chestplate".to_string()),
+            addition: OwnedRecipeIngredient::Simple("minecraft:netherite_ingot".to_string()),
+            result: OwnedRecipeResult {
+                item_id: "minecraft:netherite_chestplate".to_string(),
+                count: 1,
+            },
+            copy_components: true,
+        };
+
+        for version in [JavaMinecraftVersion::V_1_21_2, JavaMinecraftVersion::V_26_3] {
+            let mut bytes = Vec::new();
+            write_dynamic_smithing_entry(&mut bytes, 0, version, 0, &recipe).unwrap();
+            // display id 0, then the smithing display type
+            assert_eq!(bytes[0], 0);
+            assert_eq!(bytes[1], RECIPE_DISPLAY_SMITHING as u8);
+            // group none (0), category smithing, present requirements with three holder sets
+            assert!(
+                bytes
+                    .windows(5)
+                    .any(|w| w == [0, CATEGORY_SMITHING as u8, 1, 3, 2]),
+                "missing smithing category in {bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_stonecutting_and_smithing_serialize_inside_the_packet() {
+        use crate::codec::recipe::{
+            DynamicRecipe, OwnedRecipeIngredient, OwnedRecipeResult, OwnedSmithingRecipe,
+            OwnedStonecuttingRecipe,
+        };
+
+        let recipes = [
+            DynamicRecipe::Stonecutting(OwnedStonecuttingRecipe {
+                recipe_id: "test:cut".to_string(),
+                ingredient: OwnedRecipeIngredient::Simple("minecraft:stone".to_string()),
+                result: OwnedRecipeResult {
+                    item_id: "minecraft:stone_bricks".to_string(),
+                    count: 1,
+                },
+            }),
+            DynamicRecipe::Smithing(OwnedSmithingRecipe::Trim {
+                recipe_id: "test:trim".to_string(),
+                template: OwnedRecipeIngredient::Simple(
+                    "minecraft:silence_armor_trim_smithing_template".to_string(),
+                ),
+                base: OwnedRecipeIngredient::Simple("minecraft:diamond_chestplate".to_string()),
+                addition: OwnedRecipeIngredient::Simple("minecraft:amethyst_shard".to_string()),
+            }),
+        ];
+
+        let packet = CRecipeBookAdd::new(true, &recipes);
         for version in [JavaMinecraftVersion::V_1_21_2, JavaMinecraftVersion::V_26_3] {
             packet.write_packet_data(Vec::new(), &version).unwrap();
         }
