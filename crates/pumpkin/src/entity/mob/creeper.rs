@@ -166,11 +166,29 @@ impl Mob for CreeperEntity {
         caller: &dyn EntityBase,
         lightning: &crate::entity::lightning::LightningBoltEntity,
     ) {
-        self.charged.store(true, Ordering::Relaxed);
-        self.mob_entity
+        let mut event = crate::plugin::api::events::entity::creeper_power::CreeperPowerEvent::new(
+            self.mob_entity.living_entity.entity.entity_id,
+            Some(lightning.get_entity().entity_id),
+            "LIGHTNING".to_string(),
+        );
+        if let Some(server) = self
+            .mob_entity
             .living_entity
             .entity
-            .set_synced_data(pumpkin_data::tracked_data::creeper::CHARGED, true);
+            .world
+            .load()
+            .server
+            .upgrade()
+        {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if !event.cancelled {
+            self.charged.store(true, Ordering::Relaxed);
+            self.mob_entity
+                .living_entity
+                .entity
+                .set_synced_data(pumpkin_data::tracked_data::creeper::CHARGED, true);
+        }
         self.mob_entity
             .living_entity
             .on_lightning_strike(caller, lightning);

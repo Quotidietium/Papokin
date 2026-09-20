@@ -103,6 +103,25 @@ impl BreedGoal {
         let baby = from_type(entity.entity_type, parent_pos, &world, Uuid::new_v4());
         baby.get_entity().set_age(-24000);
         let world_full = entity.world.load_full();
+
+        let mut spawn_event =
+            crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                entity_id: baby.get_entity().entity_id,
+                entity_type: baby.get_entity().entity_type.resource_name.to_string(),
+                position: parent_pos,
+                world: world_full.clone(),
+                spawn_reason: "BREEDING".to_string(),
+                cancelled: false,
+            };
+        if let Some(server) = world_full.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut spawn_event);
+        }
+        if spawn_event.cancelled {
+            return;
+        }
+
         world_full.spawn_entity(baby);
 
         world_full.send_entity_status(entity, EntityStatus::InLoveHearts, None);

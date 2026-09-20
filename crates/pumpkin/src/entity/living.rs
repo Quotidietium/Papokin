@@ -3198,8 +3198,31 @@ impl LivingEntity {
                 let dx = source_pos.x - target_pos.x;
                 let dz = source_pos.z - target_pos.z;
                 let resistance = self.get_attribute_value(&Attributes::KNOCKBACK_RESISTANCE);
-                self.entity
-                    .apply_knockback(knockback_after_resistance(0.4, resistance), dx, dz);
+                let strength = knockback_after_resistance(0.4, resistance);
+
+                // Mirror the velocity change `apply_knockback` is about to make so
+                // the event can report it before it happens.
+                let old_vel = self.entity.velocity.load();
+                let push = Vector3::new(dx, 0.0, dz).normalize() * strength;
+                let delta_x = old_vel.x / 2.0 - push.x;
+                let delta_z = old_vel.z / 2.0 - push.z;
+
+                let mut by_entity_event =
+                    crate::plugin::api::events::entity::entity_knockback_by_entity::EntityKnockbackByEntityEvent::new(
+                        self.entity.entity_id,
+                        source.get_entity().entity_id,
+                        strength,
+                        delta_x,
+                        delta_z,
+                    );
+                if let Some(server) = self.entity.world.load().server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut by_entity_event);
+                }
+                if !by_entity_event.cancelled {
+                    self.entity.apply_knockback(strength, dx, dz);
+                }
             }
         }
 

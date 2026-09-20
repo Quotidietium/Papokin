@@ -125,6 +125,21 @@ impl EvokerEntity {
         self.spell_casting_tick_count.load(Ordering::Relaxed) > 0
     }
 
+    /// Fires `EntitySpellCastEvent` and returns whether the spell may begin.
+    pub fn begin_spell(&self, spell: IllagerSpell) -> bool {
+        let entity = &self.mob_entity.living_entity.entity;
+        let mut event =
+            crate::plugin::api::events::entity::entity_spell_cast::EntitySpellCastEvent {
+                entity_id: entity.entity_id,
+                spell: format!("{spell:?}"),
+                cancelled: false,
+            };
+        if let Some(server) = entity.world.load().server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        !event.cancelled
+    }
+
     pub fn set_is_casting_spell(&self, spell: IllagerSpell) {
         self.current_spell.store(spell as u8, Ordering::Relaxed);
         let entity = &self.mob_entity.living_entity.entity;
@@ -284,8 +299,11 @@ impl Goal for EvokerAttackSpellGoal {
     }
 
     fn start(&mut self, _mob: &dyn Mob) {
-        self.warmup_delay = 20;
         if let Some(evoker) = self.evoker.upgrade() {
+            if !evoker.begin_spell(IllagerSpell::Fangs) {
+                self.warmup_delay = 0;
+                return;
+            }
             evoker.set_spell_casting_time(40);
             let age = evoker
                 .mob_entity
@@ -443,8 +461,11 @@ impl Goal for EvokerSummonSpellGoal {
     }
 
     fn start(&mut self, _mob: &dyn Mob) {
-        self.warmup_delay = 20;
         if let Some(evoker) = self.evoker.upgrade() {
+            if !evoker.begin_spell(IllagerSpell::SummonVex) {
+                self.warmup_delay = 0;
+                return;
+            }
             evoker.set_spell_casting_time(100);
             let age = evoker
                 .mob_entity
@@ -555,8 +576,11 @@ impl Goal for EvokerWololoSpellGoal {
     }
 
     fn start(&mut self, _mob: &dyn Mob) {
-        self.warmup_delay = 40;
         if let Some(evoker) = self.evoker.upgrade() {
+            if !evoker.begin_spell(IllagerSpell::Wololo) {
+                self.warmup_delay = 0;
+                return;
+            }
             evoker.set_spell_casting_time(60);
             let age = evoker
                 .mob_entity

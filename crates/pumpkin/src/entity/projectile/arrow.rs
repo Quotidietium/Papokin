@@ -568,14 +568,30 @@ impl EntityBase for ArrowEntity {
 
         // Check if arrow enters lava or fire block
         let current_block = world.get_block(&block_pos);
-        if current_block == &pumpkin_data::Block::LAVA {
-            entity.set_on_fire_for(15.0);
-            self.is_flame.store(true, Ordering::Relaxed);
-        } else if current_block == &pumpkin_data::Block::FIRE
+        if current_block == &pumpkin_data::Block::LAVA
+            || current_block == &pumpkin_data::Block::FIRE
             || current_block == &pumpkin_data::Block::SOUL_FIRE
         {
-            entity.set_on_fire_for(8.0);
-            self.is_flame.store(true, Ordering::Relaxed);
+            let duration = if current_block == &pumpkin_data::Block::LAVA {
+                15.0
+            } else {
+                8.0
+            };
+            let mut combust_event =
+                crate::plugin::api::events::entity::entity_combust_by_block::EntityCombustByBlockEvent::new(
+                    entity.entity_id,
+                    block_pos,
+                    duration,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut combust_event);
+            }
+            if !combust_event.cancelled {
+                entity.set_on_fire_for(duration);
+                self.is_flame.store(true, Ordering::Relaxed);
+            }
         }
 
         let is_on_fire = entity.is_on_fire() || self.is_flame.load(Ordering::Relaxed);
@@ -909,7 +925,19 @@ impl EntityBase for ArrowEntity {
                     target.get_entity().entity_type == &pumpkin_data::entity::EntityType::ENDERMAN;
                 let is_on_fire = entity.is_on_fire() || self.is_flame.load(Ordering::Relaxed);
                 if is_on_fire && !is_enderman {
-                    target.get_entity().set_on_fire_for(5.0);
+                    let mut combust_event = crate::plugin::api::events::entity::entity_combust_by_entity::EntityCombustByEntityEvent::new(
+                        target_entity_id,
+                        entity.entity_id,
+                        5.0,
+                    );
+                    if let Some(server) = entity.world.load().server.upgrade() {
+                        server
+                            .plugin_manager
+                            .fire_blocking(&server, &mut combust_event);
+                    }
+                    if !combust_event.cancelled {
+                        target.get_entity().set_on_fire_for(5.0);
+                    }
                 }
 
                 let punch = self.punch_level.load(Ordering::Relaxed);

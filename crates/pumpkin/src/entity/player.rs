@@ -1326,7 +1326,21 @@ impl Player {
         if let Some(enchantments) = item_stack.get_data_component::<EnchantmentsImpl>() {
             for (enchantment, level) in enchantments.enchantment.iter() {
                 if **enchantment == Enchantment::FIRE_ASPECT {
-                    victim_entity.set_on_fire_for_ticks(*level as u32 * 80);
+                    let mut combust_event =
+                        crate::plugin::api::events::entity::entity_combust_by_entity::EntityCombustByEntityEvent::new(
+                            victim_entity.entity_id,
+                            self.living_entity.entity.entity_id,
+                            (*level as u32 * 80) as f32 / 20.0,
+                        );
+                    if let Some(server) = world.server.upgrade() {
+                        server
+                            .plugin_manager
+                            .fire_blocking(&server, &mut combust_event);
+                    }
+                    if !combust_event.cancelled {
+                        victim_entity
+                            .set_on_fire_for_ticks((combust_event.duration * 20.0).max(0.0) as u32);
+                    }
                 }
             }
         }

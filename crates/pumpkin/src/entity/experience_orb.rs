@@ -107,8 +107,23 @@ impl EntityBase for ExperienceOrbEntity {
             let can_pickup = if let Ok(mut delay) = player.experience_pick_up_delay.try_lock()
                 && *delay == 0
             {
-                *delay = 2;
-                true
+                let mut cooldown_event = crate::plugin::api::events::player::player_exp_cooldown_change::PlayerExpCooldownChangeEvent {
+                    player: player.clone(),
+                    new_cooldown: 2,
+                    cancelled: false,
+                };
+                let world = self.entity.world.load();
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut cooldown_event);
+                }
+                if cooldown_event.cancelled {
+                    false
+                } else {
+                    *delay = cooldown_event.new_cooldown.max(0) as u32;
+                    true
+                }
             } else {
                 false
             };

@@ -153,6 +153,28 @@ impl Mob for ZombifiedPiglinEntity {
         source: Option<&dyn EntityBase>,
     ) {
         let anger_ticks = rand::random_range(400..780);
+
+        let mut event =
+            crate::plugin::api::events::entity::pig_zombie_anger::PigZombieAngerEvent::new(
+                self.mob_entity.living_entity.entity.entity_id,
+                source.map(|s| s.get_entity().entity_id),
+                anger_ticks,
+            );
+        if let Some(server) = self
+            .mob_entity
+            .living_entity
+            .entity
+            .world
+            .load()
+            .server
+            .upgrade()
+        {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return;
+        }
+
         self.set_anger_time(anger_ticks);
 
         if let Some(attacker) = source

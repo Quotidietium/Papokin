@@ -44,6 +44,42 @@ impl PaintingEntity {
     pub const fn new(entity: Entity) -> Self {
         Self { entity }
     }
+
+    /// Fires `HangingBreakEvent` (and `HangingBreakByEntityEvent` when the
+    /// remover is known) and returns whether the painting may break.
+    fn fire_break_events(&self, caused_by: Option<&dyn EntityBase>) -> bool {
+        let world = self.entity.world.load();
+        let Some(entity_arc) = world.get_entity_by_id(self.entity.entity_id) else {
+            return true;
+        };
+        let remover = caused_by.and_then(|c| world.get_entity_by_id(c.get_entity().entity_id));
+
+        let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
+            entity_arc.clone(),
+            remover.clone(),
+        );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return false;
+        }
+
+        if let Some(remover) = remover {
+            let mut by_entity_event = crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent::new(
+                entity_arc, remover,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut by_entity_event);
+            }
+            if by_entity_event.cancelled {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl EntityBase for PaintingEntity {
@@ -74,10 +110,12 @@ impl EntityBase for PaintingEntity {
         _amount: f32,
         _damage_type: DamageType,
         _position: Option<Vector3<f64>>,
-        _source: Option<&dyn EntityBase>,
+        source: Option<&dyn EntityBase>,
         _cause: Option<&dyn EntityBase>,
     ) -> bool {
-        // TODO
+        if !self.fire_break_events(source) {
+            return true;
+        }
         self.entity.remove();
         true
     }

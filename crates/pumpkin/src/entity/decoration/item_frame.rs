@@ -268,6 +268,42 @@ impl ItemFrameEntity {
             }
         }
     }
+
+    /// Fires `HangingBreakEvent` (and `HangingBreakByEntityEvent` when the
+    /// remover is known) and returns whether the frame may break.
+    fn fire_break_events(&self, caused_by: Option<&dyn EntityBase>) -> bool {
+        let world = self.entity.world.load();
+        let Some(entity_arc) = world.get_entity_by_id(self.entity.entity_id) else {
+            return true;
+        };
+        let remover = caused_by.and_then(|c| world.get_entity_by_id(c.get_entity().entity_id));
+
+        let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
+            entity_arc.clone(),
+            remover.clone(),
+        );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return false;
+        }
+
+        if let Some(remover) = remover {
+            let mut by_entity_event = crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent::new(
+                entity_arc, remover,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut by_entity_event);
+            }
+            if by_entity_event.cancelled {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 impl EntityBase for ItemFrameEntity {
@@ -424,6 +460,9 @@ impl EntityBase for ItemFrameEntity {
             if !bypasses_invuln && !is_creative_player {
                 return false;
             }
+            if !self.fire_break_events(source) {
+                return true;
+            }
             self.drop_item(source, true);
             self.entity.remove();
             return true;
@@ -437,6 +476,9 @@ impl EntityBase for ItemFrameEntity {
             self.drop_item(source, false);
             self.entity.play_sound(self.get_remove_item_sound());
         } else {
+            if !self.fire_break_events(source) {
+                return true;
+            }
             self.drop_item(source, true);
             self.entity.play_sound(self.get_break_sound());
             self.entity.remove();

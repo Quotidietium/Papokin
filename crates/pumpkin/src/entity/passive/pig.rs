@@ -120,6 +120,45 @@ impl Mob for PigEntity {
         Some(self)
     }
 
+    fn mob_on_lightning_strike(
+        &self,
+        caller: &dyn EntityBase,
+        lightning: &crate::entity::lightning::LightningBoltEntity,
+    ) {
+        let entity = &self.mob_entity.living_entity.entity;
+        let world = entity.world.load_full();
+
+        // Create the replacement zombified piglin first so plugins can inspect
+        // (and cancel) the resulting entity's id.
+        let zombie_pos = entity.pos.load();
+        let zombie = crate::entity::r#type::from_type(
+            &EntityType::ZOMBIFIED_PIGLIN,
+            zombie_pos,
+            &world,
+            uuid::Uuid::new_v4(),
+        );
+
+        let mut event = crate::plugin::api::events::entity::pig_zap::PigZapEvent::new(
+            entity.entity_id,
+            lightning.get_entity().entity_id,
+            zombie.get_entity().entity_id,
+        );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+
+        if event.cancelled {
+            // The pig is not transformed, but still takes the base strike (fire + damage).
+            self.mob_entity
+                .living_entity
+                .on_lightning_strike(caller, lightning);
+            return;
+        }
+
+        entity.remove();
+        world.spawn_entity(zombie);
+    }
+
     fn is_saddled(&self) -> bool {
         self.saddled.load(std::sync::atomic::Ordering::Relaxed)
     }

@@ -150,6 +150,26 @@ impl Mob for SheepEntity {
     }
 
     fn on_eating_grass(&self) {
+        let mut event =
+            crate::plugin::api::events::entity::sheep_regrow_wool::SheepRegrowWoolEvent {
+                entity_id: self.mob_entity.living_entity.entity.entity_id,
+                cancelled: false,
+            };
+        if let Some(server) = self
+            .mob_entity
+            .living_entity
+            .entity
+            .world
+            .load()
+            .server
+            .upgrade()
+        {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return;
+        }
+
         self.set_sheared(false);
     }
 
@@ -184,6 +204,27 @@ impl Mob for SheepEntity {
             && !self.is_sheared()
             && color != self.get_color()
         {
+            let mut event = crate::plugin::api::events::entity::sheep_dye_wool::SheepDyeWoolEvent {
+                entity_id: self.mob_entity.living_entity.entity.entity_id,
+                dye_color: color,
+                player_id: Some(player.entity_id()),
+                cancelled: false,
+            };
+            if let Some(server) = self
+                .mob_entity
+                .living_entity
+                .entity
+                .world
+                .load()
+                .server
+                .upgrade()
+            {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return true;
+            }
+
             self.set_color(color);
             item_stack.decrement_unless_creative(player.gamemode.load(), 1);
             return true;

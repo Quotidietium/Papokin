@@ -75,11 +75,32 @@ pub fn handle_knockback(attacker: &Entity, victim: &dyn EntityBase, strength: f6
 
     if strength > 0.0 {
         let yaw = attacker.yaw.load();
-        victim.get_entity().knockback(
-            strength,
-            f64::from((yaw.to_radians()).sin()),
-            f64::from(-(yaw.to_radians()).cos()),
-        );
+        let dx = f64::from((yaw.to_radians()).sin());
+        let dz = f64::from(-(yaw.to_radians()).cos());
+
+        // Mirror the velocity change `knockback` is about to make so the event
+        // can report it before it happens.
+        let old_vel = victim.get_entity().velocity.load();
+        let push = Vector3::new(dx, 0.0, dz).normalize() * strength;
+        let delta_x = old_vel.x / 2.0 - push.x;
+        let delta_z = old_vel.z / 2.0 - push.z;
+
+        let mut by_entity_event =
+            crate::plugin::api::events::entity::entity_knockback_by_entity::EntityKnockbackByEntityEvent::new(
+                victim.get_entity().entity_id,
+                attacker.entity_id,
+                strength,
+                delta_x,
+                delta_z,
+            );
+        if let Some(server) = victim.get_entity().world.load().server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut by_entity_event);
+        }
+        if !by_entity_event.cancelled {
+            victim.get_entity().knockback(strength, dx, dz);
+        }
     }
 
     let velocity = attacker.velocity.load();

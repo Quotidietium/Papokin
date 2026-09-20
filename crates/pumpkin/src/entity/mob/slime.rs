@@ -356,6 +356,21 @@ impl Mob for SlimeEntity {
             let half_size = size / 2;
             let count = 2 + rand::random_range(0..3);
 
+            let mut split_event =
+                crate::plugin::api::events::entity::slime_split::SlimeSplitEvent {
+                    entity_id: self.entity.living_entity.entity.entity_id,
+                    count,
+                    cancelled: false,
+                };
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut split_event);
+            }
+            if split_event.cancelled {
+                return;
+            }
+
             let width = self
                 .entity
                 .living_entity

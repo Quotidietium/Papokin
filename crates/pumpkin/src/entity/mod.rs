@@ -1556,7 +1556,7 @@ impl Entity {
 
         let velocity = self.velocity.load();
 
-        self.velocity.store(Vector3::new(
+        let new_velocity = Vector3::new(
             velocity.x / 2.0 - var8.x,
             if self.on_ground.load(Relaxed) {
                 (velocity.y / 2.0 + strength).min(0.4)
@@ -1564,7 +1564,23 @@ impl Entity {
                 velocity.y
             },
             velocity.z / 2.0 - var8.z,
-        ));
+        );
+
+        let mut event =
+            crate::plugin::api::events::entity::entity_knockback::EntityKnockbackEvent {
+                entity_id: self.entity_id,
+                hit_by_id: None,
+                knockback: new_velocity.sub(&velocity),
+                cancelled: false,
+            };
+        if let Some(server) = self.world.load().server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return;
+        }
+
+        self.velocity.store(new_velocity);
     }
 
     // Part of LivingEntity.tickMovement() in yarn
@@ -2426,6 +2442,7 @@ impl Entity {
                 let portal_type = portal_processor.portal_type;
                 let dest_world_opt = portal_processor.destination_world.clone();
                 let src_portal = portal_processor.source_portal.clone();
+                let entry_position = portal_processor.entry_position;
                 let entity_id = self.entity_id;
                 let yaw = self.yaw.load();
 
@@ -2447,6 +2464,40 @@ impl Entity {
                         let yaw_val = transition.yaw;
                         let pitch = transition.pitch;
                         let teleport_pos = transition.position;
+
+                        // Players get the player-specific portal hook; other
+                        // entities get the generic exit event.
+                        if let Some(player) = world_clone.get_player_by_id(entity_id) {
+                            let mut player_portal_event =
+                                crate::plugin::api::events::player::player_portal::PlayerPortalEvent {
+                                    player,
+                                    from_pos: entry_position,
+                                    to_pos: Some(BlockPos::floored_v(teleport_pos)),
+                                    cancelled: false,
+                                };
+                            if let Some(server) = world_clone.server.upgrade() {
+                                server
+                                    .plugin_manager
+                                    .fire_blocking(&server, &mut player_portal_event);
+                            }
+                            if player_portal_event.cancelled {
+                                return;
+                            }
+                        }
+
+                        let mut portal_exit_event = crate::plugin::api::events::entity::entity_portal_exit::EntityPortalExitEvent::new(
+                            entity_id,
+                            entry_position,
+                            Some(BlockPos::floored_v(teleport_pos)),
+                        );
+                        if let Some(server) = world_clone.server.upgrade() {
+                            server
+                                .plugin_manager
+                                .fire_blocking(&server, &mut portal_exit_event);
+                        }
+                        if portal_exit_event.cancelled {
+                            return;
+                        }
 
                         // Teleport the main entity
                         entity_arc.teleport(teleport_pos, yaw_val, pitch, dest_world.clone());
@@ -2549,6 +2600,20 @@ impl Entity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let world = self.world.load();
         if manager.is_none() {
+            let mut portal_enter_event =
+                crate::plugin::api::events::entity::entity_portal_enter::EntityPortalEnterEvent::new(
+                    self.entity_id,
+                    pos,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut portal_enter_event);
+            }
+            if portal_enter_event.cancelled {
+                return;
+            }
+
             let portal_type = if portal_world.dimension == Dimension::THE_END
                 || self.world.load().dimension == Dimension::THE_END
             {

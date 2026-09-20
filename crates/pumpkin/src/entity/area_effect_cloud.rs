@@ -303,6 +303,10 @@ impl EntityBase for AreaEffectCloudEntity {
             candidates.push(p.clone() as Arc<dyn EntityBase>);
         }
 
+        // Entities the cloud is about to affect this tick, gathered first so the
+        // apply event can cover the whole batch (and cancel it).
+        let mut to_apply: Vec<(i32, Arc<dyn EntityBase>, f32)> = Vec::new();
+
         for cand in candidates {
             let cand_clone = cand.clone();
 
@@ -378,11 +382,39 @@ impl EntityBase for AreaEffectCloudEntity {
                 continue;
             }
 
+            to_apply.push((ent_id, cand_clone, scale));
+        }
+
+        if to_apply.is_empty() {
+            return;
+        }
+
+        let affected_ids: Vec<i32> = to_apply.iter().map(|(id, _, _)| *id).collect();
+        let mut apply_event =
+            crate::plugin::api::events::entity::area_effect_cloud_apply::AreaEffectCloudApplyEvent::new(
+                self.entity.entity_id,
+                affected_ids,
+            );
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut apply_event);
+        }
+        if apply_event.cancelled {
+            return;
+        }
+
+        for (ent_id, cand_clone, scale) in to_apply {
             // Apply scaled effects inside a spawned task
+            let effs = self
+                .effects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
             if let Some(living) = cand_clone.get_living_entity() {
                 crate::item::potion::PotionContents::apply_effects_to(
                     living,
-                    effs_clone,
+                    effs,
                     scale,
                     crate::item::potion::PotionApplicationSource::AreaEffectCloud,
                 );

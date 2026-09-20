@@ -65,7 +65,19 @@ impl EntityBase for SmallFireballEntity {
     fn on_hit(&self, hit: ProjectileHit) {
         match hit {
             ProjectileHit::Entity { ref entity, .. } => {
-                entity.get_entity().set_on_fire_for(5.0);
+                let mut combust_event = crate::plugin::api::events::entity::entity_combust_by_entity::EntityCombustByEntityEvent::new(
+                    entity.get_entity().entity_id,
+                    self.get_entity().entity_id,
+                    5.0,
+                );
+                if let Some(server) = self.get_entity().world.load().server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut combust_event);
+                }
+                if !combust_event.cancelled {
+                    entity.get_entity().set_on_fire_for(5.0);
+                }
                 let _ = entity.damage(
                     entity.as_ref(),
                     5.0,

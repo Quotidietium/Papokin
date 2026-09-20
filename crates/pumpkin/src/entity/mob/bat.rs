@@ -68,7 +68,22 @@ impl BatEntity {
     }
 
     pub fn set_roosting(&self, roosting: bool) {
-        self.roosting.store(roosting, Relaxed);
+        let mut roosting = roosting;
+        if self.roosting.swap(roosting, Relaxed) != roosting {
+            let world = self.mob_entity.living_entity.entity.world.load();
+            if let Some(server) = world.server.upgrade() {
+                let mut event =
+                    crate::plugin::api::events::entity::bat_toggle_sleep::BatToggleSleepEvent::new(
+                        self.mob_entity.living_entity.entity.entity_id,
+                        !roosting,
+                    );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                if event.cancelled {
+                    roosting = !roosting;
+                    self.roosting.store(roosting, Relaxed);
+                }
+            }
+        }
         let flags: u8 = if roosting { ROOSTING_FLAG } else { 0 };
         self.mob_entity
             .living_entity
@@ -221,7 +236,13 @@ impl Mob for BatEntity {
     fn mob_read_nbt(&self, nbt: &NbtCompound) {
         let flags = u8::try_from(nbt.get_byte("BatFlags").unwrap_or(0)).unwrap_or(0);
         let roosting = (flags & ROOSTING_FLAG) != 0;
-        self.set_roosting(roosting);
+        // Restore the saved state directly: loading NBT is not a sleep toggle,
+        // so no BatToggleSleepEvent is fired for it.
+        self.roosting.store(roosting, Relaxed);
+        self.mob_entity
+            .living_entity
+            .entity
+            .set_synced_data(tracked_data::bat::DATA_ID_FLAGS, flags);
     }
 
     fn get_mob_entity(&self) -> &MobEntity {

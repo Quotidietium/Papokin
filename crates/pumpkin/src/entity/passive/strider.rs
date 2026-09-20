@@ -143,6 +143,24 @@ impl Mob for StriderEntity {
     }
 
     fn mob_tick(&self, _caller: &dyn EntityBase) {
+        let entity = &self.mob_entity.living_entity.entity;
+        // Striders shiver whenever they are out of lava.
+        let should_shiver = !entity.touching_lava.load(Ordering::Relaxed);
+        if self.is_suffocating() != should_shiver {
+            let mut event =
+                crate::plugin::api::events::entity::strider_temperature_change::StriderTemperatureChangeEvent {
+                    entity_id: entity.entity_id,
+                    is_shivering: should_shiver,
+                    cancelled: false,
+                };
+            if let Some(server) = entity.world.load().server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if !event.cancelled {
+                self.set_suffocating(should_shiver);
+            }
+        }
+
         self.ageable_ai_step();
     }
 
