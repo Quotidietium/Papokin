@@ -1,6 +1,8 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+use crate::server::registry::inject_custom_entries;
+
 impl JavaClient {
     pub async fn handle_known_packs(&self, server: &Server) -> Option<PacketHandlerResult> {
         debug!("Handling known packs");
@@ -15,9 +17,12 @@ impl JavaClient {
 
             let test_instance_entries =
                 server.datapack_manager.get_test_instance_registry_entries();
+            let registry_manager = Arc::clone(&server.registry_manager);
 
             let packets = tokio::task::spawn_blocking(move || {
-                let registry = Registry::get_synced(version);
+                let mut registry = Registry::get_synced(version);
+                // Append plugin-registered custom entries after the vanilla ones.
+                inject_custom_entries(&mut registry, &registry_manager);
                 let mut packets = Vec::new();
                 let mut sent_dimension_type = false;
                 let mut sent_test_instance = false;

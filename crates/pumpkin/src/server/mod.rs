@@ -56,6 +56,7 @@ pub mod enchantment;
 mod key_store;
 pub mod permissions_file;
 pub mod recipe;
+pub mod registry;
 pub mod scheduler;
 pub mod seasonal_events;
 pub mod server_test_manager;
@@ -105,6 +106,8 @@ pub struct Server {
     pub recipe_manager: Arc<recipe::RecipeManager>,
     pub datapack_manager: Arc<crate::data::datapack::DatapackManager>,
     pub enchantment_manager: Arc<enchantment::EnchantmentManager>,
+    /// Plugin-registered custom entries for synced registries.
+    pub registry_manager: Arc<registry::RegistryManager>,
     /// Assigns unique IDs to maps.
     map_id: AtomicI32,
     /// Mojang's public keys, used for chat session signing
@@ -288,6 +291,7 @@ impl Server {
             recipe_manager: Arc::new(recipe::RecipeManager::new()),
             datapack_manager: Arc::new(crate::data::datapack::DatapackManager::new()),
             enchantment_manager: Arc::new(enchantment::EnchantmentManager::new()),
+            registry_manager: Arc::new(registry::RegistryManager::new()),
             map_id: level_info.load().map_id.into(),
             worlds: ArcSwap::from_pointee(vec![]),
             dimensions,

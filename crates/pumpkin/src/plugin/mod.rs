@@ -1147,6 +1147,14 @@ impl PluginManager {
             );
         }
 
+        // All plugins of this phase have finished loading and enabling.
+        // `PostWorld` is the final startup phase, so close registry
+        // registration here: freezing earlier would also block plugins that
+        // load in a later phase.
+        if phase == crate::plugin::api::LoadOrder::PostWorld {
+            server.registry_manager.freeze();
+        }
+
         Ok(total_wait_time)
     }
 
