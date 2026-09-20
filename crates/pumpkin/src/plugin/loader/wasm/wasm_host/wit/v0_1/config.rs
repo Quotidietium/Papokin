@@ -46,6 +46,17 @@ fn merge_toml(defaults: &str, existing: &str) -> Result<String, String> {
     }
 }
 
+/// Writes `content` to `path` via a temporary sibling + rename, so a crash
+/// mid-write never leaves a truncated config behind.
+fn write_config_atomic(path: &std::path::Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create config dir: {e}"))?;
+    }
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, content).map_err(|e| format!("failed to write config: {e}"))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("failed to replace config: {e}"))
+}
+
 #[allow(clippy::unused_async_trait_impl)]
 impl pumpkin::plugin::config::Host for PluginHostState {
     async fn load_config(&mut self, defaults: String) -> wasmtime::Result<Result<String, String>> {
@@ -61,13 +72,10 @@ impl pumpkin::plugin::config::Host for PluginHostState {
             Err(error) => return Ok(Err(error)),
         };
 
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| wasmtime::Error::msg(format!("failed to create config dir: {e}")))?;
+        match write_config_atomic(&path, &merged) {
+            Ok(()) => Ok(Ok(merged)),
+            Err(error) => Ok(Err(error)),
         }
-        std::fs::write(&path, &merged)
-            .map_err(|e| wasmtime::Error::msg(format!("failed to write config: {e}")))?;
-        Ok(Ok(merged))
     }
 
     async fn save_config(&mut self, content: String) -> wasmtime::Result<Result<(), String>> {
@@ -80,13 +88,10 @@ impl pumpkin::plugin::config::Host for PluginHostState {
         }
 
         let path = config_path(&name);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| wasmtime::Error::msg(format!("failed to create config dir: {e}")))?;
+        match write_config_atomic(&path, &content) {
+            Ok(()) => Ok(Ok(())),
+            Err(error) => Ok(Err(error)),
         }
-        std::fs::write(&path, content)
-            .map_err(|e| wasmtime::Error::msg(format!("failed to write config: {e}")))?;
-        Ok(Ok(()))
     }
 }
 

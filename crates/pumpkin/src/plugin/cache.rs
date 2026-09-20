@@ -25,7 +25,10 @@ impl PermissionCache {
 
     pub async fn save(&self, path: &Path) -> tokio::io::Result<()> {
         let data = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        fs::write(path, data).await
+        // Write-then-rename so a crash mid-write cannot corrupt the cache.
+        let tmp_path = path.with_extension("json.tmp");
+        fs::write(&tmp_path, data).await?;
+        fs::rename(&tmp_path, path).await
     }
 }
 
