@@ -205,7 +205,19 @@ impl PluginRuntime {
 
         let wasm_bytes = signature::strip_pumpkin_sections(&wasm_bytes).unwrap_or(wasm_bytes);
 
-        let component = load_component(&self.engine, &wasm_bytes, &self.cache_dir)?;
+        // JIT compilation (and cache deserialization) is CPU-bound and can take
+        // minutes for large debug builds; keep it off the async worker threads
+        // so a hot reload cannot stall the server runtime.
+        let engine = self.engine.clone();
+        let cache_dir = self.cache_dir.clone();
+        let component =
+            tokio::task::spawn_blocking(move || load_component(&engine, &wasm_bytes, &cache_dir))
+                .await
+                .map_err(|error| {
+                    PluginInitError::ComponentNewFailed(wasmtime::Error::msg(format!(
+                        "component compilation task failed: {error}"
+                    )))
+                })??;
 
         let instance_pre = self
             .linker
@@ -298,13 +310,18 @@ fn load_component(
 
     let component =
         Component::new(engine, wasm_bytes).map_err(PluginInitError::ComponentNewFailed)?;
-    fs::write(
-        &cache_path,
-        component
-            .serialize()
-            .map_err(PluginInitError::ComponentCacheSerializeFailed)?,
-    )
-    .map_err(PluginInitError::ComponentCacheWriteFailed)?;
+    // The compiled component is already in hand; a cache write failure (e.g. a
+    // concurrent loader holding the file) must not fail the plugin load.
+    match component.serialize() {
+        Ok(serialized) => {
+            if let Err(error) = fs::write(&cache_path, serialized) {
+                tracing::warn!(%error, "Failed to write plugin JIT cache; continuing without it");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "Failed to serialize plugin for JIT cache; continuing without it");
+        }
+    }
     Ok(component)
 }
 
@@ -458,6 +475,11 @@ impl WasmPlugin {
         &self,
         context: Arc<Context>,
     ) -> Result<Result<(), String>, wasmtime::Error> {
+        // Bukkit semantics: disabling a plugin cancels its scheduled tasks.
+        // (Unload does the same in `on_unload`; a disable-without-unload must
+        // not leave the plugin's tasks firing.)
+        self.cancel_scheduled_tasks(&context.server).await;
+
         let function = match self.plugin_instance.as_ref() {
             PluginInstance::V0_1(plugin) => plugin.func_on_disable(),
         };
@@ -473,6 +495,32 @@ impl WasmPlugin {
                 })
             })
             .await
+    }
+
+    /// Stops every task this plugin scheduled on the server's task scheduler.
+    async fn cancel_scheduled_tasks(&self, server: &Arc<crate::server::Server>) {
+        let loaded_plugin = self
+            .store
+            .call(|accessor| {
+                Box::pin(async move {
+                    Ok(accessor.with(|mut store| {
+                        store
+                            .data_mut()
+                            .plugin
+                            .as_ref()
+                            .and_then(std::sync::Weak::upgrade)
+                    }))
+                })
+            })
+            .await;
+
+        match loaded_plugin {
+            Ok(Some(plugin)) => server.task_scheduler.disable_plugin(&plugin),
+            Ok(None) => tracing::debug!("Plugin instance already gone; no tasks to cancel"),
+            Err(error) => {
+                tracing::warn!(%error, "Failed to resolve plugin for task cancellation");
+            }
+        }
     }
 
     pub async fn on_unload(
