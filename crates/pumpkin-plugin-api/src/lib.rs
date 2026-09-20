@@ -367,7 +367,7 @@ impl wit::Guest for Component {
         let handler = TASK_HANDLERS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .get(handler_id);
+            .get_for_invocation(handler_id);
         if let Some(handler) = handler {
             handler(server);
         }

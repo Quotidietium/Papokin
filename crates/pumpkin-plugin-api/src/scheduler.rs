@@ -27,31 +27,59 @@ pub type TaskHandler = Arc<dyn Fn(Server) + Send + Sync>;
 
 pub(crate) struct Task {
     handler: TaskHandler,
+    /// One-shot handlers are dropped after their first invocation so a plugin
+    /// scheduling many delayed tasks does not grow the table without bound.
+    one_shot: bool,
 }
 
 pub(crate) static TASK_HANDLERS: Mutex<LazyTaskHandlers> = Mutex::new(LazyTaskHandlers {
     handlers: BTreeMap::new(),
+    task_ids: BTreeMap::new(),
     next_id: 0,
 });
 
 pub(crate) struct LazyTaskHandlers {
     handlers: BTreeMap<u32, Task>,
+    /// Host task id -> handler id, so `cancel_task` can also drop the
+    /// guest-side handler of a repeating task.
+    task_ids: BTreeMap<u32, u32>,
     next_id: u32,
 }
 
 impl LazyTaskHandlers {
     /// Registers a new task handler and returns its unique ID.
-    pub fn register(&mut self, handler: TaskHandler) -> u32 {
+    pub fn register(&mut self, handler: TaskHandler, one_shot: bool) -> u32 {
         let id = self.next_id;
         self.next_id += 1;
-        self.handlers.insert(id, Task { handler });
+        self.handlers.insert(id, Task { handler, one_shot });
         id
     }
 
-    /// Returns the task handler for the given ID.
+    /// Records which host task id dispatches to `handler_id`.
+    pub fn link_task(&mut self, task_id: u32, handler_id: u32) {
+        self.task_ids.insert(task_id, handler_id);
+    }
+
+    /// Returns the handler for `id`, taking a one-shot handler out of the
+    /// table (its first invocation is also its last).
     #[must_use]
-    pub fn get(&self, id: u32) -> Option<TaskHandler> {
-        self.handlers.get(&id).map(|task| Arc::clone(&task.handler))
+    pub fn get_for_invocation(&mut self, id: u32) -> Option<TaskHandler> {
+        match self.handlers.get(&id) {
+            Some(task) if task.one_shot => {
+                let task = self.handlers.remove(&id);
+                self.task_ids.retain(|_, handler_id| *handler_id != id);
+                task.map(|task| task.handler)
+            }
+            Some(task) => Some(Arc::clone(&task.handler)),
+            None => None,
+        }
+    }
+
+    /// Drops the handler bound to host task `task_id`, if any.
+    pub fn remove_by_task_id(&mut self, task_id: u32) {
+        if let Some(handler_id) = self.task_ids.remove(&task_id) {
+            self.handlers.remove(&handler_id);
+        }
     }
 }
 
@@ -227,8 +255,13 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_delayed_task(handler_id, delay_ticks)
+        .register(Arc::new(handler), true);
+    let task_id = scheduler::schedule_delayed_task(handler_id, delay_ticks);
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Lower-level function to schedule a repeating task.
@@ -240,8 +273,13 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_repeating_task(handler_id, delay_ticks, period_ticks)
+        .register(Arc::new(handler), false);
+    let task_id = scheduler::schedule_repeating_task(handler_id, delay_ticks, period_ticks);
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Schedules a task to run once on the async executor after a wall-clock delay.
@@ -253,8 +291,13 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_async_delayed_task(handler_id, delay_ms)
+        .register(Arc::new(handler), true);
+    let task_id = scheduler::schedule_async_delayed_task(handler_id, delay_ms);
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Schedules a task to run repeatedly on the async executor with a wall-clock period.
@@ -266,8 +309,13 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_async_repeating_task(handler_id, delay_ms, period_ms)
+        .register(Arc::new(handler), false);
+    let task_id = scheduler::schedule_async_repeating_task(handler_id, delay_ms, period_ms);
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Schedules a task to run once after the given tick delay, bound to the
@@ -281,8 +329,13 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_entity_delayed_task(handler_id, entity.get_id(), delay_ticks)
+        .register(Arc::new(handler), true);
+    let task_id = scheduler::schedule_entity_delayed_task(handler_id, entity.get_id(), delay_ticks);
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Schedules a task to run repeatedly, bound to the entity's lifetime. The
@@ -301,16 +354,30 @@ where
     let handler_id = TASK_HANDLERS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .register(Arc::new(handler));
-    scheduler::schedule_entity_repeating_task(
+        .register(Arc::new(handler), false);
+    let task_id = scheduler::schedule_entity_repeating_task(
         handler_id,
         entity.get_id(),
         delay_ticks,
         period_ticks,
-    )
+    );
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .link_task(task_id, handler_id);
+    task_id
 }
 
 /// Cancels a scheduled task.
+///
+/// Immediate for wall-clock (async) tasks: a pending sleep is interrupted
+/// rather than left to run to the next due point. The guest-side handler
+/// registered for the task is released as well; one-shot handlers are also
+/// released automatically after their first invocation.
 pub fn cancel_task(task_id: u32) {
+    TASK_HANDLERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove_by_task_id(task_id);
     scheduler::cancel_task(task_id);
 }
