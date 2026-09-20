@@ -6,6 +6,7 @@ use crate::player::player_inventory::PlayerInventory;
 use crate::screen_handler::{InventoryPlayer, ScreenHandler, ScreenHandlerBehaviour};
 use crate::slot::{NormalSlot, Slot};
 
+use crate::crafting::recipe_provider::RecipeProvider;
 use crate::inventory::Inventory;
 use crate::inventory::SimpleInventory;
 use pumpkin_data::item::Item;
@@ -13,17 +14,44 @@ use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::recipes::{RECIPES_STONECUTTING, StonecutterRecipe};
 use pumpkin_data::screen::WindowType;
 use pumpkin_data::statistic::StatisticCategory;
+use pumpkin_protocol::codec::recipe::DynamicRecipe;
 use pumpkin_protocol::java::server::play::SlotActionType;
+
+/// One available stonecutting result, either vanilla (data-driven) or dynamic
+/// (plugin-provided). Only the output is kept: the stonecutter consumes one
+/// input item for every recipe.
+pub struct AvailableStonecuttingRecipe {
+    pub result_id: String,
+    pub result_count: u8,
+}
+
+impl AvailableStonecuttingRecipe {
+    fn from_vanilla(recipe: &StonecutterRecipe) -> Self {
+        Self {
+            result_id: recipe.result.id.to_string(),
+            result_count: recipe.result.count,
+        }
+    }
+}
 
 pub struct StonecutterScreenHandler {
     behaviour: ScreenHandlerBehaviour,
     pub input_inventory: Arc<SimpleInventory>,
     pub output_inventory: Arc<SimpleInventory>,
     pub selected_recipe: AtomicU8,
+    pub dynamic_recipe_provider: Option<Arc<dyn RecipeProvider>>,
 }
 
 impl StonecutterScreenHandler {
     pub fn new(sync_id: u8, player_inventory: &Arc<PlayerInventory>) -> Self {
+        Self::with_dynamic_recipe_provider(sync_id, player_inventory, None)
+    }
+
+    pub fn with_dynamic_recipe_provider(
+        sync_id: u8,
+        player_inventory: &Arc<PlayerInventory>,
+        dynamic_recipe_provider: Option<Arc<dyn RecipeProvider>>,
+    ) -> Self {
         let behaviour = ScreenHandlerBehaviour::new(sync_id, Some(WindowType::Stonecutter));
         let input_inventory = Arc::new(SimpleInventory::new(1));
         let output_inventory = Arc::new(SimpleInventory::new(1));
@@ -33,6 +61,7 @@ impl StonecutterScreenHandler {
             input_inventory: input_inventory.clone(),
             output_inventory: output_inventory.clone(),
             selected_recipe: AtomicU8::new(u8::MAX),
+            dynamic_recipe_provider,
         };
 
         handler.add_slot(Arc::new(NormalSlot::new(
@@ -61,25 +90,42 @@ impl StonecutterScreenHandler {
             return;
         }
 
-        let available_recipes = Self::get_available_recipes(&input_lock);
+        let available_recipes = self.get_available_recipes(&input_lock);
         let recipe_index = self.selected_recipe.load(Ordering::Relaxed);
 
         if recipe_index != u8::MAX && (recipe_index as usize) < available_recipes.len() {
-            let recipe = available_recipes[recipe_index as usize];
-            let item = Item::from_registry_key(recipe.result.id).unwrap_or(&Item::AIR);
-            let result = ItemStack::new(recipe.result.count, item);
+            let recipe = &available_recipes[recipe_index as usize];
+            let item = Item::from_registry_key(&recipe.result_id).unwrap_or(&Item::AIR);
+            let result = ItemStack::new(recipe.result_count, item);
             self.output_inventory.set_stack(0, result);
         } else {
             self.output_inventory.set_stack(0, ItemStack::EMPTY.clone());
         }
     }
 
-    fn get_available_recipes(input: &ItemStack) -> Vec<&'static StonecutterRecipe> {
+    /// Vanilla recipes first, then dynamic stonecutting recipes from the provider.
+    fn get_available_recipes(&self, input: &ItemStack) -> Vec<AvailableStonecuttingRecipe> {
         let item = input.item;
-        RECIPES_STONECUTTING
+        let mut available: Vec<AvailableStonecuttingRecipe> = RECIPES_STONECUTTING
             .iter()
             .filter(|r| r.ingredient.match_item(item))
-            .collect()
+            .map(AvailableStonecuttingRecipe::from_vanilla)
+            .collect();
+
+        if let Some(provider) = &self.dynamic_recipe_provider {
+            for recipe in provider.get_dynamic_recipes() {
+                if let DynamicRecipe::Stonecutting(stonecutting) = recipe
+                    && stonecutting.ingredient.match_item(item)
+                {
+                    available.push(AvailableStonecuttingRecipe {
+                        result_id: stonecutting.result.item_id,
+                        result_count: stonecutting.result.count,
+                    });
+                }
+            }
+        }
+
+        available
     }
 }
 

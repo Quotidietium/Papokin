@@ -6,27 +6,39 @@ use crate::player::player_inventory::PlayerInventory;
 use crate::screen_handler::{InventoryPlayer, ScreenHandler, ScreenHandlerBehaviour};
 use crate::slot::{NormalSlot, Slot};
 
+use crate::crafting::recipe_provider::RecipeProvider;
 use crate::inventory::Inventory;
 use crate::inventory::SimpleInventory;
 use pumpkin_data::data_component_impl::TrimImpl;
 use pumpkin_data::item::Item;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_data::recipes::{
-    get_smithing_transform_recipe, get_smithing_trim_recipe, get_trim_material_for_item,
+    RECIPES_SMITHING_TRIM, get_smithing_transform_recipe, get_smithing_trim_recipe,
+    get_trim_material_for_item,
 };
 use pumpkin_data::screen::WindowType;
 use pumpkin_data::statistic::StatisticCategory;
 use pumpkin_nbt::tag::NbtTag;
+use pumpkin_protocol::codec::recipe::{DynamicRecipe, OwnedSmithingRecipe};
 use pumpkin_protocol::java::server::play::SlotActionType;
 
 pub struct SmithingTableScreenHandler {
     behaviour: ScreenHandlerBehaviour,
     pub input_inventory: Arc<SimpleInventory>,
     pub output_inventory: Arc<SimpleInventory>,
+    pub dynamic_recipe_provider: Option<Arc<dyn RecipeProvider>>,
 }
 
 impl SmithingTableScreenHandler {
     pub fn new(sync_id: u8, player_inventory: &Arc<PlayerInventory>) -> Self {
+        Self::with_dynamic_recipe_provider(sync_id, player_inventory, None)
+    }
+
+    pub fn with_dynamic_recipe_provider(
+        sync_id: u8,
+        player_inventory: &Arc<PlayerInventory>,
+        dynamic_recipe_provider: Option<Arc<dyn RecipeProvider>>,
+    ) -> Self {
         let behaviour = ScreenHandlerBehaviour::new(sync_id, Some(WindowType::Smithing));
         let input_inventory = Arc::new(SimpleInventory::new(3));
         let output_inventory = Arc::new(SimpleInventory::new(1));
@@ -35,6 +47,7 @@ impl SmithingTableScreenHandler {
             behaviour,
             input_inventory,
             output_inventory,
+            dynamic_recipe_provider,
         };
 
         handler.add_slot(Arc::new(NormalSlot::new(
@@ -118,8 +131,113 @@ impl SmithingTableScreenHandler {
             return;
         }
 
+        if let Some(result) =
+            self.get_dynamic_smithing_result(&template_stack, &base_stack, &addition_stack)
+        {
+            self.output_inventory.set_stack(0, result);
+            return;
+        }
+
         self.output_inventory.set_stack(0, ItemStack::EMPTY.clone());
     }
+
+    /// Dynamic smithing recipes are only consulted when no vanilla recipe matched.
+    fn get_dynamic_smithing_result(
+        &self,
+        template_stack: &ItemStack,
+        base_stack: &ItemStack,
+        addition_stack: &ItemStack,
+    ) -> Option<ItemStack> {
+        let provider = self.dynamic_recipe_provider.as_ref()?;
+        let template = template_stack.item;
+        let base = base_stack.item;
+        let addition = addition_stack.item;
+
+        for recipe in provider.get_dynamic_recipes() {
+            let DynamicRecipe::Smithing(smithing) = recipe else {
+                continue;
+            };
+            match smithing {
+                OwnedSmithingRecipe::Transform {
+                    template: t,
+                    base: b,
+                    addition: a,
+                    result,
+                    copy_components,
+                    ..
+                } => {
+                    if !t.match_item(template) || !b.match_item(base) || !a.match_item(addition) {
+                        continue;
+                    }
+                    let res_key = result
+                        .item_id
+                        .strip_prefix("minecraft:")
+                        .unwrap_or(&result.item_id);
+                    let target_item = Item::from_registry_key(res_key)?;
+                    if copy_components {
+                        // Same component copy as the vanilla transform path: the
+                        // result inherits every data component of the base stack.
+                        let mut output = base_stack.clone();
+                        output.item = target_item;
+                        output.item_count = result.count;
+                        return Some(output);
+                    }
+                    return Some(ItemStack::new(result.count, target_item));
+                }
+                OwnedSmithingRecipe::Trim {
+                    template: t,
+                    base: b,
+                    addition: a,
+                    ..
+                } => {
+                    if !t.match_item(template) || !b.match_item(base) || !a.match_item(addition) {
+                        continue;
+                    }
+                    // Dynamic trims carry no pattern; borrow the pattern of the
+                    // vanilla trim recipe that accepts this template item.
+                    let pattern = RECIPES_SMITHING_TRIM
+                        .iter()
+                        .find(|r| r.template.match_item(template))
+                        .map(|r| r.pattern)?;
+                    return apply_trim(base_stack, addition_stack, pattern);
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Shared trim output logic: clone the base, refuse no-op re-trims and attach
+/// the trim component, mirroring the vanilla trim path.
+fn apply_trim(
+    base_stack: &ItemStack,
+    addition_stack: &ItemStack,
+    pattern: &str,
+) -> Option<ItemStack> {
+    let material = get_trim_material_for_item(addition_stack.item)?;
+
+    if let Some(trim) = base_stack.get_data_component::<TrimImpl>() {
+        let curr_mat = match &trim.material {
+            NbtTag::String(s) => s.as_ref(),
+            _ => "",
+        };
+        let curr_pat = match &trim.pattern {
+            NbtTag::String(s) => s.as_ref(),
+            _ => "",
+        };
+        if curr_mat == material && curr_pat == pattern {
+            return None;
+        }
+    }
+
+    let mut result = base_stack.clone();
+    result.item_count = 1;
+    result.set_data_component(TrimImpl {
+        material: NbtTag::String(material.into()),
+        pattern: NbtTag::String(pattern.into()),
+    });
+    Some(result)
 }
 
 impl ScreenHandler for SmithingTableScreenHandler {
