@@ -422,7 +422,12 @@ impl PumpkinServer {
             return std::time::Duration::ZERO;
         }
 
-        let duration = match self.server.plugin_manager.load_plugins(&self.server).await {
+        let duration = match self
+            .server
+            .plugin_manager
+            .load_plugins(&self.server, crate::plugin::api::LoadOrder::PostWorld)
+            .await
+        {
             Ok(duration) => duration,
             Err(err) => {
                 error!("{err}");

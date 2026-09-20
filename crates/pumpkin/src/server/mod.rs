@@ -54,6 +54,7 @@ mod connection_cache;
 pub(crate) mod debug_profiler;
 pub mod enchantment;
 mod key_store;
+pub mod permissions_file;
 pub mod recipe;
 pub mod scheduler;
 pub mod seasonal_events;
@@ -325,6 +326,14 @@ impl Server {
         };
         let server = Arc::new(server);
 
+        // Load server-level permission declarations (permissions.toml), if any.
+        if let Err(error) = permissions_file::load_permissions_file(
+            &server.permission_manager,
+            std::path::Path::new("permissions.toml"),
+        ) {
+            warn!("Failed to load permissions.toml: {error}");
+        }
+
         // Fetch / generate keys in background tasks to avoid blocking startup
         let server_clone = server.clone();
         server.spawn_task(async move {
@@ -382,6 +391,26 @@ impl Server {
                 };
                 let _ = server_clone.bedrock_oidc_keys.set(keys);
             });
+        }
+
+        // Bootstrap phase: plugins that declare `load_order = startup` run
+        // their on_load/on_enable before the worlds are created, so they can
+        // register data or intercept generation ahead of world loading.
+        if server.advanced_config.plugins.enabled {
+            match server
+                .plugin_manager
+                .load_plugins(&server, crate::plugin::api::LoadOrder::Startup)
+                .await
+            {
+                Ok(duration) if !duration.is_zero() => {
+                    info!(
+                        "Startup-phase plugins loaded (waited {}ms)",
+                        duration.as_millis()
+                    );
+                }
+                Ok(_) => {}
+                Err(err) => error!("{err}"),
+            }
         }
 
         let mut worlds_vec = Vec::new();
