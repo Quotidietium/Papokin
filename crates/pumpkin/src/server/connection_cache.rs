@@ -52,7 +52,8 @@ impl Default for CachedBranding {
 }
 
 impl CachedBranding {
-    const BRAND: &'static str = "Pumpkin";
+    /// The server brand string advertised to clients (e.g. in the `minecraft:brand` plugin message).
+    pub const BRAND: &'static str = "Pumpkin";
     const BRAND_BYTES: &'static [u8] = &{
         let brand = Self::BRAND.as_bytes();
         let len = brand.len();
@@ -91,6 +92,7 @@ impl CachedStatus {
         }
     }
 
+    #[must_use]
     pub fn get_status_response(&self, client_protocol: i32) -> StatusResponse {
         let mut response = self.status_response.clone();
 
@@ -107,6 +109,7 @@ impl CachedStatus {
         response
     }
 
+    #[must_use]
     pub fn get_status_packet(&self, client_protocol: i32) -> CStatusResponse {
         let response = self.get_status_response(client_protocol);
         let json = serde_json::to_string(&response).unwrap_or_default();

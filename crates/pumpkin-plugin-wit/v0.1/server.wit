@@ -1,6 +1,6 @@
 interface server {
     use player.{player, ban-player-options, ban-ip-options, server-link, known-server-link, server-link-label};
-    use common.{game-mode};
+    use common.{game-mode, position};
     use %world.{%world};
     use text.{text-component};
     use uuid.{uuid};
@@ -146,6 +146,47 @@ interface server {
         pumpkin-version: string,
     }
 
+    /// A snapshot of a player's data, online or offline.
+    record offline-player-info {
+        /// The player's UUID.
+        uuid: string,
+        /// The player's last known name, if in the user cache or online.
+        name: option<string>,
+        /// Whether the player has played on this server before (has a data file or is online).
+        has-played-before: bool,
+        /// When the player was last seen, as unix epoch milliseconds (data file modification time; none while online).
+        last-played-ms: option<u64>,
+        /// Whether the player is currently online.
+        is-online: bool,
+        /// Last known world (dimension identifier), if a data file exists.
+        last-world: option<string>,
+        /// Last known position, if a data file exists.
+        last-position: option<position>,
+        /// Last known gamemode, if a data file exists.
+        gamemode: option<game-mode>,
+        /// Respawn point (world, x, y, z) if set.
+        respawn-world: option<string>,
+        respawn-position: option<position>,
+        /// Whether the player is an operator.
+        is-op: bool,
+        /// Whether the player is whitelisted.
+        is-whitelisted: bool,
+        /// Whether the player is banned.
+        is-banned: bool,
+    }
+
+    /// Build and version information about the running server.
+    record server-build-info {
+        /// Server brand (e.g. "Pumpkin").
+        brand: string,
+        /// Server implementation version (crate version).
+        server-version: string,
+        /// Primary Minecraft (Java) version string this server implements.
+        minecraft-version: string,
+        /// Plugin API version gate (PLUGIN_API_VERSION).
+        plugin-api-version: u32,
+    }
+
     variant command-sender {
         console,
         player(player),
@@ -156,6 +197,9 @@ interface server {
         /// Returns system information (CPU, Memory, OS).
         /// Fields are returned only if the plugin has the corresponding permissions.
         get-sys-info: func() -> sys-info;
+
+        /// Returns build and version information about the running server.
+        get-build-info: func() -> server-build-info;
 
         /// Returns the current difficulty level of the server.
         get-difficulty: func() -> difficulty;
@@ -179,6 +223,12 @@ interface server {
 
         /// Searches for a player by their UUID string.
         get-player-by-uuid: func(id: uuid) -> option<player>;
+
+        /// Looks up a player by UUID, online or offline. Returns none when the player is completely unknown.
+        get-offline-player-by-uuid: func(uuid: string) -> option<offline-player-info>;
+
+        /// Looks up a player by name via the user cache, online or offline. Returns none when unknown.
+        get-offline-player-by-name: func(name: string) -> option<offline-player-info>;
 
         /// Returns a list of all worlds on this server.
         get-all-worlds: func() -> list<%world>;

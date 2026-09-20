@@ -23,8 +23,9 @@ use crate::plugin::{
                 player::{BanIpOptions, BanPlayerOptions, Player},
                 server::{
                     BanManager as WitBanManager, BannedIpEntry, BannedPlayerEntry, Difficulty,
-                    Dimension, OpEntry, OpManager as WitOpManager, Server, SysInfo,
-                    WhitelistEntry as WitWhitelistEntry, WhitelistManager as WitWhitelistManager,
+                    Dimension, OfflinePlayerInfo, OpEntry, OpManager as WitOpManager, Server,
+                    ServerBuildInfo, SysInfo, WhitelistEntry as WitWhitelistEntry,
+                    WhitelistManager as WitWhitelistManager,
                 },
                 uuid::Uuid as WitUuid,
             },
@@ -75,6 +76,18 @@ impl pumpkin::plugin::server::HostServer for PluginHostState {
             os_name,
             os_version,
             pumpkin_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+    }
+
+    async fn get_build_info(
+        &mut self,
+        _res: Resource<Server>,
+    ) -> wasmtime::Result<ServerBuildInfo> {
+        Ok(ServerBuildInfo {
+            brand: crate::server::connection_cache::CachedBranding::BRAND.to_string(),
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            minecraft_version: pumpkin_data::packet::CURRENT_MC_VERSION.to_string(),
+            plugin_api_version: crate::plugin::PLUGIN_API_VERSION,
         })
     }
 
@@ -164,6 +177,53 @@ impl pumpkin::plugin::server::HostServer for PluginHostState {
             .get_player_by_uuid(uuid)
             .map(|player| self.add_player(player))
             .transpose()
+    }
+
+    async fn get_offline_player_by_uuid(
+        &mut self,
+        _rep: Resource<Server>,
+        uuid: String,
+    ) -> wasmtime::Result<Option<OfflinePlayerInfo>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+
+        let Ok(uuid) = uuid::Uuid::parse_str(&uuid) else {
+            return Ok(None);
+        };
+
+        Ok(offline_player_info(server, uuid, None))
+    }
+
+    async fn get_offline_player_by_name(
+        &mut self,
+        _rep: Resource<Server>,
+        name: String,
+    ) -> wasmtime::Result<Option<OfflinePlayerInfo>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+
+        if let Some(player) = server.get_player_by_name(&name) {
+            let uuid = player.gameprofile.id;
+            let player_name = player.gameprofile.name.clone();
+            return Ok(offline_player_info(server, uuid, Some(player_name)));
+        }
+
+        let cached = server
+            .data
+            .user_cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_by_name(&name)
+            .map(|entry| (entry.uuid, entry.name));
+        let Some((uuid, cached_name)) = cached else {
+            return Ok(None);
+        };
+
+        Ok(offline_player_info(server, uuid, Some(cached_name)))
     }
 
     async fn get_all_worlds(
@@ -1470,4 +1530,226 @@ impl pumpkin::plugin::server::HostWhitelistManagerWithStore<PluginHostState>
             })
             .await
     }
+}
+
+/// Operator, whitelist and ban list membership for a player UUID.
+struct PlayerListFlags {
+    is_op: bool,
+    is_whitelisted: bool,
+    is_banned: bool,
+}
+
+/// Reads the op, whitelist and ban list membership for `uuid`.
+fn player_list_flags(server: &crate::server::Server, uuid: &uuid::Uuid) -> PlayerListFlags {
+    let is_op = server
+        .data
+        .operator_config
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get_entry(uuid)
+        .is_some();
+    let is_whitelisted = server
+        .data
+        .whitelist_config
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .whitelist
+        .iter()
+        .any(|entry| entry.uuid == *uuid);
+    let now = time::OffsetDateTime::now_utc();
+    let is_banned = server
+        .data
+        .banned_player_list
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .banned_players
+        .iter()
+        .any(|entry| entry.uuid == *uuid && entry.expires.is_none_or(|expires| expires > now));
+    PlayerListFlags {
+        is_op,
+        is_whitelisted,
+        is_banned,
+    }
+}
+
+/// Builds the snapshot for a player that is currently online (live values).
+fn online_player_info(
+    player: &crate::entity::player::Player,
+    uuid: uuid::Uuid,
+    flags: &PlayerListFlags,
+) -> OfflinePlayerInfo {
+    let position = player.living_entity.entity.pos.load();
+    let respawn = player
+        .respawn_point
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    OfflinePlayerInfo {
+        uuid: uuid.to_string(),
+        name: Some(player.gameprofile.name.clone()),
+        has_played_before: true,
+        last_played_ms: None,
+        is_online: true,
+        last_world: Some(player.world().dimension.minecraft_name.to_string()),
+        last_position: Some(super::events::to_wasm_position(position)),
+        gamemode: Some(super::events::to_wasm_game_mode(player.gamemode.load())),
+        respawn_world: respawn
+            .as_ref()
+            .map(|point| point.dimension.minecraft_name.to_string()),
+        respawn_position: respawn.as_ref().map(|point| {
+            (
+                f64::from(point.position.0.x),
+                f64::from(point.position.0.y),
+                f64::from(point.position.0.z),
+            )
+        }),
+        is_op: flags.is_op,
+        is_whitelisted: flags.is_whitelisted,
+        is_banned: flags.is_banned,
+    }
+}
+
+/// Builds an [`OfflinePlayerInfo`] snapshot for `uuid`, preferring live data
+/// for online players and falling back to the on-disk player data file.
+///
+/// Returns `None` when the player is completely unknown: not online, no
+/// player data file, and no user cache entry.
+fn offline_player_info(
+    server: &crate::server::Server,
+    uuid: uuid::Uuid,
+    cached_name: Option<String>,
+) -> Option<OfflinePlayerInfo> {
+    let flags = player_list_flags(server, &uuid);
+    if let Some(player) = server.get_player_by_uuid(uuid) {
+        return Some(online_player_info(&player, uuid, &flags));
+    }
+
+    // Player data files live at `<world>/players/data/<uuid>.dat`
+    // (see `ServerPlayerData::new` in `server/mod.rs`).
+    let data_file = server
+        .basic_config
+        .get_world_path()
+        .join("players")
+        .join("data")
+        .join(format!("{uuid}.dat"));
+    let has_data_file = data_file.is_file();
+
+    let name = cached_name.or_else(|| {
+        server
+            .data
+            .user_cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_by_uuid(uuid)
+            .map(|entry| entry.name)
+    });
+
+    if !has_data_file && name.is_none() {
+        return None;
+    }
+
+    let last_played_ms = std::fs::metadata(&data_file)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis() as u64);
+
+    let nbt = if has_data_file {
+        match server.player_data_storage.load_data(&uuid) {
+            Ok(data) => data,
+            Err(err) => {
+                tracing::warn!("Failed to load offline player data for {uuid}: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let (last_world, last_position, gamemode, respawn_world, respawn_position) =
+        nbt.as_ref().map_or_else(
+            || (None, None, None, None, None),
+            |nbt| {
+                let (respawn_world, respawn_position) = read_respawn_point(nbt);
+                (
+                    nbt.get_string("Dimension").map(str::to_string),
+                    read_last_position(nbt),
+                    read_gamemode(nbt),
+                    respawn_world,
+                    respawn_position,
+                )
+            },
+        );
+
+    Some(OfflinePlayerInfo {
+        uuid: uuid.to_string(),
+        name,
+        has_played_before: has_data_file,
+        last_played_ms,
+        is_online: false,
+        last_world,
+        last_position,
+        gamemode,
+        respawn_world,
+        respawn_position,
+        is_op: flags.is_op,
+        is_whitelisted: flags.is_whitelisted,
+        is_banned: flags.is_banned,
+    })
+}
+
+/// Reads the last known position (`Pos` double list) from a player data compound.
+fn read_last_position(
+    nbt: &pumpkin_nbt::compound::NbtCompound,
+) -> Option<pumpkin::plugin::common::Position> {
+    let pos = nbt.get_list("Pos")?;
+    if pos.len() < 3 {
+        return None;
+    }
+    match (
+        pos[0].extract_double(),
+        pos[1].extract_double(),
+        pos[2].extract_double(),
+    ) {
+        (Some(x), Some(y), Some(z)) => Some((x, y, z)),
+        _ => None,
+    }
+}
+
+/// Reads the last known gamemode (`playerGameType` int) from a player data compound.
+fn read_gamemode(
+    nbt: &pumpkin_nbt::compound::NbtCompound,
+) -> Option<pumpkin::plugin::common::GameMode> {
+    nbt.get_int("playerGameType")
+        .and_then(|raw| pumpkin_util::gamemode::GameMode::try_from(raw).ok())
+        .map(super::events::to_wasm_game_mode)
+}
+
+/// Reads the respawn point from a player data compound, accepting both the
+/// legacy `SpawnX`/`SpawnY`/`SpawnZ` + `SpawnDimension` fields and the
+/// vanilla `respawn` compound (`dimension` + `pos` int array).
+fn read_respawn_point(
+    nbt: &pumpkin_nbt::compound::NbtCompound,
+) -> (Option<String>, Option<pumpkin::plugin::common::Position>) {
+    if let (Some(x), Some(y), Some(z)) = (
+        nbt.get_int("SpawnX"),
+        nbt.get_int("SpawnY"),
+        nbt.get_int("SpawnZ"),
+    ) {
+        let world = nbt.get_string("SpawnDimension").map(str::to_string);
+        return (world, Some((f64::from(x), f64::from(y), f64::from(z))));
+    }
+
+    if let Some(respawn) = nbt.get_compound("respawn")
+        && let Some(pos) = respawn.get_int_array("pos")
+        && pos.len() >= 3
+    {
+        let world = respawn.get_string("dimension").map(str::to_string);
+        return (
+            world,
+            Some((f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2]))),
+        );
+    }
+
+    (None, None)
 }
