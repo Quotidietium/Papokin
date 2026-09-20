@@ -1216,6 +1216,23 @@ impl JavaClient {
                 );
                 server.plugin_manager.fire_blocking(server, &mut event);
 
+                // Dispatch to plugins that registered this messaging channel.
+                if !server
+                    .plugin_manager
+                    .get_channel_handlers(&channel_str)
+                    .is_empty()
+                {
+                    let channel = channel_str.clone();
+                    let player_uuid = player.gameprofile.id;
+                    let data = event.data.to_vec();
+                    let plugin_manager = server.plugin_manager.clone();
+                    server.spawn_task(async move {
+                        plugin_manager
+                            .dispatch_plugin_message(&channel, player_uuid, data)
+                            .await;
+                    });
+                }
+
                 if channel_str == "minecraft:register" {
                     if let Ok(channels_data) = std::str::from_utf8(payload.data) {
                         for ch in channels_data.split('\0') {

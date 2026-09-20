@@ -76,35 +76,63 @@ impl PendingConnection {
                 offline_uuid(&login_start.name).unwrap_or_else(|_| uuid::Uuid::nil())
             };
 
-            let profile = GameProfile {
-                id,
-                name: login_start.name.into_string(),
-                properties: ArcSwap::new(Arc::new(vec![])),
-                profile_actions: None,
-            };
+            self.handle_login_start_direct(server, login_start.name.into_string(), id)
+                .await
+        }
+    }
 
-            if server.advanced_config.networking.java.compression.enabled {
-                self.enable_compression(server).await;
-            }
+    /// The non-proxy login path: plugin pre-login gate, profile construction,
+    /// then either the encryption handshake or a direct finish.
+    async fn handle_login_start_direct(
+        &mut self,
+        server: &Arc<Server>,
+        player_name: String,
+        id: uuid::Uuid,
+    ) -> Option<PacketHandlerResult> {
+        let mut pre_login_event = PlayerPreLoginEvent {
+            player_name: player_name.clone(),
+            player_uuid: id,
+            ip_address: self.address,
+            kick_message: TextComponent::text("You have been kicked from the server"),
+            cancelled: false,
+        };
+        server
+            .plugin_manager
+            .fire(server, &mut pre_login_event)
+            .await;
+        if pre_login_event.cancelled {
+            self.kick(pre_login_event.kick_message).await;
+            return Some(PacketHandlerResult::Stop);
+        }
 
-            self.gameprofile = Some(profile.clone());
+        let profile = GameProfile {
+            id,
+            name: player_name,
+            properties: ArcSwap::new(Arc::new(vec![])),
+            profile_actions: None,
+        };
 
-            if server.advanced_config.networking.java.encryption {
-                let verify_token: [u8; 4] = rand::random();
-                self.verify_token = Some(verify_token);
-                self.send_packet_now(
-                    &server
-                        .encryption_request(
-                            &verify_token,
-                            server.advanced_config.networking.java.online_mode,
-                        )
-                        .await,
-                )
-                .await;
-                None
-            } else {
-                self.finish_login(server, &profile).await
-            }
+        if server.advanced_config.networking.java.compression.enabled {
+            self.enable_compression(server).await;
+        }
+
+        self.gameprofile = Some(profile.clone());
+
+        if server.advanced_config.networking.java.encryption {
+            let verify_token: [u8; 4] = rand::random();
+            self.verify_token = Some(verify_token);
+            self.send_packet_now(
+                &server
+                    .encryption_request(
+                        &verify_token,
+                        server.advanced_config.networking.java.online_mode,
+                    )
+                    .await,
+            )
+            .await;
+            None
+        } else {
+            self.finish_login(server, &profile).await
         }
     }
 }

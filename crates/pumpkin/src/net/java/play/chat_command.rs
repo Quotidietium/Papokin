@@ -13,6 +13,20 @@ impl JavaClient {
             return;
         }
         let command_str = command.command.strip_prefix('/').unwrap_or(command.command);
+
+        let mut preprocess_event = PlayerCommandPreprocessEvent {
+            player: player.clone(),
+            command: command_str.to_string(),
+            cancelled: false,
+        };
+        server
+            .plugin_manager
+            .fire(server, &mut preprocess_event)
+            .await;
+        if preprocess_event.cancelled {
+            return;
+        }
+
         send_cancellable! {{
             server;
             PlayerCommandSendEvent {

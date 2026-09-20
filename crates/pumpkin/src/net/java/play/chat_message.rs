@@ -65,12 +65,31 @@ impl JavaClient {
                     &message,
                 );
 
+                let mut async_chat_event = AsyncPlayerChatEvent {
+                    player: player.clone(),
+                    message: event.message.clone(),
+                    format: decorated_message,
+                    cancelled: false,
+                };
+                server
+                    .plugin_manager
+                    .fire(server, &mut async_chat_event)
+                    .await;
+                if async_chat_event.cancelled {
+                    return;
+                }
+
                 let entity = &player.get_entity();
                 let world = entity.world.load_full();
                 if server.basic_config.allow_chat_reports {
-                    world.broadcast_secure_player_chat(player, &chat_message, &decorated_message);
+                    world.broadcast_secure_player_chat(
+                        player,
+                        &chat_message,
+                        &async_chat_event.format,
+                    );
                 } else {
-                    let outgoing = crate::net::chat::PlayerChatMessage::system(message).with_unsigned_content(decorated_message);
+                    let outgoing = crate::net::chat::PlayerChatMessage::system(message)
+                        .with_unsigned_content(async_chat_event.format);
                     world.broadcast_chat_message(
                         &outgoing,
                         Player::is_text_filtering_enabled,

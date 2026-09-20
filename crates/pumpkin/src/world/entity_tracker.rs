@@ -25,6 +25,8 @@ use crate::entity::EntityBase;
 use crate::entity::player::Player;
 use crate::net::ClientPlatform;
 use crate::net::java::JavaClient;
+use crate::plugin::player::player_hide_entity::PlayerHideEntityEvent;
+use crate::plugin::player::player_show_entity::PlayerShowEntityEvent;
 use crate::world::World;
 use crate::world::chunker::get_view_distance;
 
@@ -97,7 +99,7 @@ impl TrackedEntity {
         })
     }
 
-    pub fn update_player(&self, player: &Arc<Player>, _world: &World) {
+    pub fn update_player(&self, player: &Arc<Player>, world: &World) {
         if player.get_entity().entity_id == self.entity_id {
             return;
         }
@@ -132,10 +134,41 @@ impl TrackedEntity {
 
         if is_visible {
             if self.seen_by.insert(player.gameprofile.id) {
+                let mut show_event = PlayerShowEntityEvent {
+                    player: player.clone(),
+                    entity_id: self.entity_id,
+                    cancelled: false,
+                };
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut show_event);
+                }
+                if show_event.cancelled {
+                    // Keep the entity unpaired so visibility is re-evaluated
+                    // on the next tracking update.
+                    self.seen_by.remove(&player.gameprofile.id);
+                    return;
+                }
                 self.add_pairing(player);
             }
-        } else {
-            self.remove_player(player);
+        } else if self.seen_by.remove(&player.gameprofile.id).is_some() {
+            let mut hide_event = PlayerHideEntityEvent {
+                player: player.clone(),
+                entity_id: self.entity_id,
+                cancelled: false,
+            };
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut hide_event);
+            }
+            if hide_event.cancelled {
+                // Vetoed: keep the entity paired (visible) for this player.
+                self.seen_by.insert(player.gameprofile.id);
+            } else {
+                self.remove_pairing(player);
+            }
         }
     }
 
