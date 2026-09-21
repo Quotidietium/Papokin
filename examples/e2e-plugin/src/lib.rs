@@ -23,9 +23,20 @@ use pumpkin_plugin_api::recipe::{
 };
 use pumpkin_plugin_api::scheduler::SchedulerExt;
 use pumpkin_plugin_api::services::ServiceProvider;
+use pumpkin_plugin_api::structure::{BlockPos as StructurePos, WorldStructureExt};
 use pumpkin_plugin_api::{
     Context, ItemStack, LoadOrder, Plugin, PluginMetadata, Result, TeleportFlags, register_plugin,
 };
+
+/// Smallest valid structure template (a single `minecraft:stone` block at the
+/// origin) as gzipped NBT, the vanilla `.nbt` structure format.
+const E2E_TEMPLATE_NBT: &[u8] = &[
+    31, 139, 8, 0, 0, 0, 0, 0, 0, 255, 77, 76, 73, 10, 128, 48, 16, 139, 212, 181, 23, 255, 227,
+    35, 252, 67, 45, 35, 20, 187, 225, 204, 201, 215, 219, 10, 5, 3, 129, 132, 44, 26, 88, 208,
+    179, 123, 72, 1, 168, 236, 26, 23, 76, 217, 120, 18, 33, 93, 237, 140, 126, 55, 129, 176, 6,
+    23, 201, 222, 230, 148, 141, 37, 69, 42, 251, 241, 240, 201, 94, 252, 213, 20, 6, 22, 35, 84,
+    116, 73, 84, 78, 220, 142, 127, 120, 1, 251, 234, 2, 179, 118, 0, 0, 0,
+];
 
 type PlayerJoinEventData = EventData<PlayerJoinEvent>;
 type ServerTickStartEventData = EventData<ServerTickStartEvent>;
@@ -47,6 +58,11 @@ static HANDSHAKE_SEEN: AtomicBool = AtomicBool::new(false);
 static PURCHASE_SEEN: AtomicBool = AtomicBool::new(false);
 static TRADE_SEEN: AtomicBool = AtomicBool::new(false);
 static COMBAT_CHECKED: AtomicBool = AtomicBool::new(false);
+static ENTITY_API_CHECKED: AtomicBool = AtomicBool::new(false);
+static CHUNK_DEMO_ARMED: AtomicBool = AtomicBool::new(false);
+static CHUNK_DEMO_DONE: AtomicBool = AtomicBool::new(false);
+static MAP_TICKS: AtomicU32 = AtomicU32::new(0);
+static MAP_CHECKED: AtomicBool = AtomicBool::new(false);
 
 struct JoinAnnouncerLowest;
 
@@ -100,6 +116,85 @@ impl EventHandler<PlayerJoinEvent> for JoinAnnouncerHighest {
                 player_attacker
             );
         }
+
+        // Entity plugin-API long-tail (new mechanisms): SpawnCategory mapping,
+        // EntitySnapshot (NBT serialize/rebuild), and read-only brain memory
+        // (Bukkit MemoryKey) queries. Runs once on the first join.
+        if !ENTITY_API_CHECKED.swap(true, Ordering::Relaxed) {
+            use pumpkin_plugin_api::mobs::memory_keys;
+            use pumpkin_plugin_api::{EntityType, SpawnCategory};
+
+            let player = &event.player;
+            let entity = player.as_entity();
+            let world = player.get_world();
+            let pos = player.get_position();
+
+            // SpawnCategory mapping: players are MISC, zombies are MONSTER.
+            let player_category = entity.get_spawn_category();
+            let zombie = world.spawn_entity(EntityType::Zombie, pos);
+            let zombie_category = zombie.get_spawn_category();
+            if player_category == SpawnCategory::Misc && zombie_category == SpawnCategory::Monster {
+                tracing::info!("E2E spawn-category-mapped player=misc zombie=monster");
+            } else {
+                tracing::info!(
+                    "E2E spawn-category-broken player={player_category:?} zombie={zombie_category:?}"
+                );
+            }
+
+            // EntitySnapshot: NBT round trip through spawn-entity-from-snapshot.
+            let snapshot = zombie.create_snapshot();
+            match world.spawn_entity_from_snapshot(&snapshot, pos) {
+                Some(clone) => {
+                    let same_type = clone.get_type() == EntityType::Zombie;
+                    let clone_uuid = clone.get_uuid();
+                    let zombie_uuid = zombie.get_uuid();
+                    let fresh_uuid =
+                        (clone_uuid.high, clone_uuid.low) != (zombie_uuid.high, zombie_uuid.low);
+                    if same_type && fresh_uuid {
+                        tracing::info!(
+                            "E2E entity-snapshot-roundtrip bytes={} fresh-uuid=true",
+                            snapshot.len()
+                        );
+                    } else {
+                        tracing::info!(
+                            "E2E entity-snapshot-mismatch same_type={same_type} fresh_uuid={fresh_uuid}"
+                        );
+                    }
+                }
+                None => tracing::info!(
+                    "E2E entity-snapshot-rebuild-failed bytes={}",
+                    snapshot.len()
+                ),
+            }
+            // Player snapshots must not rebuild: the player type is not saveable.
+            let player_snapshot = entity.create_snapshot();
+            if world
+                .spawn_entity_from_snapshot(&player_snapshot, pos)
+                .is_none()
+            {
+                tracing::info!(
+                    "E2E entity-snapshot-player-rejected bytes={}",
+                    player_snapshot.len()
+                );
+            } else {
+                tracing::info!("E2E entity-snapshot-player-unexpectedly-spawned");
+            }
+
+            // Brain memory read-only mapping (Bukkit MemoryKey equivalent):
+            // zombies are goal-driven, so their brain is the brain-dead default
+            // and queries come back empty; the call path itself is exercised.
+            if let Some(mob) = zombie.as_mob() {
+                let registered = mob.list_brain_memories();
+                let walk_target = mob.get_brain_memory(memory_keys::WALK_TARGET);
+                let unknown = mob.get_brain_memory("e2e:not_a_memory");
+                tracing::info!(
+                    "E2E brain-memory-query registered={} walk_target_present={} unknown_is_none={}",
+                    registered.len(),
+                    walk_target.is_some(),
+                    unknown.is_none()
+                );
+            }
+        }
         event
     }
 }
@@ -109,14 +204,96 @@ struct TickWatcher;
 impl EventHandler<ServerTickStartEvent> for TickWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        server: pumpkin_plugin_api::Server,
         event: ServerTickStartEventData,
     ) -> ServerTickStartEventData {
         let n = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
         if n == 20 {
             tracing::info!("E2E tick-event flowing (20 ticks observed)");
+            chunk_api_demo_start(&server);
         }
+        chunk_api_demo_poll(&server);
         event
+    }
+}
+
+// Chunk plugin-API long-tail (new mechanisms): loading-state query, plugin
+// load tickets with asynchronous generation, forced chunks, and copy-on-read
+// chunk snapshots. Driven from the tick event because headless e2e has no
+// players: no chunk is loaded until load-chunk/forced tickets trigger the
+// asynchronous generation pipeline.
+fn chunk_api_demo_start(server: &pumpkin_plugin_api::Server) {
+    let Some(world) = server.get_all_worlds().into_iter().next() else {
+        tracing::info!("E2E chunk-demo-no-world");
+        return;
+    };
+    let loaded_before = world.is_chunk_loaded(0, 0);
+    let already = world.load_chunk(0, 0);
+    tracing::info!(
+        "E2E chunk-load-triggered loaded_before={loaded_before} already_loaded={already}"
+    );
+
+    world.set_chunk_forced(7, 7, true);
+    let forced = world.is_chunk_forced(7, 7);
+    let unforced = world.is_chunk_forced(8, 8);
+    if forced && !unforced {
+        tracing::info!("E2E chunk-forced-set");
+    } else {
+        tracing::info!("E2E chunk-forced-broken forced={forced} unforced={unforced}");
+    }
+    CHUNK_DEMO_ARMED.store(true, Ordering::Relaxed);
+}
+
+fn chunk_api_demo_poll(server: &pumpkin_plugin_api::Server) {
+    if !CHUNK_DEMO_ARMED.load(Ordering::Relaxed) || CHUNK_DEMO_DONE.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(world) = server.get_all_worlds().into_iter().next() else {
+        return;
+    };
+    // Poll the loading state until the asynchronous generation lands.
+    if !world.is_chunk_loaded(0, 0) {
+        return;
+    }
+    CHUNK_DEMO_DONE.store(true, Ordering::Relaxed);
+    tracing::info!("E2E chunk-load-async-landed");
+
+    if let Some(snapshot) = world.get_chunk_snapshot(0, 0) {
+        let top = snapshot.top_block_y(8, 8);
+        let state = snapshot.block_state_id_at(8, top, 8);
+        let biome = snapshot.biome_at(8, top, 8);
+        let section_len = snapshot.section_block_states(0).len();
+        let biome_len = snapshot.section_biomes(0).len();
+        let all_len = snapshot.all_block_states().len();
+        tracing::info!(
+            "E2E chunk-snapshot x={} z={} min_y={} sections={} height={} top={} state={} biome={:?} section_dump={} biome_dump={} all={}",
+            snapshot.get_x(),
+            snapshot.get_z(),
+            snapshot.get_min_y(),
+            snapshot.get_section_count(),
+            snapshot.height(),
+            top,
+            state,
+            biome,
+            section_len,
+            biome_len,
+            all_len
+        );
+    } else {
+        tracing::info!("E2E chunk-snapshot-miss");
+    }
+
+    let live_present = world.get_chunk(0, 0).is_some();
+    tracing::info!("E2E chunk-live-handle present={live_present}");
+
+    // Release the plugin ticket and the forced mark again.
+    world.unload_chunk(0, 0);
+    world.set_chunk_forced(7, 7, false);
+    let forced_after = world.is_chunk_forced(7, 7);
+    if !forced_after {
+        tracing::info!("E2E chunk-released forced_after=false");
+    } else {
+        tracing::info!("E2E chunk-release-broken forced_after=true");
     }
 }
 
@@ -228,6 +405,52 @@ impl EventHandler<PlayerTradeEvent> for TradeWatcher {
     }
 }
 
+// MapView map rendering (new mechanism): on the 20th observed tick, create a
+// map in the first world, draw two corner pixels, place a cursor, lock the
+// canvas, and verify the get-map round trip. Headless e2e has no players
+// holding the map, so this exercises the host boundary and the MapManager
+// state; the actual CMapItemData resend path is exercised in-game.
+struct MapWatcher;
+
+impl EventHandler<ServerTickStartEvent> for MapWatcher {
+    fn handle(
+        &self,
+        server: pumpkin_plugin_api::Server,
+        event: ServerTickStartEventData,
+    ) -> ServerTickStartEventData {
+        let n = MAP_TICKS.fetch_add(1, Ordering::Relaxed);
+        if n < 20 || MAP_CHECKED.swap(true, Ordering::Relaxed) {
+            return event;
+        }
+        use pumpkin_plugin_api::map::{MapCursor, WorldMapExt, cursor_types, rgb};
+
+        let Some(world) = server.get_all_worlds().into_iter().next() else {
+            tracing::info!("E2E map-view-skipped no-world");
+            return event;
+        };
+        let map = world.create_map(0, 0, 0);
+        let map_id = map.get_id();
+        map.set_pixel(0, 0, rgb(255, 0, 0));
+        map.set_pixel(127, 127, rgb(0, 0, 255));
+        let cursor_index = map.add_cursor(&MapCursor {
+            icon_type: cursor_types::RED_X,
+            x: 64,
+            z: 64,
+            direction: 0,
+            display_name: Some("e2e".to_string()),
+        });
+        map.lock();
+        let roundtrip = pumpkin_plugin_api::map::get_map(map_id).is_some_and(|view| {
+            view.get_id() == map_id && view.get_pixel(127, 127) != 0 && view.is_locked()
+        });
+        tracing::info!(
+            "E2E map-view id={map_id} cursor_index={cursor_index} cursors={} roundtrip={roundtrip}",
+            map.get_cursors().len()
+        );
+        event
+    }
+}
+
 struct E2ePlugin;
 
 impl Plugin for E2ePlugin {
@@ -279,6 +502,9 @@ impl Plugin for E2ePlugin {
         context.register_event_handler(PurchaseWatcher, EventPriority::Normal, false, false)?;
         context.register_event_handler(TradeWatcher, EventPriority::Normal, false, false)?;
         tracing::info!("E2E paper-events-registered count=7");
+
+        // MapView map rendering (new mechanism), runs once on tick 20.
+        context.register_event_handler(MapWatcher, EventPriority::Normal, false, true)?;
 
         // Async wall-clock task (new mechanism).
         context.schedule_async_delayed_task(300, |_server| {
@@ -502,6 +728,45 @@ impl Plugin for E2ePlugin {
                 .get_registry_manager()
                 .has("e2e/custom", "e2e:marker"),
         );
+
+        // Structure template API (new mechanism): register a runtime template
+        // from gzipped NBT into the server's template cache (the same one the
+        // `/place template` command resolves against), query it back through
+        // has/list, then place it into a world.
+        match pumpkin_plugin_api::structure::register_structure("e2e:mono_block", E2E_TEMPLATE_NBT)
+        {
+            Ok(()) => {
+                let registered = pumpkin_plugin_api::structure::has_structure("e2e:mono_block");
+                // Embedded vanilla templates resolve through the same cache.
+                let embedded = pumpkin_plugin_api::structure::has_structure("minecraft:igloo/top");
+                let listed = pumpkin_plugin_api::structure::list_structures()
+                    .iter()
+                    .any(|name| name == "e2e:mono_block");
+                if registered && embedded && listed {
+                    tracing::info!("E2E structure-registered-and-queryable");
+                } else {
+                    tracing::info!(
+                        "E2E structure-query-incomplete registered={registered} embedded={embedded} listed={listed}"
+                    );
+                }
+
+                let worlds = context.get_server().get_all_worlds();
+                if let Some(world) = worlds.first() {
+                    match world.place_structure(
+                        "e2e:mono_block",
+                        StructurePos { x: 8, y: 200, z: 8 },
+                        None,
+                        None,
+                    ) {
+                        Ok(true) => tracing::info!("E2E structure-placed"),
+                        other => tracing::info!("E2E structure-place-unexpected {other:?}"),
+                    }
+                } else {
+                    tracing::info!("E2E structure-place-skipped no-world");
+                }
+            }
+            Err(err) => tracing::info!("E2E structure-register-failed {err}"),
+        }
 
         tracing::info!("E2E on_enable ok");
         Ok(())

@@ -68,14 +68,16 @@ use crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::world::{
     Block as WitBlock, BlockDirection as WitBlockDirection, BlockEntity, BlockEntityType,
     BlockFlags as WitBlockFlags, BlockPos as WitBlockPos, BlockState as WitBlockState,
     BlockStateInfo as WitBlockStateInfo, BoundingBox as WitBoundingBox, Chunk as WitChunk,
-    Flammable as WitFlammable, NoteblockInstrument as WitNoteblockInstrument,
-    PistonBehavior as WitPistonBehavior, RayTraceBlockResult as WitRayTraceBlockResult,
-    RayTraceEntityResult as WitRayTraceEntityResult, TeleportFlags as WitTeleportFlags,
-    WorldBorder as WitWorldBorder, WorldSpawnLocation as WitWorldSpawnLocation,
+    ChunkSnapshot as WitChunkSnapshot, Flammable as WitFlammable,
+    NoteblockInstrument as WitNoteblockInstrument, PistonBehavior as WitPistonBehavior,
+    RayTraceBlockResult as WitRayTraceBlockResult, RayTraceEntityResult as WitRayTraceEntityResult,
+    TeleportFlags as WitTeleportFlags, WorldBorder as WitWorldBorder,
+    WorldSpawnLocation as WitWorldSpawnLocation,
 };
 use crate::plugin::loader::wasm::wasm_host::{
     state::{
-        ChunkResource, PluginHostState, TextComponentResource, WorldBorderResource, WorldResource,
+        ChunkResource, ChunkSnapshot as HostChunkSnapshotData, ChunkSnapshotResource,
+        PluginHostState, TextComponentResource, WorldBorderResource, WorldResource,
     },
     wit::v0_1::pumpkin::{self, plugin::world::World},
 };
@@ -710,6 +712,130 @@ impl pumpkin::plugin::world::HostWorld for PluginHostState {
         }
     }
 
+    async fn is_chunk_loaded(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<bool> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+        Ok(world_res.provider.level.is_chunk_loaded(&pos))
+    }
+
+    async fn get_chunk_snapshot(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<Option<Resource<WitChunkSnapshot>>> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+
+        let Some(chunk) = world_res
+            .provider
+            .level
+            .loaded_chunks
+            .get(&pos)
+            .map(|c| c.value().clone())
+        else {
+            return Ok(None);
+        };
+
+        // Copy-on-read: the snapshot owns its block/biome data, so it stays
+        // valid after the live chunk changes or unloads.
+        let section = &chunk.section;
+        let blocks = section
+            .dump_blocks()
+            .into_iter()
+            .map(pumpkin_data::BlockStateId::as_u16)
+            .collect();
+        let biomes = section.dump_biomes();
+        let snapshot = HostChunkSnapshotData {
+            x: chunk.x,
+            z: chunk.z,
+            min_y: section.min_y,
+            section_count: section.count as u32,
+            blocks,
+            biomes,
+        };
+        let res = self.add_chunk_snapshot(snapshot)?;
+        Ok(Some(res))
+    }
+
+    async fn set_chunk_forced(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+        forced: bool,
+    ) -> wasmtime::Result<()> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+        world_res.provider.set_chunk_forced(pos, forced);
+        Ok(())
+    }
+
+    async fn is_chunk_forced(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<bool> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+        Ok(world_res.provider.is_chunk_forced(&pos))
+    }
+
+    async fn load_chunk(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<bool> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+        let level = &world_res.provider.level;
+
+        // Every call holds one plugin ticket (released by `unload-chunk`);
+        // the ticket drives the asynchronous generation/loading pipeline.
+        let mut chunk_loading = level
+            .chunk_loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        chunk_loading.add_ticket(
+            pos,
+            pumpkin_world::chunk_system::ChunkLoading::FULL_CHUNK_LEVEL,
+        );
+        chunk_loading.send_change();
+        drop(chunk_loading);
+        Ok(level.is_chunk_loaded(&pos))
+    }
+
+    async fn unload_chunk(
+        &mut self,
+        world: Resource<World>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<()> {
+        let world_res = self.get_world_res(&world)?;
+        let pos = pumpkin_util::math::vector2::Vector2::new(x, z);
+        let level = &world_res.provider.level;
+
+        // Releases one plugin ticket; no-op when none is held. The forced
+        // mark is a separate flag and is not cleared here.
+        let mut chunk_loading = level
+            .chunk_loading
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        chunk_loading.remove_ticket(
+            pos,
+            pumpkin_world::chunk_system::ChunkLoading::FULL_CHUNK_LEVEL,
+        );
+        chunk_loading.send_change();
+        Ok(())
+    }
+
     async fn get_block_state_id(
         &mut self,
         world: Resource<World>,
@@ -1341,6 +1467,34 @@ impl pumpkin::plugin::world::HostWorldWithStore<PluginHostState> for HasSelf<Plu
         host.get().add_entity(entity)
     }
 
+    async fn spawn_entity_from_snapshot(
+        mut host: Access<'_, PluginHostState, Self>,
+        world: Resource<World>,
+        nbt: Vec<u8>,
+        pos: pumpkin::plugin::common::Position,
+    ) -> wasmtime::Result<Option<Resource<pumpkin::plugin::world::Entity>>> {
+        let (world, plugin) = world_and_plugin(host.get(), &world)?;
+
+        let mut cursor = std::io::Cursor::new(&nbt[..]);
+        let mut reader = pumpkin_nbt::deserializer::NbtReadHelperJava::new(
+            pumpkin_nbt::deserializer::NbtStreamReader(&mut cursor),
+        );
+        let Ok(snapshot) = pumpkin_nbt::Nbt::read_unnamed(&mut reader) else {
+            return Ok(None);
+        };
+
+        let pos = pumpkin_util::math::vector3::Vector3::new(pos.0, pos.1, pos.2);
+        let Some(entity) = crate::entity::r#type::from_nbt(&snapshot.root_tag, pos, &world) else {
+            return Ok(None);
+        };
+        let spawned_entity = Arc::clone(&entity);
+        plugin
+            .store
+            .pump_blocking(&mut host, move || world.spawn_entity(spawned_entity))
+            .await?;
+        Ok(Some(host.get().add_entity(entity)?))
+    }
+
     async fn strike_lightning(
         mut host: Access<'_, PluginHostState, Self>,
         world: Resource<World>,
@@ -1719,6 +1873,178 @@ impl pumpkin::plugin::world::HostChunk for PluginHostState {
     async fn drop(&mut self, rep: Resource<WitChunk>) -> wasmtime::Result<()> {
         self.resource_table
             .delete::<ChunkResource>(Resource::new_own(rep.rep()))
+            .map_err(wasmtime::Error::from)?;
+        Ok(())
+    }
+}
+
+impl PluginHostState {
+    /// Resolves a snapshot-local position to the flat block index, or `None`
+    /// when the position is outside the copied data.
+    fn snapshot_block_index(snapshot: &HostChunkSnapshotData, pos: &WitBlockPos) -> Option<usize> {
+        if !(0..16).contains(&pos.x) || !(0..16).contains(&pos.z) {
+            return None;
+        }
+        let relative_y = pos.y - snapshot.min_y;
+        if relative_y < 0 {
+            return None;
+        }
+        let relative_y = relative_y as usize;
+        let section = relative_y / 16;
+        if section >= snapshot.section_count as usize {
+            return None;
+        }
+        Some(section * 4096 + (relative_y % 16) * 256 + pos.z as usize * 16 + pos.x as usize)
+    }
+}
+
+impl pumpkin::plugin::world::HostChunkSnapshot for PluginHostState {
+    async fn get_x(&mut self, snapshot: Resource<WitChunkSnapshot>) -> wasmtime::Result<i32> {
+        Ok(self.get_chunk_snapshot_res(&snapshot)?.provider.x)
+    }
+
+    async fn get_z(&mut self, snapshot: Resource<WitChunkSnapshot>) -> wasmtime::Result<i32> {
+        Ok(self.get_chunk_snapshot_res(&snapshot)?.provider.z)
+    }
+
+    async fn get_min_y(&mut self, snapshot: Resource<WitChunkSnapshot>) -> wasmtime::Result<i32> {
+        Ok(self.get_chunk_snapshot_res(&snapshot)?.provider.min_y)
+    }
+
+    async fn get_section_count(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+    ) -> wasmtime::Result<u32> {
+        Ok(self
+            .get_chunk_snapshot_res(&snapshot)?
+            .provider
+            .section_count)
+    }
+
+    async fn get_block_state_id(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        pos: WitBlockPos,
+    ) -> wasmtime::Result<u16> {
+        let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+        let Some(index) = Self::snapshot_block_index(snapshot_res, &pos) else {
+            return Ok(BlockStateId::AIR.as_u16());
+        };
+        Ok(snapshot_res.blocks[index])
+    }
+
+    async fn get_block_state(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        pos: WitBlockPos,
+    ) -> wasmtime::Result<WitBlockState> {
+        let (x, z) = {
+            let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+            (snapshot_res.x, snapshot_res.z)
+        };
+        let id = self.get_block_state_id(snapshot, pos).await?;
+        let state = BlockStateId::new_or_air(id).to_state();
+        let world_pos = BlockPos::new(x * 16 + pos.x, pos.y, z * 16 + pos.z);
+        Ok(to_wit_block_state(state, Some(&world_pos)))
+    }
+
+    async fn get_block(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        pos: WitBlockPos,
+    ) -> wasmtime::Result<WitBlock> {
+        let id = self.get_block_state_id(snapshot, pos).await?;
+        let block = pumpkin_data::Block::from_state_id(BlockStateId::new_or_air(id));
+        Ok(to_wit_block(block))
+    }
+
+    async fn get_biome(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        pos: WitBlockPos,
+    ) -> wasmtime::Result<pumpkin::plugin::biomes::Biome> {
+        let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+        let biome_id = if !(0..16).contains(&pos.x) || !(0..16).contains(&pos.z) {
+            0
+        } else {
+            let relative_y = pos.y - snapshot_res.min_y;
+            if relative_y < 0 {
+                0
+            } else {
+                let relative_y = relative_y as usize;
+                let section = relative_y / 16;
+                if section >= snapshot_res.section_count as usize {
+                    0
+                } else {
+                    let quart_y = (relative_y >> 2) & 3;
+                    snapshot_res.biomes[section * 64
+                        + quart_y * 16
+                        + (pos.z as usize >> 2) * 4
+                        + (pos.x as usize >> 2)]
+                }
+            }
+        };
+        let biome = pumpkin_data::biome::Biome::from_id(biome_id)
+            .unwrap_or(&pumpkin_data::biome::Biome::THE_VOID);
+        Self::get_wit_biome(biome)
+    }
+
+    async fn get_top_block_y(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        x: i32,
+        z: i32,
+    ) -> wasmtime::Result<i32> {
+        let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+        if !(0..16).contains(&x) || !(0..16).contains(&z) {
+            return Ok(snapshot_res.min_y - 1);
+        }
+        let height = snapshot_res.section_count as usize * 16;
+        for relative_y in (0..height).rev() {
+            let index =
+                (relative_y / 16) * 4096 + (relative_y % 16) * 256 + z as usize * 16 + x as usize;
+            if snapshot_res.blocks[index] != BlockStateId::AIR.as_u16() {
+                return Ok(snapshot_res.min_y + relative_y as i32);
+            }
+        }
+        Ok(snapshot_res.min_y - 1)
+    }
+
+    async fn dump_section_block_states(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        section_index: u32,
+    ) -> wasmtime::Result<Vec<u16>> {
+        let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+        if section_index >= snapshot_res.section_count {
+            return Err(wasmtime::Error::msg(format!(
+                "Section index {section_index} out of range ({} sections)",
+                snapshot_res.section_count
+            )));
+        }
+        let start = section_index as usize * 4096;
+        Ok(snapshot_res.blocks[start..start + 4096].to_vec())
+    }
+
+    async fn dump_section_biomes(
+        &mut self,
+        snapshot: Resource<WitChunkSnapshot>,
+        section_index: u32,
+    ) -> wasmtime::Result<Vec<u8>> {
+        let snapshot_res = &self.get_chunk_snapshot_res(&snapshot)?.provider;
+        if section_index >= snapshot_res.section_count {
+            return Err(wasmtime::Error::msg(format!(
+                "Section index {section_index} out of range ({} sections)",
+                snapshot_res.section_count
+            )));
+        }
+        let start = section_index as usize * 64;
+        Ok(snapshot_res.biomes[start..start + 64].to_vec())
+    }
+
+    async fn drop(&mut self, rep: Resource<WitChunkSnapshot>) -> wasmtime::Result<()> {
+        self.resource_table
+            .delete::<ChunkSnapshotResource>(Resource::new_own(rep.rep()))
             .map_err(wasmtime::Error::from)?;
         Ok(())
     }

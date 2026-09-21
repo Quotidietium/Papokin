@@ -53,6 +53,8 @@ pub mod living_entity;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod logging;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod map;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod merchant;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod messaging;
@@ -73,6 +75,8 @@ pub mod server;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod services;
 pub mod status_effect;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod structure;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod tag;
 #[allow(clippy::unused_async_trait_impl)]

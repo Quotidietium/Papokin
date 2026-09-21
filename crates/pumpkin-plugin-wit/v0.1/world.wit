@@ -41,6 +41,51 @@ interface %world {
         push-only
     }
 
+    /// Spawn category of an entity type, equivalent to Bukkit's `SpawnCategory`.
+    ///
+    /// Mirrors vanilla's `MobCategory` constants; drives natural-spawn caps,
+    /// friendliness, persistence, and despawn distances.
+    enum spawn-category {
+        /// Hostile mobs (zombies, skeletons, ...). Cap 70, not persistent.
+        monster,
+        /// Passive animals. Cap 10, persistent.
+        creature,
+        /// Ambient creatures (bats). Cap 15.
+        ambient,
+        /// Axolotls. Cap 5.
+        axolotls,
+        /// Underground water creatures (glow squids). Cap 5.
+        underground-water-creature,
+        /// Water creatures (dolphins, squids). Cap 5, persistent.
+        water-creature,
+        /// Water ambient creatures (fish). Cap 20.
+        water-ambient,
+        /// Everything else (players, projectiles, items, ...). No cap.
+        misc,
+    }
+
+    /// Presence state of one brain memory slot, equivalent to vanilla's
+    /// `MemoryStatus` minus the "unknown to the server" case.
+    enum memory-status {
+        /// The memory type is registered in the mob's brain but holds no value.
+        registered,
+        /// The memory type is registered and currently holds a value.
+        value-present,
+    }
+
+    /// Read-only view of one brain memory slot of a mob.
+    record brain-memory {
+        /// Whether the slot currently holds a value.
+        status: memory-status,
+        /// Stringified stored value (vanilla debug-dump format, e.g. a block
+        /// position, entity reference, or list; includes the remaining ttl when
+        /// the value expires), or none when the slot holds no value.
+        value: option<string>,
+        /// Ticks until the value expires; none when the value never expires or
+        /// the slot holds no value.
+        ttl: option<s64>,
+    }
+
     /// Predefined AI goals that can be added to mob entities.
     variant builtin-ai-goal {
         swim,
@@ -437,6 +482,10 @@ interface %world {
         get-uuid: func() -> uuid;
         get-type: func() -> entity-type;
 
+        /// Returns the spawn category (vanilla `MobCategory`, Bukkit
+        /// `SpawnCategory`) of this entity's type.
+        get-spawn-category: func() -> spawn-category;
+
         get-position: func() -> position;
         get-world: func() -> %world;
 
@@ -548,6 +597,14 @@ interface %world {
         remove-custom-data: func(namespace: string, key: string);
         /// Returns whether this entity has a namespaced custom data value.
         has-custom-data: func(namespace: string, key: string) -> bool;
+
+        /// Serializes this entity to its NBT snapshot bytes: Java-edition NBT
+        /// with an unnamed root compound, the same layout used when saving
+        /// entities to chunk data. The document always contains the entity
+        /// type's namespaced "id", so it can be rebuilt later with
+        /// `world.spawn-entity-from-snapshot`. Equivalent to Bukkit's
+        /// `Entity#createSnapshot`.
+        create-snapshot: func() -> list<u8>;
 
         /// Returns this entity as a living-entity if it has health and attributes, or none otherwise.
         as-living: func() -> option<living-entity>;
@@ -673,6 +730,21 @@ interface %world {
         set-freeze-ticks: func(ticks: s32);
         /// Returns the number of freeze ticks currently on this entity.
         get-freeze-ticks: func() -> s32;
+
+        // Brain memories (read-only, equivalent to querying Bukkit `MemoryKey`s)
+        /// Reads one brain memory by its vanilla name. Accepts both the
+        /// namespaced form ("minecraft:walk_target") and the bare path
+        /// ("walk_target"). Returns none when the name is not a known memory
+        /// type or the memory type is not registered in this mob's brain
+        /// (goal-driven mobs have an empty, "brain-dead" brain).
+        ///
+        /// The value is stringified in the vanilla debug-dump format; typed
+        /// memory values (positions, entity references, lists, numbers,
+        /// booleans) are all rendered as text.
+        get-brain-memory: func(name: string) -> option<brain-memory>;
+        /// Returns the vanilla names of all memory types currently registered
+        /// in this mob's brain, sorted alphabetically.
+        list-brain-memories: func() -> list<string>;
     }
 
     /// Result of a raycast operation.
@@ -762,6 +834,59 @@ interface %world {
         remove-custom-data: func(namespace: string, key: string);
         /// Returns whether this chunk has a namespaced custom data value.
         has-custom-data: func(namespace: string, key: string) -> bool;
+    }
+
+    /// A read-only, point-in-time copy of a chunk's block and biome data.
+    ///
+    /// Created via `world.get-chunk-snapshot`. The data is copied on creation
+    /// (copy-on-read), so the snapshot stays valid and unchanged even after the
+    /// live chunk is modified or unloaded. The bulk data lives on the host;
+    /// only the values requested through these functions cross the boundary.
+    resource chunk-snapshot {
+        /// Gets the chunk's X coordinate.
+        get-x: func() -> s32;
+
+        /// Gets the chunk's Z coordinate.
+        get-z: func() -> s32;
+
+        /// Returns the minimum Y coordinate (bottom of the world).
+        get-min-y: func() -> s32;
+
+        /// Returns the number of 16-block-tall sections in this snapshot.
+        get-section-count: func() -> u32;
+
+        /// Gets the block state ID at the specified position relative to the chunk.
+        /// X and Z must be in the range [0, 15]; Y is absolute. Out-of-range
+        /// positions return the air block state ID.
+        get-block-state-id: func(pos: block-pos) -> u16;
+
+        /// Gets detailed block state information at the specified position relative to the chunk.
+        /// X and Z must be in the range [0, 15]; Y is absolute.
+        get-block-state: func(pos: block-pos) -> block-state;
+
+        /// Gets the block at the specified position relative to the chunk.
+        /// X and Z must be in the range [0, 15]; Y is absolute.
+        get-block: func(pos: block-pos) -> block;
+
+        /// Gets the biome at the specified position relative to the chunk.
+        /// X and Z must be in the range [0, 15]; Y is absolute.
+        get-biome: func(pos: block-pos) -> biome;
+
+        /// Gets the highest non-air block Y coordinate at the specified X and Z
+        /// relative to the chunk. X and Z must be in the range [0, 15].
+        /// Returns min-y - 1 when the column is entirely air.
+        get-top-block-y: func(x: s32, z: s32) -> s32;
+
+        /// Dumps all 4096 block state IDs of one 16x16x16 section
+        /// (section-index 0 is the bottom section), ordered Y-major, then Z,
+        /// then X. This is the paged bulk-read path: a full chunk dump is
+        /// section-count calls of roughly 8 KiB each instead of one very large
+        /// transfer.
+        dump-section-block-states: func(section-index: u32) -> list<u16>;
+
+        /// Dumps all 64 biome IDs of one section (4x4x4 quart resolution),
+        /// ordered Y-major, then Z, then X.
+        dump-section-biomes: func(section-index: u32) -> list<u8>;
     }
 
     /// Represents the boundaries of a world.
@@ -864,6 +989,42 @@ interface %world {
         /// Gets the chunk at the specified chunk coordinates.
         get-chunk: func(x: s32, z: s32) -> option<chunk>;
 
+        /// Returns whether the chunk at the specified chunk coordinates is
+        /// currently loaded in memory.
+        is-chunk-loaded: func(x: s32, z: s32) -> bool;
+
+        /// Returns a read-only, copy-on-read snapshot of the chunk at the
+        /// specified chunk coordinates, or none when the chunk is not loaded.
+        /// The snapshot is a point-in-time copy: later changes to the live
+        /// chunk (or its unloading) do not affect it.
+        get-chunk-snapshot: func(x: s32, z: s32) -> option<chunk-snapshot>;
+
+        /// Marks or unmarks the chunk at the specified chunk coordinates as
+        /// forced. Forced chunks are kept loaded (and ticking) even when no
+        /// player is nearby; unmarking makes the chunk eligible for unloading
+        /// again once nothing else keeps it loaded.
+        set-chunk-forced: func(x: s32, z: s32, forced: bool);
+
+        /// Returns whether the chunk at the specified chunk coordinates is
+        /// marked as forced.
+        is-chunk-forced: func(x: s32, z: s32) -> bool;
+
+        /// Requests the chunk at the specified chunk coordinates to be loaded,
+        /// generating it asynchronously when it is neither loaded nor on disk.
+        ///
+        /// Every call holds one plugin ticket on the chunk that keeps it
+        /// loaded; call `unload-chunk` once per `load-chunk` call to release
+        /// it again. Returns true when the chunk was already loaded at call
+        /// time, false when loading/generation was triggered and is still in
+        /// flight (poll `is-chunk-loaded` or `get-chunk` on later ticks).
+        load-chunk: func(x: s32, z: s32) -> bool;
+
+        /// Releases one plugin ticket previously acquired with `load-chunk`.
+        /// The chunk becomes eligible for unloading once no plugin tickets,
+        /// forced marks, or player watchers keep it loaded. Does nothing when
+        /// no plugin ticket is held. Does not clear the forced mark.
+        unload-chunk: func(x: s32, z: s32);
+
         /// Gets the block state ID at the specified position.
         get-block-state-id: func(pos: block-pos) -> u16;
 
@@ -963,6 +1124,17 @@ interface %world {
 
         /// Spawns an entity of the specified type at the given position.
         spawn-entity: func(entity-type: entity-type, pos: position) -> entity;
+
+        /// Rebuilds an entity from its NBT snapshot bytes (as produced by
+        /// `entity.create-snapshot`) and spawns it at the given position.
+        ///
+        /// The snapshot must contain a namespaced "id" of a known, saveable
+        /// entity type; returns none when the bytes are not valid NBT, the
+        /// type is unknown, or the type cannot be spawned from data (e.g.
+        /// players). The position argument wins over the "Pos" stored in the
+        /// snapshot, and the rebuilt entity always receives a fresh UUID so a
+        /// snapshot can be spawned any number of times.
+        spawn-entity-from-snapshot: func(nbt: list<u8>, pos: position) -> option<entity>;
 
         /// Returns a list of all entities in this world.
         get-entities: func() -> list<entity>;

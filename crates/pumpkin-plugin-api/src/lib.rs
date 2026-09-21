@@ -81,6 +81,8 @@ use std::sync::OnceLock;
 
 /// Block definitions and block type helpers.
 pub mod block;
+/// Chunk snapshots and chunk loading controls.
+pub mod chunk;
 /// Read-only combat tracker queries for living entities and players.
 pub mod combat;
 /// Plugin command registration and handling utilities.
@@ -105,6 +107,8 @@ pub(crate) mod generated;
 pub mod inventory;
 /// Typed item definitions and `ItemStack` construction helpers.
 pub mod item;
+/// Custom map rendering (MapView): pixel drawing, cursors, terrain render.
+pub mod map;
 /// Merchant (villager / wandering trader) trade offer management.
 pub mod merchant;
 /// Plugin messaging channels (Messenger equivalent).
@@ -125,6 +129,8 @@ pub mod scheduler;
 pub mod server;
 /// Cross-plugin service registry (ServicesManager equivalent).
 pub mod services;
+/// Structure template registration and placement.
+pub mod structure;
 /// Tag modification and query utilities.
 pub mod tag;
 /// Scoreboard team management and builder utilities.
@@ -183,10 +189,10 @@ pub use inventory::{Inventory, PlayerInventory};
 pub use item::{IntoItemKey, Item, ItemStackExt};
 pub use merchant::{EntityMerchantExt, Merchant, TradeOffer, TradeOfferBuilder};
 pub use mobs::{
-    Ageable, AgeableData, Cat, CatData, Creeper, CreeperData, DyeColor, Enderman, EndermanData,
-    EntityCastExt, Fox, FoxData, IronGolem, IronGolemData, MobCast, MobData, Sheep, SheepData,
-    Shulker, ShulkerData, Slime, SlimeData, Villager, VillagerData, VillagerProfession, Wolf,
-    WolfData, Zombie, ZombieData,
+    Ageable, AgeableData, BrainMemory, Cat, CatData, Creeper, CreeperData, DyeColor, Enderman,
+    EndermanData, EntityCastExt, Fox, FoxData, IronGolem, IronGolemData, MemoryStatus, MobCast,
+    MobData, Sheep, SheepData, Shulker, ShulkerData, Slime, SlimeData, Villager, VillagerData,
+    VillagerProfession, Wolf, WolfData, Zombie, ZombieData,
 };
 pub use potions_wit::PotionType;
 pub use recipe::{
@@ -206,9 +212,9 @@ pub use wit::pumpkin::plugin::player::Player;
 pub use wit::pumpkin::plugin::scoreboard::{CollisionRule, NametagVisibility, TeamSettings};
 pub use wit::pumpkin::plugin::server::Dimension;
 pub use wit::pumpkin::plugin::world::{
-    Block, BlockDirection, BlockState, BlockStateInfo, Entity, Flammable, LivingEntity, Mob,
-    PathNodeType, RayTraceBlockResult, RayTraceEntityResult, RaycastResult, TeleportFlags, World,
-    WorldBorder,
+    Block, BlockDirection, BlockState, BlockStateInfo, Chunk, ChunkSnapshot, Entity, Flammable,
+    LivingEntity, Mob, PathNodeType, RayTraceBlockResult, RayTraceEntityResult, RaycastResult,
+    SpawnCategory, TeleportFlags, World, WorldBorder,
 };
 pub use worldgen::{ChunkBuffer, ChunkGenerator, GenerationPhase, GeneratorManager};
 

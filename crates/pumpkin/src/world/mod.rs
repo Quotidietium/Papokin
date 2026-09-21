@@ -534,6 +534,51 @@ impl World {
         )));
     }
 
+    /// Marks a chunk as forced (or no longer forced) and keeps the
+    /// chunk-system loading tickets in sync, so a forced chunk is never
+    /// unloaded while no player watches it. Returns whether the forced state
+    /// actually changed; repeated calls with the same state are no-ops.
+    ///
+    /// The active-chunk (ticking) view follows on the next
+    /// [`World::update_active_chunks`] run.
+    pub fn set_chunk_forced(&self, chunk_pos: Vector2<i32>, forced: bool) -> bool {
+        let changed = {
+            let mut forced_chunks = self
+                .forced_chunks
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if forced {
+                forced_chunks.insert(chunk_pos)
+            } else {
+                forced_chunks.remove(&chunk_pos)
+            }
+        };
+        if changed {
+            let mut chunk_loading = self
+                .level
+                .chunk_loading
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if forced {
+                chunk_loading.add_force_ticket(chunk_pos);
+            } else {
+                chunk_loading.remove_force_ticket(chunk_pos);
+            }
+            chunk_loading.send_change();
+        }
+        changed
+    }
+
+    /// Returns whether the chunk is marked as forced (kept loaded without
+    /// player watchers).
+    #[must_use]
+    pub fn is_chunk_forced(&self, chunk_pos: &Vector2<i32>) -> bool {
+        self.forced_chunks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(chunk_pos)
+    }
+
     pub fn get_lighting_config(&self) -> LightingEngineConfig {
         self.server
             .upgrade()

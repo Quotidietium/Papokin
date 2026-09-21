@@ -115,6 +115,24 @@ pub type WorldResource = WasmResource<Arc<World>>;
 pub type ChunkResource = WasmResource<(Arc<World>, Weak<pumpkin_world::chunk::ChunkData>)>;
 pub type WorldBorderResource = WasmResource<Arc<World>>;
 
+/// Host-side copy of a chunk's block and biome data backing the WIT
+/// `chunk-snapshot` resource (copy-on-read, read-only).
+pub struct ChunkSnapshot {
+    pub x: i32,
+    pub z: i32,
+    pub min_y: i32,
+    pub section_count: u32,
+    /// All block state IDs, section-major from the bottom up; within a
+    /// section ordered Y-major, then Z, then X (4096 entries per section).
+    pub blocks: Vec<u16>,
+    /// All biome IDs at 4x4x4 quart resolution, section-major from the bottom
+    /// up; within a section ordered Y-major, then Z, then X (64 entries per
+    /// section).
+    pub biomes: Vec<u8>,
+}
+
+pub type ChunkSnapshotResource = WasmResource<ChunkSnapshot>;
+
 #[derive(Clone)]
 pub enum ScoreboardProvider {
     World(Arc<World>),
@@ -173,6 +191,8 @@ pub type ItemDisplayEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type TextDisplayEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type InteractionEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type MerchantResource = WasmResource<Arc<dyn EntityBase>>;
+pub type MapViewResource =
+    WasmResource<crate::plugin::loader::wasm::wasm_host::wit::v0_1::map::PluginMapView>;
 
 #[derive(Clone)]
 pub struct ChunkBuffer {
@@ -313,6 +333,25 @@ impl PluginHostState {
             provider: (world, chunk),
         })?;
         Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn add_chunk_snapshot<T>(
+        &mut self,
+        provider: ChunkSnapshot,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self
+            .resource_table
+            .push(ChunkSnapshotResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn get_chunk_snapshot_res<T>(
+        &self,
+        resource: &wasmtime::component::Resource<T>,
+    ) -> wasmtime::Result<&ChunkSnapshotResource> {
+        Ok(self
+            .resource_table
+            .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)
     }
 
     pub fn add_world_border<T>(
@@ -654,6 +693,23 @@ impl PluginHostState {
         &self,
         resource: &wasmtime::component::Resource<T>,
     ) -> wasmtime::Result<&MerchantResource> {
+        Ok(self
+            .resource_table
+            .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)
+    }
+
+    pub fn add_map_view<T>(
+        &mut self,
+        provider: crate::plugin::loader::wasm::wasm_host::wit::v0_1::map::PluginMapView,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self.resource_table.push(MapViewResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn get_map_view_res<T>(
+        &self,
+        resource: &wasmtime::component::Resource<T>,
+    ) -> wasmtime::Result<&MapViewResource> {
         Ok(self
             .resource_table
             .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)

@@ -91,6 +91,10 @@ world plugin {
     import entity-statuses;
     /// Provides merchant (villager / wandering trader) trade offer management.
     import merchant;
+    /// Provides map creation and custom map rendering (MapView).
+    import %map;
+    /// Provides structure template registration and placement.
+    import structure;
 
     // --- Plugin-provided exports ---
 
