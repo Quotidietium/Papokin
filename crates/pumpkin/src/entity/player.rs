@@ -5625,14 +5625,37 @@ impl Player {
                             data: &*map_data.colors,
                         });
 
-                        self.try_send_client_packet(&CMapItemData {
-                            map_id: VarInt(map_id),
-                            scale: map_data.scale,
-                            tracking_position: true,
-                            locked: map_data.locked,
-                            icons: Some(&icons),
-                            data,
-                        });
+                        let include_canvas = map_data.dirty;
+                        let mut icon_tuples = vec![(
+                            decoration_type.id as i32,
+                            icon_x,
+                            icon_z,
+                            icon_direction,
+                            None,
+                        )];
+                        icon_tuples.extend(map_data.decorations.iter().map(|decoration| {
+                            (
+                                decoration.icon_type,
+                                decoration.x,
+                                decoration.z,
+                                decoration.direction,
+                                decoration.display_name.clone(),
+                            )
+                        }));
+                        let bedrock_packet =
+                            map_data.bedrock_map_packet(map_id, icon_tuples, include_canvas);
+
+                        self.try_enqueue_packet_editioned(
+                            &CMapItemData {
+                                map_id: VarInt(map_id),
+                                scale: map_data.scale,
+                                tracking_position: true,
+                                locked: map_data.locked,
+                                icons: Some(&icons),
+                                data,
+                            },
+                            &bedrock_packet,
+                        );
                         map_data.dirty = false;
                     }
                 }

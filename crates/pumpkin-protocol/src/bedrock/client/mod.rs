@@ -23,6 +23,7 @@ pub mod item_stack_response;
 pub mod jigsaw_structure_data;
 pub mod level_event;
 pub mod level_sound_event;
+pub mod map_item_data;
 pub mod mob_effect;
 pub mod mob_equipment;
 pub mod modal_form_request;

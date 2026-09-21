@@ -196,21 +196,107 @@ impl MapData {
                         .is_some_and(|component| component.id == map_id)
             });
             if holds_map {
-                player.try_send_client_packet(&CMapItemData {
-                    map_id: VarInt(map_id),
-                    scale: self.scale,
-                    tracking_position: true,
-                    locked: self.locked,
-                    icons: Some(&icons),
-                    data: Some(MapPatch {
-                        columns: 128,
-                        rows: 128,
-                        x: 0,
-                        z: 0,
-                        data: &*self.colors,
-                    }),
-                });
+                player.try_enqueue_packet_editioned(
+                    &CMapItemData {
+                        map_id: VarInt(map_id),
+                        scale: self.scale,
+                        tracking_position: true,
+                        locked: self.locked,
+                        icons: Some(&icons),
+                        data: Some(MapPatch {
+                            columns: 128,
+                            rows: 128,
+                            x: 0,
+                            z: 0,
+                            data: &*self.colors,
+                        }),
+                    },
+                    &self.bedrock_map_packet(
+                        map_id,
+                        self.decorations
+                            .iter()
+                            .map(|decoration| {
+                                (
+                                    decoration.icon_type,
+                                    decoration.x,
+                                    decoration.z,
+                                    decoration.direction,
+                                    decoration.display_name.clone(),
+                                )
+                            })
+                            .collect(),
+                        true,
+                    ),
+                );
             }
+        }
+    }
+
+    /// Builds the Bedrock `ClientboundMapItemData` (0x43) mirror of this map.
+    ///
+    /// `icons` are Java-style icon tuples `(icon_type, x, z, direction,
+    /// label)`; they are translated to Bedrock decorations plus the
+    /// per-decoration tracked objects Bedrock clients require to render any
+    /// icon at all. When `include_canvas` is set, the full 128x128 texture is
+    /// attached as ABGR pixels; otherwise only the decoration sections update.
+    #[must_use]
+    pub fn bedrock_map_packet(
+        &self,
+        map_id: i32,
+        icons: Vec<(i32, i8, i8, i8, Option<String>)>,
+        include_canvas: bool,
+    ) -> pumpkin_protocol::bedrock::client::map_item_data::CMapItemData {
+        use pumpkin_protocol::bedrock::client::map_item_data::{
+            MapDecoration as BedrockDecoration, MapTrackedObject,
+        };
+        use pumpkin_protocol::codec::var_long::VarLong;
+
+        let mut tracked_objects = Vec::with_capacity(icons.len());
+        let mut decorations = Vec::with_capacity(icons.len());
+        for (index, (icon_type, x, z, direction, label)) in icons.into_iter().enumerate() {
+            let (image, color) = bedrock_icon(icon_type);
+            tracked_objects.push(MapTrackedObject::entity(index as i64));
+            decorations.push(BedrockDecoration {
+                image,
+                rotation: direction as u8,
+                x: x as u8,
+                y: z as u8,
+                label: label.unwrap_or_default(),
+                color,
+            });
+        }
+
+        let (width, height, x_offset, y_offset, colors) = if include_canvas {
+            let pixels = self
+                .colors
+                .iter()
+                .map(|color_id| map_color_to_abgr(*color_id))
+                .collect();
+            (
+                Some(pumpkin_protocol::codec::var_int::VarInt(128)),
+                Some(pumpkin_protocol::codec::var_int::VarInt(128)),
+                Some(pumpkin_protocol::codec::var_int::VarInt(0)),
+                Some(pumpkin_protocol::codec::var_int::VarInt(0)),
+                Some(pixels),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+
+        pumpkin_protocol::bedrock::client::map_item_data::CMapItemData {
+            map_id: VarLong(i64::from(map_id)),
+            dimension: bedrock_dimension_id(&self.dimension),
+            locked: self.locked,
+            origin: BlockPos::new(0, 0, 0),
+            tracked_entity_ids: Some(vec![VarLong(i64::from(map_id))]),
+            scale: Some(self.scale as u8),
+            tracked_objects: Some(tracked_objects),
+            decorations: Some(decorations),
+            width,
+            height,
+            x_offset,
+            y_offset,
+            colors,
         }
     }
 }
@@ -221,4 +307,121 @@ pub struct MapDecoration {
     pub z: i8,
     pub direction: i8,
     pub display_name: Option<String>,
+}
+
+/// Bedrock dimension ids as sent in `ClientboundMapItemData` and
+/// `ChangeDimension`: 0 = overworld, 1 = nether, 2 = end.
+fn bedrock_dimension_id(dimension: &Dimension) -> u8 {
+    match dimension.minecraft_name {
+        "minecraft:the_nether" => 1,
+        "minecraft:the_end" => 2,
+        _ => 0,
+    }
+}
+
+/// Converts a Java map colour byte (`base_id * 4 + brightness`) into the
+/// packed ABGR int Bedrock expects on the canvas, serialised little-endian.
+///
+/// Brightness multipliers are the vanilla `MapColor.Brightness` table
+/// [180, 220, 255, 135] applied with floor division; verified against
+/// Geyser's precomputed `MapColor` entries (e.g. shaded id 4 = grass low =
+/// RGB(89, 125, 39)). Base id 0 is fully transparent.
+fn map_color_to_abgr(color_id: u8) -> i32 {
+    use pumpkin_data::map_color::MapColor;
+
+    const BRIGHTNESS: [u32; 4] = [180, 220, 255, 135];
+
+    let base = color_id >> 2;
+    if base == 0 {
+        return 0;
+    }
+    let Some(map_color) = MapColor::from_id(base) else {
+        return 0;
+    };
+    let multiplier = BRIGHTNESS[(color_id & 3) as usize];
+    let (r, g, b) = map_color.rgb;
+    let r = (u32::from(r) * multiplier / 255) as u32;
+    let g = (u32::from(g) * multiplier / 255) as u32;
+    let b = (u32::from(b) * multiplier / 255) as u32;
+    (0xFF00_0000u32 | (b << 16) | (g << 8) | r) as i32
+}
+
+/// Maps a Java `MapDecorationType` id (pumpkin-data ordering) to the Bedrock
+/// decoration image id and its packed ARGB colour (`0xFFRRGGBB`, written
+/// little-endian), mirroring Geyser's `BedrockMapIcon` table. Java types with
+/// no Bedrock image (1.21.11 additions past trial chambers) fall back to the
+/// plain white marker.
+fn bedrock_icon(java_icon_type: i32) -> (u8, i32) {
+    const fn argb(r: u32, g: u32, b: u32) -> i32 {
+        (0xFF00_0000u32 | (r << 16) | (g << 8) | b) as i32
+    }
+    const WHITE: i32 = argb(255, 255, 255);
+
+    let (image, color): (u8, i32) = match java_icon_type {
+        0 => (0, WHITE),                 // player -> marker_white
+        1 => (7, WHITE),                 // frame -> marker_sign (green arrow)
+        2 => (2, WHITE),                 // red_marker
+        3 => (3, WHITE),                 // blue_marker
+        4 => (4, argb(0, 0, 0)),         // target_x -> black cross (Geyser)
+        5 => (5, WHITE),                 // target_point -> triangle_red
+        6 => (6, WHITE),                 // player_off_map -> square_white
+        7 => (13, WHITE),                // player_off_limits -> small_square_white
+        8 => (14, WHITE),                // mansion
+        9 => (15, WHITE),                // monument
+        10 => (13, argb(255, 255, 255)), // banner_white
+        11 => (13, argb(249, 128, 29)),  // banner_orange
+        12 => (13, argb(199, 78, 189)),  // banner_magenta
+        13 => (13, argb(58, 179, 218)),  // banner_light_blue
+        14 => (13, argb(254, 216, 61)),  // banner_yellow
+        15 => (13, argb(128, 199, 31)),  // banner_lime
+        16 => (13, argb(243, 139, 170)), // banner_pink
+        17 => (13, argb(71, 79, 82)),    // banner_gray
+        18 => (13, argb(157, 157, 151)), // banner_light_gray
+        19 => (13, argb(22, 156, 156)),  // banner_cyan
+        20 => (13, argb(137, 50, 184)),  // banner_purple
+        21 => (13, argb(60, 68, 170)),   // banner_blue
+        22 => (13, argb(131, 84, 50)),   // banner_brown
+        23 => (13, argb(94, 124, 22)),   // banner_green
+        24 => (13, argb(176, 46, 38)),   // banner_red
+        25 => (13, argb(29, 29, 33)),    // banner_black
+        26 => (4, WHITE),                // red_x -> cross_white
+        27 => (17, WHITE),               // village_desert
+        28 => (18, WHITE),               // village_plains
+        29 => (19, WHITE),               // village_savanna
+        30 => (20, WHITE),               // village_snowy
+        31 => (21, WHITE),               // village_taiga
+        32 => (22, WHITE),               // jungle_temple
+        33 => (23, WHITE),               // swamp_hut -> witch_hut
+        34 => (24, WHITE),               // trial_chambers
+        _ => (0, WHITE),                 // newer types without a Bedrock image
+    };
+    (image, color)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_color_abgr_matches_geyser_golden_entries() {
+        // Transparent band.
+        assert_eq!(map_color_to_abgr(0), 0);
+        assert_eq!(map_color_to_abgr(3), 0);
+        // Grass shades (Geyser COLOR_4..=7 = RGB (89,125,39) (109,153,48)
+        // (127,178,56) (67,94,29)); ABGR int = A<<24|B<<16|G<<8|R.
+        let abgr = |r: u32, g: u32, b: u32| (0xFF00_0000u32 | (b << 16) | (g << 8) | r) as i32;
+        assert_eq!(map_color_to_abgr(4), abgr(89, 125, 39));
+        assert_eq!(map_color_to_abgr(5), abgr(109, 153, 48));
+        assert_eq!(map_color_to_abgr(6), abgr(127, 178, 56));
+        assert_eq!(map_color_to_abgr(7), abgr(67, 94, 29));
+    }
+
+    #[test]
+    fn bedrock_icon_table_covers_java_ids() {
+        assert_eq!(bedrock_icon(0).0, 0); // player
+        assert_eq!(bedrock_icon(1).0, 7); // frame
+        assert_eq!(bedrock_icon(10).0, 13); // banner_white
+        assert_eq!(bedrock_icon(34).0, 24); // trial_chambers
+        assert_eq!(bedrock_icon(41).0, 0); // unmapped falls back
+    }
 }

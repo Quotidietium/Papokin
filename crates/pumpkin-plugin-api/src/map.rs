@@ -12,12 +12,13 @@
 //! themselves (raw palette access is still available through
 //! [`MapView::set_colors_data`] / [`MapView::get_colors_data`]).
 //!
-//! Every mutation immediately pushes an updated `CMapItemData` packet to
-//! Java Edition players holding the map and marks it dirty for the per-tick
-//! map sync. Bedrock Edition map packets are not wired up yet (the Bedrock
-//! `ClientboundMapItemData` packet still has to be implemented in
-//! `pumpkin-protocol`); until then Bedrock players simply see no map
-//! updates.
+//! Every mutation immediately pushes an updated map packet to players
+//! holding the map and marks it dirty for the per-tick map sync. Both
+//! editions are served: Java receives `CMapItemData`, while Bedrock receives
+//! the mirrored `ClientboundMapItemData` (0x43) with the canvas converted to
+//! ABGR pixels and cursors translated to Bedrock decoration images (Java-only
+//! cursor types added after trial chambers fall back to the plain white
+//! marker).
 //!
 //! # Examples
 //!
