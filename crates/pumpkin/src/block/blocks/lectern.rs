@@ -102,6 +102,31 @@ impl LecternController for LecternPageController {
         }
         !take_event.cancelled
     }
+
+    fn on_page_change_click(&self, player: &dyn InventoryPlayer, new_page: i32) -> Option<i32> {
+        let entity = self.entity()?;
+        let book = pumpkin_inventory::Inventory::get_stack(entity, 0);
+        let entity_player = player
+            .as_any()
+            .downcast_ref::<crate::entity::player::Player>()?;
+        let entity_player = self.world.get_player_by_id(entity_player.entity_id())?;
+        let mut page_event =
+            crate::plugin::api::events::player::player_lectern_page_change::PlayerLecternPageChangeEvent::new(
+                entity_player,
+                self.position,
+                book,
+                new_page,
+            );
+        if let Some(server) = self.world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut page_event);
+        }
+        if page_event.cancelled {
+            return None;
+        }
+        Some(page_event.new_page)
+    }
 }
 
 struct LecternScreenFactory {
@@ -258,6 +283,25 @@ impl BlockBehaviour for LecternBlock {
         let Some(lectern) = lectern.as_any().downcast_ref::<LecternBlockEntity>() else {
             return BlockActionResult::PassToDefaultBlockAction;
         };
+
+        // Insert-book hook: cancelling consumes the click but keeps the book
+        // in the player's hand.
+        {
+            let mut insert_event =
+                crate::plugin::api::events::player::player_insert_lectern_book::PlayerInsertLecternBookEvent::new(
+                    args.player.clone(),
+                    *args.position,
+                    item_stack.clone(),
+                );
+            if let Some(server) = args.world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut insert_event);
+            }
+            if insert_event.cancelled {
+                return BlockActionResult::Success;
+            }
+        }
 
         let book = item_stack.split_unless_creative(args.player.gamemode.load(), 1);
         lectern.set_stack(0, book);

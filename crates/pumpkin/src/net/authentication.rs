@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::{collections::HashMap, net::IpAddr, sync::Arc};
 
 use base64::{Engine, engine::general_purpose};
 use pumpkin_config::{AuthenticationConfig, networking::auth::TextureConfig};
@@ -11,6 +11,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::GameProfile;
+use crate::plugin::api::events::player::{
+    fill_profile::FillProfileEvent, lookup_profile::LookupProfileEvent,
+    pre_fill_profile::PreFillProfileEvent, pre_lookup_profile::PreLookupProfileEvent,
+};
+use crate::server::Server;
 
 #[derive(Deserialize, Clone, Debug)]
 #[expect(dead_code)]
@@ -244,7 +249,14 @@ struct MojangProfileByNameResponse {
 pub async fn lookup_profile_by_name(
     name: &str,
     auth_config: &AuthenticationConfig,
+    server: Option<&Arc<Server>>,
 ) -> Result<Option<(Uuid, String)>, AuthError> {
+    // Pre-lookup hook: pure notification fired before any request is made.
+    if let Some(server) = server {
+        let mut pre_lookup = PreLookupProfileEvent::new(name);
+        server.plugin_manager.fire(server, &mut pre_lookup).await;
+    }
+
     let primary_url = auth_config
         .profile_by_name_url
         .as_deref()
@@ -285,6 +297,17 @@ pub async fn lookup_profile_by_name(
                 Ok(profile) => {
                     let parsed_uuid =
                         Uuid::parse_str(&profile.id).map_err(|_| AuthError::FailedParse)?;
+                    // Lookup hook: fired once a profile resolves. `properties`
+                    // is always empty here; the fill step fetches them later.
+                    if let Some(server) = server {
+                        let mut lookup = LookupProfileEvent::new(
+                            name,
+                            parsed_uuid,
+                            Some(profile.name.clone()),
+                            Vec::new(),
+                        );
+                        server.plugin_manager.fire(server, &mut lookup).await;
+                    }
                     return Ok(Some((parsed_uuid, profile.name)));
                 }
                 Err(err) => {
@@ -314,20 +337,31 @@ pub async fn lookup_profile_by_name(
 pub fn lookup_profile_by_name_blocking(
     name: &str,
     auth_config: &AuthenticationConfig,
+    server: Option<&Arc<Server>>,
 ) -> Result<Option<(Uuid, String)>, AuthError> {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(lookup_profile_by_name(name, auth_config)))
+        tokio::task::block_in_place(|| {
+            handle.block_on(lookup_profile_by_name(name, auth_config, server))
+        })
     } else {
         tokio::runtime::Runtime::new()
             .map_err(|_e| AuthError::FailedParse)?
-            .block_on(lookup_profile_by_name(name, auth_config))
+            .block_on(lookup_profile_by_name(name, auth_config, server))
     }
 }
 
 pub async fn fetch_profile_by_uuid(
     uuid: Uuid,
     auth_config: &AuthenticationConfig,
+    server: Option<&Arc<Server>>,
 ) -> Result<Option<GameProfile>, AuthError> {
+    // Pre-fill hook: handlers may populate `properties` with cached data; the
+    // fetch still proceeds (the host does not short-circuit yet).
+    if let Some(server) = server {
+        let mut pre_fill = PreFillProfileEvent::new(uuid, None, Vec::new());
+        server.plugin_manager.fire(server, &mut pre_fill).await;
+    }
+
     let primary_url = auth_config
         .profile_by_uuid_url
         .as_deref()
@@ -367,7 +401,25 @@ pub async fn fetch_profile_by_uuid(
 
         match status {
             StatusCode::OK => match response.json::<GameProfile>().await {
-                Ok(profile) => return Ok(Some(profile)),
+                Ok(profile) => {
+                    // Fill hook: fired once the profile (with properties) has
+                    // been fetched from the authentication servers.
+                    if let Some(server) = server {
+                        let properties = profile
+                            .properties
+                            .load()
+                            .iter()
+                            .map(|property| (property.name.to_string(), property.value.to_string()))
+                            .collect();
+                        let mut fill = FillProfileEvent::new(
+                            profile.id,
+                            Some(profile.name.clone()),
+                            properties,
+                        );
+                        server.plugin_manager.fire(server, &mut fill).await;
+                    }
+                    return Ok(Some(profile));
+                }
                 Err(err) => {
                     tracing::warn!("Failed to parse GameProfile response from '{address}': {err}");
                 }

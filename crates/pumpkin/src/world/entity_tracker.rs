@@ -151,6 +151,17 @@ impl TrackedEntity {
                     return;
                 }
                 self.add_pairing(player);
+                // Track notification, fired after the pairing was added.
+                let mut track_event =
+                    crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent::new(
+                        player.clone(),
+                        self.entity_id,
+                    );
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut track_event);
+                }
             }
         } else if self.seen_by.remove(&player.gameprofile.id).is_some() {
             let mut hide_event = PlayerHideEntityEvent {
@@ -168,6 +179,17 @@ impl TrackedEntity {
                 self.seen_by.insert(player.gameprofile.id);
             } else {
                 self.remove_pairing(player);
+                // Untrack notification, fired after the pairing was removed.
+                let mut untrack_event =
+                    crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent::new(
+                        player.clone(),
+                        self.entity_id,
+                    );
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut untrack_event);
+                }
             }
         }
     }

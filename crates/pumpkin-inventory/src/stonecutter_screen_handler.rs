@@ -103,6 +103,20 @@ impl StonecutterScreenHandler {
         }
     }
 
+    /// Returns the result item id of the recipe that `button_id` would select,
+    /// or `None` when the button id does not map to an available recipe.
+    #[must_use]
+    pub fn recipe_id_for_button(&self, button_id: i32) -> Option<String> {
+        if button_id < 0 {
+            return None;
+        }
+        let input = self.input_inventory.get_stack(0);
+        let recipes = self.get_available_recipes(&input);
+        recipes
+            .get(button_id as usize)
+            .map(|recipe| recipe.result_id.clone())
+    }
+
     /// Vanilla recipes first, then dynamic stonecutting recipes from the provider.
     fn get_available_recipes(&self, input: &ItemStack) -> Vec<AvailableStonecuttingRecipe> {
         let item = input.item;
@@ -156,6 +170,17 @@ impl ScreenHandler for StonecutterScreenHandler {
         self.internal_on_slot_click(slot_index, button, action_type, player);
         if slot_index == 0 {
             self.update_output();
+        }
+    }
+
+    fn on_button_click(&mut self, _player: &dyn InventoryPlayer, button_id: i32) -> bool {
+        if (0..256).contains(&button_id) && self.recipe_id_for_button(button_id).is_some() {
+            self.selected_recipe
+                .store(button_id as u8, Ordering::Relaxed);
+            self.update_output();
+            true
+        } else {
+            false
         }
     }
 

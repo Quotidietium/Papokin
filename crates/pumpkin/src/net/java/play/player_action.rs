@@ -250,6 +250,17 @@ impl JavaClient {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .clone();
                     if let Some(stack) = item_in_use {
+                        // Stop-using-item notification (e.g. bow release).
+                        let world = player.get_entity().world.load_full();
+                        if let Some(server_arc) = world.server.upgrade() {
+                            let mut stop_event = crate::plugin::api::events::player::player_stop_using_item::PlayerStopUsingItemEvent::new(
+                                player.clone(),
+                                stack.clone(),
+                            );
+                            server_arc
+                                .plugin_manager
+                                .fire_blocking(&server_arc, &mut stop_event);
+                        }
                         server.item_registry.on_stopped_using(&stack, player);
                     }
 

@@ -16,6 +16,18 @@ impl BlockBehaviour for FlowerPotBlock {
             let potted_block_id = get_potted_item(item.id);
             if args.block.eq(&Block::FLOWER_POT) {
                 if potted_block_id != BlockId::AIR {
+                    // Plant hook: cancelling vetoes the placement.
+                    let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
+                        args.player.clone(),
+                        *args.position,
+                        args.item_stack.clone(),
+                    );
+                    if let Some(server) = args.world.server.upgrade() {
+                        server.plugin_manager.fire_blocking(&server, &mut pot_event);
+                    }
+                    if pot_event.cancelled {
+                        return BlockActionResult::Consume;
+                    }
                     args.world.set_block_state(
                         args.position,
                         Block::from_id(potted_block_id).default_state.id,
@@ -34,6 +46,23 @@ impl BlockBehaviour for FlowerPotBlock {
             }
 
             //get the flower + empty the pot
+            // Take hook: the flower being removed is derived from the current
+            // potted block; cancelling vetoes the removal.
+            let potted_item = pumpkin_data::item::Item::from_id(args.block.item_id)
+                .map(|item| pumpkin_data::item_stack::ItemStack::new(1, item));
+            if let Some(flower) = potted_item {
+                let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
+                    args.player.clone(),
+                    *args.position,
+                    flower,
+                );
+                if let Some(server) = args.world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut pot_event);
+                }
+                if pot_event.cancelled {
+                    return BlockActionResult::Consume;
+                }
+            }
             args.world.set_block_state(
                 args.position,
                 Block::FLOWER_POT.default_state.id,

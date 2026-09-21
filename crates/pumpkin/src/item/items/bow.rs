@@ -35,6 +35,34 @@ impl ItemBehaviour for BowItem {
         let inventory = player.inventory();
         let stack = inventory.held_item();
 
+        // Ready-arrow hook: cancelling prevents the draw from starting.
+        {
+            let world = player.world();
+            let arrow = player.find_arrow().map_or_else(
+                || ItemStack::new(1, &Item::ARROW),
+                |slot| {
+                    let mut arrow = inventory.get_slot(slot);
+                    arrow.item_count = 1;
+                    arrow
+                },
+            );
+            if let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id) {
+                let mut ready_event = crate::plugin::api::events::player::player_ready_arrow::PlayerReadyArrowEvent::new(
+                    player_arc,
+                    stack.clone(),
+                    arrow,
+                );
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut ready_event);
+                }
+                if ready_event.cancelled {
+                    return;
+                }
+            }
+        }
+
         // Start the bow drawing animation
         player
             .living_entity

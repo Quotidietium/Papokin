@@ -267,14 +267,35 @@ impl PendingConnection {
         let mut payload = &packet.payload[..];
         match packet.id {
             0 => {
-                self.handle_handshake(
-                    server,
-                    pumpkin_protocol::java::server::handshake::SHandShake::read(
-                        &mut payload,
-                        &self.version.load(),
-                    )?,
-                )
-                .await;
+                let handshake = pumpkin_protocol::java::server::handshake::SHandShake::read(
+                    &mut payload,
+                    &self.version.load(),
+                )?;
+
+                // Handshake hook: cancelling disconnects the client before any
+                // further processing. Java-protocol event.
+                let intention = if handshake.next_state == ConnectionState::Status {
+                    crate::plugin::api::events::player::player_handshake::HandshakeIntention::Status
+                } else {
+                    crate::plugin::api::events::player::player_handshake::HandshakeIntention::Login
+                };
+                let mut handshake_event =
+                    crate::plugin::api::events::player::player_handshake::PlayerHandshakeEvent::new(
+                        self.address.ip().to_string(),
+                        handshake.server_address.to_string(),
+                        handshake.protocol_version.0,
+                        intention,
+                    );
+                server
+                    .plugin_manager
+                    .fire(server, &mut handshake_event)
+                    .await;
+                if handshake_event.cancelled {
+                    self.kick(TextComponent::text("Connection refused")).await;
+                    return Ok(Some(PacketHandlerResult::Stop));
+                }
+
+                self.handle_handshake(server, handshake).await;
                 Ok(None)
             }
             _ => Err(ReadingError::Message(format!(

@@ -21,6 +21,21 @@ use crate::{
 
 type MerchantValidityCheck = Box<dyn Fn(&dyn InventoryPlayer) -> bool + Send + Sync>;
 
+/// Trade gate invoked before a trade completes.
+///
+/// Receives the player, the offer being traded and the merchant entity id (if
+/// known). Returns `Some(villager_experience)` to allow the trade (the value
+/// replaces the offer's villager xp) or `None` to veto it.
+pub type MerchantTradeCheck = Box<
+    dyn Fn(
+            &dyn InventoryPlayer,
+            &pumpkin_protocol::java::client::play::MerchantOffer,
+            Option<i32>,
+        ) -> Option<i32>
+        + Send
+        + Sync,
+>;
+
 pub struct MerchantScreenHandler {
     pub inventory: Arc<dyn Inventory>,
     behaviour: ScreenHandlerBehaviour,
@@ -31,6 +46,10 @@ pub struct MerchantScreenHandler {
     pub on_trade_updated: Option<Box<dyn Fn(bool) + Send + Sync>>,
     pub on_close: Option<Box<dyn Fn() + Send + Sync>>,
     pub validity_check: Option<MerchantValidityCheck>,
+    /// Optional gate fired before a trade completes (plugin event hook).
+    pub trade_check: Option<MerchantTradeCheck>,
+    /// Entity id of the merchant this screen belongs to, if it is entity-backed.
+    pub merchant_entity_id: Option<i32>,
     result_taken: Arc<AtomicBool>,
 }
 
@@ -54,6 +73,8 @@ impl MerchantScreenHandler {
             on_trade_updated: None,
             on_close: None,
             validity_check: None,
+            trade_check: None,
+            merchant_entity_id: None,
             result_taken: result_taken.clone(),
         };
 
@@ -201,11 +222,24 @@ impl MerchantScreenHandler {
         let cost_a = Self::adjusted_cost_a(offer).item_count;
         let cost_b = offer.cost_b.as_ref().map(|cost| cost.0.item_count);
 
+        // Trade gate (plugin hook): vetoing cancels the trade before any
+        // payment is consumed. An allowed check may replace the villager xp.
+        let checked_xp = match &self.trade_check {
+            Some(trade_check) => match trade_check(player, offer, self.merchant_entity_id) {
+                Some(xp) => Some(xp),
+                None => return false,
+            },
+            None => None,
+        };
+
         self.consume_payment(usize::from(swapped), cost_a);
         if let Some(cost_b) = cost_b {
             self.consume_payment(usize::from(!swapped), cost_b);
         }
         self.offers[offer_index].uses += 1;
+        if let Some(xp) = checked_xp {
+            self.offers[offer_index].xp = xp;
+        }
 
         if let Some(on_trade) = &self.on_trade {
             on_trade(offer_index);

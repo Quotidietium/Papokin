@@ -11,13 +11,24 @@ impl PendingConnection {
 
         let max_players = server.advanced_config.networking.java.max_players;
         if max_players > 0 && server.get_player_count() >= max_players as usize {
-            self.kick(TextComponent::translate_cross(
-                translation::java::MULTIPLAYER_DISCONNECT_SERVER_FULL,
-                translation::bedrock::DISCONNECTIONSCREEN_SERVERFULL,
-                [],
-            ))
-            .await;
-            return Some(PacketHandlerResult::Stop);
+            // Full-server hook: a plugin may allow the join anyway. The event
+            // only fires when the server is actually full.
+            let mut full_check = crate::plugin::api::events::player::player_server_full_check::PlayerServerFullCheckEvent::new(
+                login_start.name.to_string(),
+                login_start.uuid,
+            );
+            server.plugin_manager.fire(server, &mut full_check).await;
+            if full_check.result
+                == crate::plugin::api::events::player::player_server_full_check::ServerFullCheckResult::Denied
+            {
+                self.kick(TextComponent::translate_cross(
+                    translation::java::MULTIPLAYER_DISCONNECT_SERVER_FULL,
+                    translation::bedrock::DISCONNECTIONSCREEN_SERVERFULL,
+                    [],
+                ))
+                .await;
+                return Some(PacketHandlerResult::Stop);
+            }
         }
 
         if !is_valid_player_name(&login_start.name) {

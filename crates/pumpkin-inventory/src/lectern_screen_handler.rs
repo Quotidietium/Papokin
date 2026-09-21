@@ -28,6 +28,13 @@ pub trait LecternController: Send + Sync {
     fn on_book_take_click(&self, _player: &dyn InventoryPlayer) -> bool {
         true
     }
+
+    /// Called when a player requests a page change (previous/next/jump),
+    /// before the page is applied. Returns the page to apply (`Some`), which
+    /// may differ from `new_page`, or `None` to veto the change.
+    fn on_page_change_click(&self, _player: &dyn InventoryPlayer, new_page: i32) -> Option<i32> {
+        Some(new_page)
+    }
 }
 
 /// Exposes the current page as container property 0 (see `window_property::Lectern`).
@@ -99,12 +106,22 @@ impl ScreenHandler for LecternScreenHandler {
     fn on_button_click(&mut self, player: &dyn InventoryPlayer, id: i32) -> bool {
         match id {
             Self::PREVIOUS_PAGE_BUTTON_ID => {
-                self.controller.set_page(self.controller.current_page() - 1);
-                true
+                let new_page = self.controller.current_page() - 1;
+                if let Some(page) = self.controller.on_page_change_click(player, new_page) {
+                    self.controller.set_page(page);
+                    true
+                } else {
+                    false
+                }
             }
             Self::NEXT_PAGE_BUTTON_ID => {
-                self.controller.set_page(self.controller.current_page() + 1);
-                true
+                let new_page = self.controller.current_page() + 1;
+                if let Some(page) = self.controller.on_page_change_click(player, new_page) {
+                    self.controller.set_page(page);
+                    true
+                } else {
+                    false
+                }
             }
             Self::TAKE_BOOK_BUTTON_ID => {
                 let stack = self.inventory.get_stack(0);
@@ -122,8 +139,13 @@ impl ScreenHandler for LecternScreenHandler {
                 true
             }
             _ if id >= Self::JUMP_TO_PAGE_OFFSET => {
-                self.controller.set_page(id - Self::JUMP_TO_PAGE_OFFSET);
-                true
+                let new_page = id - Self::JUMP_TO_PAGE_OFFSET;
+                if let Some(page) = self.controller.on_page_change_click(player, new_page) {
+                    self.controller.set_page(page);
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         }

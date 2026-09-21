@@ -64,6 +64,10 @@ pub struct ChunkSender {
     pub desired_rate: f32,
     pub send_quota: f32,
     pub max_in_flight: u16,
+    /// Owning world, used to fire the chunk-unload plugin event.
+    owner_world: Option<Weak<crate::world::World>>,
+    /// Owning player, used to fire the chunk-unload plugin event.
+    owner_uuid: Option<uuid::Uuid>,
 }
 
 impl ChunkSender {
@@ -77,7 +81,16 @@ impl ChunkSender {
             desired_rate: INITIAL_CHUNKS_PER_TICK,
             send_quota: 0.0,
             max_in_flight: 1,
+            owner_world: None,
+            owner_uuid: None,
         }
+    }
+
+    /// Binds the sender to its owning player and world so chunk unloads can
+    /// be reported to plugins.
+    pub fn set_owner(&mut self, world: &Arc<crate::world::World>, player_uuid: uuid::Uuid) {
+        self.owner_world = Some(Arc::downgrade(world));
+        self.owner_uuid = Some(player_uuid);
     }
 
     pub fn reset(&mut self) {
@@ -145,6 +158,26 @@ impl ChunkSender {
             && !java_client.is_closed()
         {
             java_client.try_send_packet(&CUnloadChunk::new(pos.x, pos.y));
+        }
+
+        // Chunk-unload hook: pure notification fired after the chunk left the
+        // tracked set. Gated on an actual listener before doing any work.
+        if let (Some(world_weak), Some(player_uuid)) = (&self.owner_world, self.owner_uuid)
+            && let Some(world) = world_weak.upgrade()
+            && let Some(server) = world.server.upgrade()
+            && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent>()
+            && let Some(player) = world.get_player_by_uuid(player_uuid)
+        {
+            let mut unload_event =
+                crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent::new(
+                    player,
+                    world,
+                    pos.x,
+                    pos.y,
+                );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut unload_event);
         }
     }
 

@@ -142,7 +142,7 @@ fn report_resolved_profile(
     source.send_feedback(msg, false);
 }
 
-async fn fetch_profile_by_name_helper(server: &Server, name: &str) -> Option<GameProfile> {
+async fn fetch_profile_by_name_helper(server: &Arc<Server>, name: &str) -> Option<GameProfile> {
     if let Some(player) = server.get_player_by_name(name) {
         return Some(player.gameprofile.clone());
     }
@@ -155,7 +155,7 @@ async fn fetch_profile_by_name_helper(server: &Server, name: &str) -> Option<Gam
         .java
         .authentication
         .clone();
-    let mojang_res = lookup_profile_by_name(name, &auth_config)
+    let mojang_res = lookup_profile_by_name(name, &auth_config, Some(server))
         .await
         .ok()
         .flatten();
@@ -173,7 +173,7 @@ async fn fetch_profile_by_name_helper(server: &Server, name: &str) -> Option<Gam
             .java
             .authentication
             .clone();
-        let full_profile = fetch_profile_by_uuid(uuid, &auth_config_clone)
+        let full_profile = fetch_profile_by_uuid(uuid, &auth_config_clone, Some(server))
             .await
             .ok()
             .flatten();
@@ -216,7 +216,7 @@ async fn fetch_profile_by_name_helper(server: &Server, name: &str) -> Option<Gam
     None
 }
 
-async fn fetch_profile_by_id_helper(server: &Server, id: Uuid) -> Option<GameProfile> {
+async fn fetch_profile_by_id_helper(server: &Arc<Server>, id: Uuid) -> Option<GameProfile> {
     if let Some(player) = server.get_player_by_uuid(id) {
         return Some(player.gameprofile.clone());
     }
@@ -227,7 +227,10 @@ async fn fetch_profile_by_id_helper(server: &Server, id: Uuid) -> Option<GamePro
         .java
         .authentication
         .clone();
-    let mojang_res = fetch_profile_by_uuid(id, &auth_config).await.ok().flatten();
+    let mojang_res = fetch_profile_by_uuid(id, &auth_config, Some(server))
+        .await
+        .ok()
+        .flatten();
 
     if let Some(profile) = mojang_res {
         server

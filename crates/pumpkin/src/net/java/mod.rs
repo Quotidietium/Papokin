@@ -979,11 +979,30 @@ impl JavaClient {
                 });
             }
             id if id == SClientInformationPlay::to_id(version) => {
-                self.handle_client_information(
-                    server,
-                    player,
-                    &SClientInformationPlay::read(&mut payload, &version)?,
+                let packet = SClientInformationPlay::read(&mut payload, &version)?;
+                // Client options change notification (play phase only; the
+                // config-phase variant has no player object yet).
+                let mut options_event = crate::plugin::api::events::player::player_client_options_change::PlayerClientOptionsChangeEvent::new(
+                    player.clone(),
+                    packet.locale.to_string(),
+                    i32::from(packet.view_distance),
+                    match packet.chat_mode.0 {
+                        0 => "enabled".to_string(),
+                        1 => "commands_only".to_string(),
+                        _ => "hidden".to_string(),
+                    },
+                    packet.chat_colors,
+                    if packet.main_hand.0 == 0 {
+                        "left".to_string()
+                    } else {
+                        "right".to_string()
+                    },
+                    u32::from(packet.skin_parts),
                 );
+                server
+                    .plugin_manager
+                    .fire_blocking(server, &mut options_event);
+                self.handle_client_information(server, player, &packet);
             }
             id if id == SClientCommand::to_id(version) => {
                 self.handle_client_status(player, &SClientCommand::read(&mut payload, &version)?);
@@ -1031,6 +1050,13 @@ impl JavaClient {
             }
             id if id == SClientTickEnd::to_id(version) => {
                 self.handle_client_tick_end(player);
+                // Client tick end notification (high-frequency: relies on the
+                // zero-listener early-return inside the dispatcher).
+                let mut tick_event =
+                    crate::plugin::api::events::player::client_tick_end::ClientTickEndEvent::new(
+                        player.clone(),
+                    );
+                server.plugin_manager.fire_blocking(server, &mut tick_event);
             }
             id if id == STestInstanceBlockAction::to_id(version) => {
                 self.handle_test_instance_block_action(
@@ -1074,21 +1100,62 @@ impl JavaClient {
                 self.handle_player_ground(player, &SSetPlayerGround::read(&mut payload, &version)?);
             }
             id if id == SPickItemFromBlock::to_id(version) => {
-                self.handle_pick_item_from_block(
-                    player,
-                    &SPickItemFromBlock::read(&mut payload, &version)?,
-                );
+                let packet = SPickItemFromBlock::read(&mut payload, &version)?;
+                // Pick-block hook: cancelling vetoes the pick. The result
+                // item is computed here (best-effort); guest modifications to
+                // it are not applied to the pick logic.
+                let world = player.world();
+                let block = world.get_block(&packet.pos);
+                let result_item = pumpkin_data::item::Item::from_id(block.item_id)
+                    .map(|item| pumpkin_data::item_stack::ItemStack::new(1, item));
+                if let Some(result) = result_item {
+                    let mut pick_event = crate::plugin::api::events::player::player_pick_block::PlayerPickBlockEvent::new(
+                        player.clone(),
+                        packet.pos,
+                        result,
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut pick_event);
+                    if !pick_event.cancelled {
+                        self.handle_pick_item_from_block(player, &packet);
+                    }
+                } else {
+                    self.handle_pick_item_from_block(player, &packet);
+                }
             }
             id if id
                 == pumpkin_protocol::java::server::play::SPickItemFromEntity::to_id(version) =>
             {
-                self.handle_pick_item_from_entity(
-                    player,
-                    &pumpkin_protocol::java::server::play::SPickItemFromEntity::read(
-                        &mut payload,
-                        &version,
-                    )?,
-                );
+                let packet = pumpkin_protocol::java::server::play::SPickItemFromEntity::read(
+                    &mut payload,
+                    &version,
+                )?;
+                // Pick-entity hook: cancelling vetoes the pick. The result is
+                // the entity's spawn egg when one exists; guest modifications
+                // to it are not applied to the pick logic.
+                let world = player.world();
+                let result_item = world.get_entity_by_id(packet.id.0).and_then(|target| {
+                    use pumpkin_data::entity::{entity_from_egg, spawn_egg_ids};
+                    let target_type_id = target.get_entity().entity_type.id;
+                    spawn_egg_ids().iter().find_map(|&egg_id| {
+                        entity_from_egg(egg_id)
+                            .filter(|et| et.id == target_type_id)
+                            .and_then(|_| pumpkin_data::item::Item::from_id(egg_id))
+                            .map(|item| pumpkin_data::item_stack::ItemStack::new(1, item))
+                    })
+                });
+                if let Some(result) = result_item {
+                    let mut pick_event = crate::plugin::api::events::player::player_pick_entity::PlayerPickEntityEvent::new(
+                        player.clone(),
+                        packet.id.0,
+                        result,
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut pick_event);
+                    if !pick_event.cancelled {
+                        self.handle_pick_item_from_entity(player, &packet);
+                    }
+                } else {
+                    self.handle_pick_item_from_entity(player, &packet);
+                }
             }
             id if id == SPlayerAbilities::to_id(version) => {
                 self.handle_player_abilities(
@@ -1161,7 +1228,24 @@ impl JavaClient {
                 self.handle_swing_arm(server, player, &SSwingArm::read(&mut payload, &version)?);
             }
             id if id == SUpdateSign::to_id(version) => {
-                self.handle_sign_update(player, &SUpdateSign::read(&mut payload, &version)?);
+                let packet = SUpdateSign::read(&mut payload, &version)?;
+                // Unchecked sign change hook (raw lines, before validation);
+                // cancelling drops the update. The validated SignChangeEvent
+                // inside handle_sign_update still runs independently.
+                let mut sign_event = crate::plugin::api::events::player::unchecked_sign_change::UncheckedSignChangeEvent::new(
+                    player.clone(),
+                    packet.location,
+                    vec![
+                        packet.line_1.to_string(),
+                        packet.line_2.to_string(),
+                        packet.line_3.to_string(),
+                        packet.line_4.to_string(),
+                    ],
+                );
+                server.plugin_manager.fire_blocking(server, &mut sign_event);
+                if !sign_event.cancelled {
+                    self.handle_sign_update(player, &packet);
+                }
             }
             id if id == SEditBook::to_id(version) => {
                 self.handle_edit_book(player, &SEditBook::read(&mut payload, &version)?);

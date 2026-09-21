@@ -6,8 +6,12 @@
 //! player plugin-message channel registry. Every step logs an `E2E` marker
 //! that the harness asserts in the server log.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use pumpkin_plugin_api::events::player::{
+    AsyncTabCompleteEvent, PlayerHandshakeEvent, PlayerItemCooldownEvent, PlayerJumpEvent,
+    PlayerPurchaseEvent, PlayerTrackEntityEvent,
+};
 use pumpkin_plugin_api::events::{
     EventData, EventHandler, EventPriority, PlayerJoinEvent, ServerTickStartEvent,
 };
@@ -23,9 +27,21 @@ use pumpkin_plugin_api::{
 
 type PlayerJoinEventData = EventData<PlayerJoinEvent>;
 type ServerTickStartEventData = EventData<ServerTickStartEvent>;
+type PlayerJumpEventData = EventData<PlayerJumpEvent>;
+type PlayerItemCooldownEventData = EventData<PlayerItemCooldownEvent>;
+type PlayerTrackEntityEventData = EventData<PlayerTrackEntityEvent>;
+type AsyncTabCompleteEventData = EventData<AsyncTabCompleteEvent>;
+type PlayerHandshakeEventData = EventData<PlayerHandshakeEvent>;
+type PlayerPurchaseEventData = EventData<PlayerPurchaseEvent>;
 
 static JOIN_COUNT: AtomicU32 = AtomicU32::new(0);
 static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
+static JUMP_SEEN: AtomicBool = AtomicBool::new(false);
+static ITEM_COOLDOWN_SEEN: AtomicBool = AtomicBool::new(false);
+static TRACK_SEEN: AtomicBool = AtomicBool::new(false);
+static TAB_COMPLETE_SEEN: AtomicBool = AtomicBool::new(false);
+static HANDSHAKE_SEEN: AtomicBool = AtomicBool::new(false);
+static PURCHASE_SEEN: AtomicBool = AtomicBool::new(false);
 
 struct JoinAnnouncerLowest;
 
@@ -73,6 +89,99 @@ impl EventHandler<ServerTickStartEvent> for TickWatcher {
     }
 }
 
+// Paper player-domain events (T3-player wiring). Each handler logs its marker
+// once so the harness can assert the event actually flowed.
+
+struct JumpWatcher;
+
+impl EventHandler<PlayerJumpEvent> for JumpWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerJumpEventData,
+    ) -> PlayerJumpEventData {
+        if !JUMP_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-jump");
+        }
+        event
+    }
+}
+
+struct ItemCooldownWatcher;
+
+impl EventHandler<PlayerItemCooldownEvent> for ItemCooldownWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerItemCooldownEventData,
+    ) -> PlayerItemCooldownEventData {
+        if !ITEM_COOLDOWN_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-item-cooldown");
+        }
+        event
+    }
+}
+
+struct TrackWatcher;
+
+impl EventHandler<PlayerTrackEntityEvent> for TrackWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerTrackEntityEventData,
+    ) -> PlayerTrackEntityEventData {
+        if !TRACK_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-track-entity");
+        }
+        event
+    }
+}
+
+struct TabCompleteWatcher;
+
+impl EventHandler<AsyncTabCompleteEvent> for TabCompleteWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: AsyncTabCompleteEventData,
+    ) -> AsyncTabCompleteEventData {
+        if !TAB_COMPLETE_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-async-tab-complete");
+        }
+        event
+    }
+}
+
+struct HandshakeWatcher;
+
+impl EventHandler<PlayerHandshakeEvent> for HandshakeWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerHandshakeEventData,
+    ) -> PlayerHandshakeEventData {
+        if !HANDSHAKE_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-handshake");
+        }
+        event
+    }
+}
+
+struct PurchaseWatcher;
+
+impl EventHandler<PlayerPurchaseEvent> for PurchaseWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerPurchaseEventData,
+    ) -> PlayerPurchaseEventData {
+        if !PURCHASE_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-purchase");
+        }
+        event
+    }
+}
+
 struct E2ePlugin;
 
 impl Plugin for E2ePlugin {
@@ -114,6 +223,15 @@ impl Plugin for E2ePlugin {
             false,
         )?;
         context.register_event_handler(TickWatcher, EventPriority::Low, false, true)?;
+
+        // Paper player-domain events (T3-player wiring).
+        context.register_event_handler(JumpWatcher, EventPriority::Normal, false, false)?;
+        context.register_event_handler(ItemCooldownWatcher, EventPriority::Normal, false, false)?;
+        context.register_event_handler(TrackWatcher, EventPriority::Normal, false, false)?;
+        context.register_event_handler(TabCompleteWatcher, EventPriority::Normal, false, false)?;
+        context.register_event_handler(HandshakeWatcher, EventPriority::Normal, false, false)?;
+        context.register_event_handler(PurchaseWatcher, EventPriority::Normal, false, false)?;
+        tracing::info!("E2E paper-events-registered count=6");
 
         // Async wall-clock task (new mechanism).
         context.schedule_async_delayed_task(300, |_server| {

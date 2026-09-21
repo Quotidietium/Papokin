@@ -150,6 +150,36 @@ async fn handle_packet(
                             .reduce(|acc, name| format!("{acc}, {name}"))
                             .unwrap_or_default();
 
+                        // GS4 query hook (full status): notification carrying
+                        // the collected response data.
+                        let mut query_event =
+                            crate::plugin::api::events::player::gs4_query::Gs4QueryEvent::new(
+                                "full",
+                                addr.to_string(),
+                                vec![
+                                    (
+                                        "hostname".to_string(),
+                                        server.advanced_config.networking.java.motd.clone(),
+                                    ),
+                                    ("version".to_string(), CURRENT_MC_VERSION.to_string()),
+                                    ("plugins".to_string(), plugins.clone()),
+                                    (
+                                        "num_players".to_string(),
+                                        server.get_player_count().to_string(),
+                                    ),
+                                    (
+                                        "max_players".to_string(),
+                                        server
+                                            .advanced_config
+                                            .networking
+                                            .java
+                                            .max_players
+                                            .to_string(),
+                                    ),
+                                ],
+                            );
+                        server.plugin_manager.fire(&server, &mut query_event).await;
+
                         let response = CFullStatus {
                             session_id: packet.session_id,
                             hostname: CString::new(
@@ -176,6 +206,34 @@ async fn handle_packet(
                             let _ = socket.send_to(encoded.as_slice(), addr).await;
                         }
                     } else {
+                        // GS4 query hook (basic status): notification carrying
+                        // the collected response data.
+                        let mut query_event =
+                            crate::plugin::api::events::player::gs4_query::Gs4QueryEvent::new(
+                                "basic",
+                                addr.to_string(),
+                                vec![
+                                    (
+                                        "motd".to_string(),
+                                        server.advanced_config.networking.java.motd.clone(),
+                                    ),
+                                    (
+                                        "num_players".to_string(),
+                                        server.get_player_count().to_string(),
+                                    ),
+                                    (
+                                        "max_players".to_string(),
+                                        server
+                                            .advanced_config
+                                            .networking
+                                            .java
+                                            .max_players
+                                            .to_string(),
+                                    ),
+                                ],
+                            );
+                        server.plugin_manager.fire(&server, &mut query_event).await;
+
                         let response = CBasicStatus {
                             session_id: packet.session_id,
                             motd: CString::new(
