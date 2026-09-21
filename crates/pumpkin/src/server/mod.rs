@@ -783,6 +783,18 @@ impl Server {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove_player(player);
+
+        // Pure notification: fired on every player teardown (post-login).
+        if let Some(server_arc) = crate::net::server_arc(self) {
+            let mut event = crate::plugin::api::events::player::player_connection_close::PlayerConnectionCloseEvent::new(
+                player.gameprofile.id,
+                player.gameprofile.name.clone(),
+                player.client.address().to_string(),
+            );
+            server_arc
+                .plugin_manager
+                .fire_blocking(&server_arc, &mut event);
+        }
     }
 
     pub async fn shutdown(&self) {
