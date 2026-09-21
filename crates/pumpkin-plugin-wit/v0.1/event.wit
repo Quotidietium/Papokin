@@ -2952,6 +2952,41 @@ interface event {
         cancelled: bool
     }
 
+    /// Called when a witch finishes drinking a potion. Cancelling prevents
+    /// the potion effects from being applied; the potion is still consumed.
+    record witch-consume-potion-event-data {
+        /// The witch drinking the potion.
+        entity-id: s32,
+        /// The potion being consumed.
+        potion: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a witch raises a potion and starts drinking it.
+    /// Cancelling prevents the drink; the potion is not equipped.
+    record witch-ready-potion-event-data {
+        /// The witch readying the potion.
+        entity-id: s32,
+        /// The potion being readied.
+        potion: item-stack,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
+    /// Called when a witch throws a splash potion at its target.
+    /// Cancelling prevents the throw entirely.
+    record witch-throw-potion-event-data {
+        /// The witch throwing the potion.
+        entity-id: s32,
+        /// The splash potion being thrown.
+        potion: item-stack,
+        /// The entity the potion is thrown at, if any.
+        target-id: option<s32>,
+        /// Whether the event is cancelled.
+        cancelled: bool
+    }
+
     enum event-type {
         player-join-event,
         player-leave-event,
@@ -3318,6 +3353,9 @@ interface event {
         gs4-query-event,
         whitelist-toggle-event,
         player-handshake-event,
+        witch-consume-potion-event,
+        witch-ready-potion-event,
+        witch-throw-potion-event,
     }
 
     variant event {
@@ -3686,5 +3724,8 @@ interface event {
         gs4-query-event(gs4-query-event-data),
         whitelist-toggle-event(whitelist-toggle-event-data),
         player-handshake-event(player-handshake-event-data),
+        witch-consume-potion-event(witch-consume-potion-event-data),
+        witch-ready-potion-event(witch-ready-potion-event-data),
+        witch-throw-potion-event(witch-throw-potion-event-data),
     }
 }

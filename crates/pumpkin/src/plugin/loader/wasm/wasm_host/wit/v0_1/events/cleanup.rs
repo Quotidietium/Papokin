@@ -980,5 +980,14 @@ pub fn cleanup_event(event: &Event, state: &mut PluginHostState) {
         Event::Gs4QueryEvent(_) => {}
         Event::WhitelistToggleEvent(_) => {}
         Event::PlayerHandshakeEvent(_) => {}
+        Event::WitchConsumePotionEvent(data) => {
+            cleanup_item_stack(state, &data.potion);
+        }
+        Event::WitchReadyPotionEvent(data) => {
+            cleanup_item_stack(state, &data.potion);
+        }
+        Event::WitchThrowPotionEvent(data) => {
+            cleanup_item_stack(state, &data.potion);
+        }
     }
 }

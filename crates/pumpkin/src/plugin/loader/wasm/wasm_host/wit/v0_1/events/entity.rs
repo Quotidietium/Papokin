@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use wasmtime::component::Resource;
 
 use crate::plugin::{
     entity::{
@@ -7,8 +8,13 @@ use crate::plugin::{
         arrow_body_count_change::ArrowBodyCountChangeEvent,
         bat_toggle_sleep::BatToggleSleepEvent,
         creature_spawn::CreatureSpawnEvent,
+        creeper_ignite::CreeperIgniteEvent,
         creeper_power::CreeperPowerEvent,
         ender_dragon_change_phase::EnderDragonChangePhaseEvent,
+        ender_dragon_flame::EnderDragonFlameEvent,
+        enderman_attack_player::EndermanAttackPlayerEvent,
+        enderman_escape::EndermanEscapeEvent,
+        entity_attempt_smash_attack::{EntityAttemptSmashAttackEvent, SmashAttackResult},
         entity_break_door::EntityBreakDoorEvent,
         entity_change_block::EntityChangeBlockEvent,
         entity_combust::EntityCombustEvent,
@@ -17,13 +23,22 @@ use crate::plugin::{
         entity_damage::EntityDamageEvent,
         entity_damage_by_block::EntityDamageByBlockEvent,
         entity_damage_by_entity::EntityDamageByEntityEvent,
+        entity_damage_item::EntityDamageItemEvent,
         entity_death::{EntityDeathEvent, PlayerDeathEvent},
         entity_drop_item::EntityDropItemEvent,
+        entity_effect_tick::EntityEffectTickEvent,
         entity_enter_block::EntityEnterBlockEvent,
+        entity_equipment_changed::EntityEquipmentChangedEvent,
         entity_exhaustion::EntityExhaustionEvent,
+        entity_fertilize_egg::EntityFertilizeEggEvent,
+        entity_inside_block::EntityInsideBlockEvent,
         entity_interact::EntityInteractEvent,
+        entity_jump::EntityJumpEvent,
         entity_knockback::EntityKnockbackEvent,
         entity_knockback_by_entity::EntityKnockbackByEntityEvent,
+        entity_load_crossbow::EntityLoadCrossbowEvent,
+        entity_move::EntityMoveEvent,
+        entity_pathfind::EntityPathfindEvent,
         entity_place::EntityPlaceEvent,
         entity_portal_enter::EntityPortalEnterEvent,
         entity_portal_exit::EntityPortalExitEvent,
@@ -35,8 +50,11 @@ use crate::plugin::{
         entity_spell_cast::EntitySpellCastEvent,
         entity_target_block::EntityTargetBlockEvent,
         entity_target_living_entity::EntityTargetLivingEntityEvent,
+        entity_teleport_end_gateway::EntityTeleportEndGatewayEvent,
+        entity_toggle_sit::EntityToggleSitEvent,
         entity_toggle_swim::EntityToggleSwimEvent,
         entity_unleash::EntityUnleashEvent,
+        entity_zap::EntityZapEvent,
         exp_bottle::ExpBottleEvent,
         explosion_prime::ExplosionPrimeEvent,
         firework_explode::FireworkExplodeEvent,
@@ -45,11 +63,14 @@ use crate::plugin::{
         item_despawn::ItemDespawnEvent,
         item_merge::ItemMergeEvent,
         item_spawn::ItemSpawnEvent,
+        item_transporting_entity_validate_target::ItemTransportingEntityValidateTargetEvent,
         lingering_potion_splash::LingeringPotionSplashEvent,
         pig_zap::PigZapEvent,
         pig_zombie_anger::PigZombieAngerEvent,
         piglin_barter::PiglinBarterEvent,
         potion_splash::PotionSplashEvent,
+        pre_creature_spawn::PreCreatureSpawnEvent,
+        pre_spawner_spawn::PreSpawnerSpawnEvent,
         projectile_hit::ProjectileHitEvent,
         projectile_launch::ProjectileLaunchEvent,
         sheep_dye_wool::SheepDyeWoolEvent,
@@ -57,56 +78,86 @@ use crate::plugin::{
         slime_split::SlimeSplitEvent,
         spawner_spawn::SpawnerSpawnEvent,
         strider_temperature_change::StriderTemperatureChangeEvent,
+        tameable_death_message::TameableDeathMessageEvent,
+        thrown_egg_hatch::ThrownEggHatchEvent,
         trial_spawner_spawn::TrialSpawnerSpawnEvent,
         villager_acquire_trade::VillagerAcquireTradeEvent,
         villager_career_change::VillagerCareerChangeEvent,
         villager_replenish_trade::VillagerReplenishTradeEvent,
         villager_reputation_change::VillagerReputationChangeEvent,
         warden_anger_change::WardenAngerChangeEvent,
+        water_bottle_splash::WaterBottleSplashEvent,
+        witch_consume_potion::WitchConsumePotionEvent,
+        witch_ready_potion::WitchReadyPotionEvent,
+        witch_throw_potion::WitchThrowPotionEvent,
     },
     loader::wasm::wasm_host::{
-        state::PluginHostState,
+        state::{ItemStackResource, PluginHostState},
         wit::v0_1::{
             events::{
                 ToFromWasmEvent, cleanup_event, consume_player, consume_text_component,
-                consume_world, from_wasm_block_position, from_wasm_position,
-                to_wasm_block_position, to_wasm_position,
+                consume_world, from_wasm_block_position, from_wasm_entity_type, from_wasm_position,
+                to_wasm_block_position, to_wasm_entity_type, to_wasm_position,
             },
             living_entity::{from_wit_damage_type, to_wit_damage_type},
             pumpkin::plugin::event::{
                 AreaEffectCloudApplyEventData, ArrowBodyCountChangeEventData,
-                BatToggleSleepEventData, CreatureSpawnEventData, CreeperPowerEventData,
-                EnderDragonChangePhaseEventData, EntityAirChangeEventData,
-                EntityBreakDoorEventData, EntityBreedEventData, EntityChangeBlockEventData,
-                EntityCombustByBlockEventData, EntityCombustByEntityEventData,
-                EntityCombustEventData, EntityDamageByBlockEventData,
-                EntityDamageByEntityEventData, EntityDamageEventData, EntityDeathEventData,
-                EntityDismountEventData, EntityDropItemEventData, EntityDyeEventData,
-                EntityEnterBlockEventData, EntityEnterLoveModeEventData, EntityExhaustionEventData,
-                EntityExplodeEventData, EntityInteractEventData, EntityKnockbackByEntityEventData,
-                EntityKnockbackEventData, EntityMountEventData, EntityPickupItemEventData,
-                EntityPlaceEventData, EntityPortalEnterEventData, EntityPortalEventData,
-                EntityPortalExitEventData, EntityPoseChangeEventData, EntityPotionEffectEventData,
+                BatToggleSleepEventData, CreatureSpawnEventData, CreeperIgniteEventData,
+                CreeperPowerEventData, EnderDragonChangePhaseEventData, EnderDragonFlameEventData,
+                EndermanAttackPlayerEventData, EndermanEscapeEventData, EntityAirChangeEventData,
+                EntityAttemptSmashAttackEventData, EntityBreakDoorEventData, EntityBreedEventData,
+                EntityChangeBlockEventData, EntityCombustByBlockEventData,
+                EntityCombustByEntityEventData, EntityCombustEventData,
+                EntityDamageByBlockEventData, EntityDamageByEntityEventData, EntityDamageEventData,
+                EntityDamageItemEventData, EntityDeathEventData, EntityDismountEventData,
+                EntityDropItemEventData, EntityDyeEventData, EntityEffectTickEventData,
+                EntityEnterBlockEventData, EntityEnterLoveModeEventData,
+                EntityEquipmentChangedEventData, EntityExhaustionEventData, EntityExplodeEventData,
+                EntityFertilizeEggEventData, EntityInsideBlockEventData, EntityInteractEventData,
+                EntityJumpEventData, EntityKnockbackByEntityEventData, EntityKnockbackEventData,
+                EntityLoadCrossbowEventData, EntityMountEventData, EntityMoveEventData,
+                EntityPathfindEventData, EntityPickupItemEventData, EntityPlaceEventData,
+                EntityPortalEnterEventData, EntityPortalEventData, EntityPortalExitEventData,
+                EntityPoseChangeEventData, EntityPotionEffectEventData,
                 EntityRegainHealthEventData, EntityRemoveEventData, EntityResurrectEventData,
                 EntityShootBowEventData, EntitySpawnEventData, EntitySpellCastEventData,
                 EntityTameEventData, EntityTargetBlockEventData, EntityTargetEventData,
-                EntityTargetLivingEntityEventData, EntityTeleportEventData,
-                EntityToggleGlideEventData, EntityToggleSwimEventData, EntityTransformEventData,
-                EntityUnleashEventData, Event, ExpBottleEventData, ExplosionPrimeEventData,
+                EntityTargetLivingEntityEventData, EntityTeleportEndGatewayEventData,
+                EntityTeleportEventData, EntityToggleGlideEventData, EntityToggleSitEventData,
+                EntityToggleSwimEventData, EntityTransformEventData, EntityUnleashEventData,
+                EntityZapEventData, Event, ExpBottleEventData, ExplosionPrimeEventData,
                 FireworkExplodeEventData, FoodLevelChangeEventData, HorseJumpEventData,
                 ItemDespawnEventData, ItemMergeEventData, ItemSpawnEventData,
-                LingeringPotionSplashEventData, PigZapEventData, PigZombieAngerEventData,
-                PiglinBarterEventData, PlayerDeathEventData, PotionSplashEventData,
-                ProjectileHitEventData, ProjectileLaunchEventData, SheepDyeWoolEventData,
-                SheepRegrowWoolEventData, SlimeSplitEventData, SpawnerSpawnEventData,
-                StriderTemperatureChangeEventData, TrialSpawnerSpawnEventData,
-                VillagerAcquireTradeEventData, VillagerCareerChangeEventData,
-                VillagerReplenishTradeEventData, VillagerReputationChangeEventData,
-                WardenAngerChangeEventData,
+                ItemTransportingEntityValidateTargetEventData, LingeringPotionSplashEventData,
+                PigZapEventData, PigZombieAngerEventData, PiglinBarterEventData,
+                PlayerDeathEventData, PotionSplashEventData, PreCreatureSpawnEventData,
+                PreSpawnerSpawnEventData, ProjectileHitEventData, ProjectileLaunchEventData,
+                SheepDyeWoolEventData, SheepRegrowWoolEventData, SlimeSplitEventData,
+                SmashAttackResult as WitSmashAttackResult, SpawnerSpawnEventData,
+                StriderTemperatureChangeEventData, TameableDeathMessageEventData,
+                ThrownEggHatchEventData, TrialSpawnerSpawnEventData, VillagerAcquireTradeEventData,
+                VillagerCareerChangeEventData, VillagerReplenishTradeEventData,
+                VillagerReputationChangeEventData, WardenAngerChangeEventData,
+                WaterBottleSplashEventData, WitchConsumePotionEventData, WitchReadyPotionEventData,
+                WitchThrowPotionEventData,
             },
         },
     },
 };
+
+fn consume_item_stack(
+    state: &mut PluginHostState,
+    item: &Resource<
+        crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::item_stack::ItemStack,
+    >,
+) -> pumpkin_data::item_stack::ItemStack {
+    let mutex = state
+        .resource_table
+        .delete::<ItemStackResource>(Resource::new_own(item.rep()))
+        .expect("invalid item stack resource handle")
+        .provider;
+    mutex.try_lock().expect("lock item stack").clone()
+}
 
 impl ToFromWasmEvent for EntityDamageEvent {
     fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
@@ -2293,6 +2344,651 @@ impl ToFromWasmEvent for VillagerReputationChangeEvent {
                 target_id: data.target_id,
                 reputation_change: data.reputation_change,
                 cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WitchConsumePotionEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let potion = state
+            .add_item_stack(Arc::new(Mutex::new(self.potion.clone())))
+            .expect("failed to add item stack resource");
+        Event::WitchConsumePotionEvent(WitchConsumePotionEventData {
+            entity_id: self.entity_id,
+            potion,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn apply_wasm_event(&mut self, event: Event, state: &mut PluginHostState) {
+        cleanup_event(&event, state);
+        if let Event::WitchConsumePotionEvent(data) = event {
+            self.cancelled = data.cancelled;
+        }
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WitchConsumePotionEvent(_) => {
+                panic!("Cannot construct WitchConsumePotionEvent from WASM")
+            }
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WitchReadyPotionEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let potion = state
+            .add_item_stack(Arc::new(Mutex::new(self.potion.clone())))
+            .expect("failed to add item stack resource");
+        Event::WitchReadyPotionEvent(WitchReadyPotionEventData {
+            entity_id: self.entity_id,
+            potion,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn apply_wasm_event(&mut self, event: Event, state: &mut PluginHostState) {
+        cleanup_event(&event, state);
+        if let Event::WitchReadyPotionEvent(data) = event {
+            self.cancelled = data.cancelled;
+        }
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WitchReadyPotionEvent(_) => {
+                panic!("Cannot construct WitchReadyPotionEvent from WASM")
+            }
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WitchThrowPotionEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let potion = state
+            .add_item_stack(Arc::new(Mutex::new(self.potion.clone())))
+            .expect("failed to add item stack resource");
+        Event::WitchThrowPotionEvent(WitchThrowPotionEventData {
+            entity_id: self.entity_id,
+            potion,
+            target_id: self.target_id,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn apply_wasm_event(&mut self, event: Event, state: &mut PluginHostState) {
+        cleanup_event(&event, state);
+        if let Event::WitchThrowPotionEvent(data) = event {
+            self.cancelled = data.cancelled;
+        }
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WitchThrowPotionEvent(_) => {
+                panic!("Cannot construct WitchThrowPotionEvent from WASM")
+            }
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+const fn to_wasm_smash_attack_result(result: SmashAttackResult) -> WitSmashAttackResult {
+    match result {
+        SmashAttackResult::Allowed => WitSmashAttackResult::Allowed,
+        SmashAttackResult::Denied => WitSmashAttackResult::Denied,
+    }
+}
+
+const fn from_wasm_smash_attack_result(result: WitSmashAttackResult) -> SmashAttackResult {
+    match result {
+        WitSmashAttackResult::Allowed => SmashAttackResult::Allowed,
+        WitSmashAttackResult::Denied => SmashAttackResult::Denied,
+    }
+}
+
+impl ToFromWasmEvent for EntityAttemptSmashAttackEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityAttemptSmashAttackEvent(EntityAttemptSmashAttackEventData {
+            entity_id: self.entity_id,
+            target_id: self.target_id,
+            result: to_wasm_smash_attack_result(self.result),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityAttemptSmashAttackEvent(data) => Self {
+                entity_id: data.entity_id,
+                target_id: data.target_id,
+                result: from_wasm_smash_attack_result(data.result),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityDamageItemEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let item = state
+            .add_item_stack(Arc::new(Mutex::new(self.item.clone())))
+            .expect("failed to add item stack resource");
+        Event::EntityDamageItemEvent(EntityDamageItemEventData {
+            entity_id: self.entity_id,
+            item,
+            damage: self.damage,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityDamageItemEvent(data) => Self {
+                entity_id: data.entity_id,
+                item: consume_item_stack(state, &data.item),
+                damage: data.damage,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityEffectTickEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityEffectTickEvent(EntityEffectTickEventData {
+            entity_id: self.entity_id,
+            effect_type: self.effect_type.clone(),
+            amplifier: self.amplifier,
+            duration: self.duration,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityEffectTickEvent(data) => Self {
+                entity_id: data.entity_id,
+                effect_type: data.effect_type,
+                amplifier: data.amplifier,
+                duration: data.duration,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityEquipmentChangedEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let old_item = self
+            .old_item
+            .as_ref()
+            .and_then(|i| state.add_item_stack(Arc::new(Mutex::new(i.clone()))).ok());
+        let new_item = self
+            .new_item
+            .as_ref()
+            .and_then(|i| state.add_item_stack(Arc::new(Mutex::new(i.clone()))).ok());
+        Event::EntityEquipmentChangedEvent(EntityEquipmentChangedEventData {
+            entity_id: self.entity_id,
+            slot: self.slot.clone(),
+            old_item,
+            new_item,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityEquipmentChangedEvent(data) => Self {
+                entity_id: data.entity_id,
+                slot: data.slot,
+                old_item: data.old_item.map(|i| consume_item_stack(state, &i)),
+                new_item: data.new_item.map(|i| consume_item_stack(state, &i)),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityFertilizeEggEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let breeder = self
+            .breeder
+            .as_ref()
+            .and_then(|p| state.add_player(p.clone()).ok());
+        Event::EntityFertilizeEggEvent(EntityFertilizeEggEventData {
+            entity_id: self.entity_id,
+            breeder,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityFertilizeEggEvent(data) => Self {
+                entity_id: data.entity_id,
+                breeder: data.breeder.map(|p| consume_player(state, &p)),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityInsideBlockEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityInsideBlockEvent(EntityInsideBlockEventData {
+            entity_id: self.entity_id,
+            block_pos: to_wasm_block_position(self.block_pos),
+            block_name: self.block_name.clone(),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityInsideBlockEvent(data) => Self {
+                entity_id: data.entity_id,
+                block_pos: from_wasm_block_position(data.block_pos),
+                block_name: data.block_name,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityLoadCrossbowEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let crossbow = state
+            .add_item_stack(Arc::new(Mutex::new(self.crossbow.clone())))
+            .expect("failed to add item stack resource");
+        let projectiles = self
+            .projectiles
+            .iter()
+            .map(|i| {
+                state
+                    .add_item_stack(Arc::new(Mutex::new(i.clone())))
+                    .expect("failed to add item stack resource")
+            })
+            .collect();
+        Event::EntityLoadCrossbowEvent(EntityLoadCrossbowEventData {
+            entity_id: self.entity_id,
+            crossbow,
+            projectiles,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityLoadCrossbowEvent(data) => Self {
+                entity_id: data.entity_id,
+                crossbow: consume_item_stack(state, &data.crossbow),
+                projectiles: data
+                    .projectiles
+                    .iter()
+                    .map(|i| consume_item_stack(state, i))
+                    .collect(),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityMoveEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityMoveEvent(EntityMoveEventData {
+            entity_id: self.entity_id,
+            from_position: to_wasm_position(self.from_position),
+            to_position: to_wasm_position(self.to_position),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityMoveEvent(data) => Self {
+                entity_id: data.entity_id,
+                from_position: from_wasm_position(data.from_position),
+                to_position: from_wasm_position(data.to_position),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityToggleSitEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityToggleSitEvent(EntityToggleSitEventData {
+            entity_id: self.entity_id,
+            sitting: self.sitting,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityToggleSitEvent(data) => Self {
+                entity_id: data.entity_id,
+                sitting: data.sitting,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for ItemTransportingEntityValidateTargetEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::ItemTransportingEntityValidateTargetEvent(
+            ItemTransportingEntityValidateTargetEventData {
+                entity_id: self.entity_id,
+                target_pos: to_wasm_block_position(self.target_pos),
+                cancelled: self.cancelled,
+            },
+        )
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::ItemTransportingEntityValidateTargetEvent(data) => Self {
+                entity_id: data.entity_id,
+                target_pos: from_wasm_block_position(data.target_pos),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for TameableDeathMessageEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let death_message = state
+            .add_text_component(self.death_message.clone())
+            .expect("failed to add text component resource");
+        Event::TameableDeathMessageEvent(TameableDeathMessageEventData {
+            entity_id: self.entity_id,
+            death_message,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::TameableDeathMessageEvent(data) => Self {
+                entity_id: data.entity_id,
+                death_message: consume_text_component(state, &data.death_message),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WaterBottleSplashEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::WaterBottleSplashEvent(WaterBottleSplashEventData {
+            entity_id: self.entity_id,
+            affected_entities: self.affected_entities.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WaterBottleSplashEvent(data) => Self {
+                entity_id: data.entity_id,
+                affected_entities: data.affected_entities,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for CreeperIgniteEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::CreeperIgniteEvent(CreeperIgniteEventData {
+            entity_id: self.entity_id,
+            igniter_id: self.igniter_id,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::CreeperIgniteEvent(data) => Self {
+                entity_id: data.entity_id,
+                igniter_id: data.igniter_id,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EnderDragonFlameEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EnderDragonFlameEvent(EnderDragonFlameEventData {
+            entity_id: self.entity_id,
+            area_effect_cloud_id: self.area_effect_cloud_id,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EnderDragonFlameEvent(data) => Self {
+                entity_id: data.entity_id,
+                area_effect_cloud_id: data.area_effect_cloud_id,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EndermanAttackPlayerEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = state
+            .add_player(self.player.clone())
+            .expect("failed to add player resource");
+        Event::EndermanAttackPlayerEvent(EndermanAttackPlayerEventData {
+            entity_id: self.entity_id,
+            player,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EndermanAttackPlayerEvent(data) => Self {
+                entity_id: data.entity_id,
+                player: consume_player(state, &data.player),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EndermanEscapeEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EndermanEscapeEvent(EndermanEscapeEventData {
+            entity_id: self.entity_id,
+            reason: self.reason.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EndermanEscapeEvent(data) => Self {
+                entity_id: data.entity_id,
+                reason: data.reason,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityJumpEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityJumpEvent(EntityJumpEventData {
+            entity_id: self.entity_id,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityJumpEvent(data) => Self {
+                entity_id: data.entity_id,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityPathfindEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityPathfindEvent(EntityPathfindEventData {
+            entity_id: self.entity_id,
+            target_id: self.target_id,
+            path: self.path.iter().map(|p| to_wasm_position(*p)).collect(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityPathfindEvent(data) => Self {
+                entity_id: data.entity_id,
+                target_id: data.target_id,
+                path: data.path.into_iter().map(from_wasm_position).collect(),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityTeleportEndGatewayEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityTeleportEndGatewayEvent(EntityTeleportEndGatewayEventData {
+            entity_id: self.entity_id,
+            gateway: to_wasm_block_position(self.gateway),
+            from_position: to_wasm_position(self.from_position),
+            to_position: to_wasm_position(self.to_position),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityTeleportEndGatewayEvent(data) => Self {
+                entity_id: data.entity_id,
+                gateway: from_wasm_block_position(data.gateway),
+                from_position: from_wasm_position(data.from_position),
+                to_position: from_wasm_position(data.to_position),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for EntityZapEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::EntityZapEvent(EntityZapEventData {
+            entity_id: self.entity_id,
+            lightning_id: self.lightning_id,
+            cause: self.cause.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::EntityZapEvent(data) => Self {
+                entity_id: data.entity_id,
+                lightning_id: data.lightning_id,
+                cause: data.cause,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for PreCreatureSpawnEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::PreCreatureSpawnEvent(PreCreatureSpawnEventData {
+            position: to_wasm_position(self.position),
+            target_world,
+            entity_type: self.entity_type.clone(),
+            reason: self.reason.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::PreCreatureSpawnEvent(data) => Self {
+                position: from_wasm_position(data.position),
+                world: consume_world(state, &data.target_world),
+                entity_type: data.entity_type,
+                reason: data.reason,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for PreSpawnerSpawnEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::PreSpawnerSpawnEvent(PreSpawnerSpawnEventData {
+            spawner_pos: to_wasm_block_position(self.spawner_pos),
+            entity_type: self.entity_type.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::PreSpawnerSpawnEvent(data) => Self {
+                spawner_pos: from_wasm_block_position(data.spawner_pos),
+                entity_type: data.entity_type,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for ThrownEggHatchEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::ThrownEggHatchEvent(ThrownEggHatchEventData {
+            egg_id: self.egg_id,
+            will_hatch: self.will_hatch,
+            num_hatches: self.num_hatches,
+            hatching_type: to_wasm_entity_type(self.hatching_type),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::ThrownEggHatchEvent(data) => Self {
+                egg_id: data.egg_id,
+                will_hatch: data.will_hatch,
+                num_hatches: data.num_hatches,
+                hatching_type: from_wasm_entity_type(&data.hatching_type),
             },
             _ => panic!("unexpected event type"),
         }

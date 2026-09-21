@@ -1720,6 +1720,14 @@ impl Entity {
         let mut suffocating = false;
         let world = self.world.load();
 
+        // Extremely hot path (per entity per tick per overlapped block): only
+        // build events when a plugin actually listens.
+        let inside_block_server = world.server.upgrade().filter(|server| {
+            server.plugin_manager.has_handlers::<
+                crate::plugin::api::events::entity::entity_inside_block::EntityInsideBlockEvent,
+            >()
+        });
+
         for pos in BlockPos::iterate(min, max) {
             let (block, state) = world.get_block_and_state(&pos);
             if state.is_air() {
@@ -1754,6 +1762,15 @@ impl Entity {
             if bounding_box.intersects(&collision_shape.at_pos(pos)) {
                 if block == &Block::POWDER_SNOW {
                     self.is_in_powder_snow.store(true, Relaxed);
+                }
+                if let Some(server) = &inside_block_server {
+                    let mut event = crate::plugin::api::events::entity::entity_inside_block::EntityInsideBlockEvent::new(
+                        self.entity_id,
+                        pos,
+                        format!("minecraft:{}", block.name),
+                    );
+                    // Pure notification: cancellation is not supported.
+                    server.plugin_manager.fire_blocking(server, &mut event);
                 }
                 if let Some(server_arc) = world.server.upgrade() {
                     world.block_registry.on_entity_collision(
@@ -2369,7 +2386,28 @@ impl Entity {
 
         let final_move = self.adjust_movement_for_collisions(motion, caller);
 
+        // Extremely hot path: only build the event when a plugin actually listens.
+        let world = self.world.load();
+        let fire_move_event = final_move.length_squared() > 0.0
+            && world.server.upgrade().is_some_and(|server| {
+                server.plugin_manager.has_handlers::<
+                    crate::plugin::api::events::entity::entity_move::EntityMoveEvent,
+                >()
+            });
+        let from_position = fire_move_event.then(|| self.pos.load());
+
         self.move_pos(final_move);
+
+        if let Some(from_position) = from_position
+            && let Some(server) = world.server.upgrade()
+        {
+            let mut event = crate::plugin::api::events::entity::entity_move::EntityMoveEvent::new(
+                self.entity_id,
+                from_position,
+                self.pos.load(),
+            );
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
 
         let velocity_multiplier = f64::from(caller.get_block_speed_factor());
 

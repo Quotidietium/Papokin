@@ -6,12 +6,22 @@ pub mod arrow_body_count_change;
 pub mod bat_toggle_sleep;
 /// Creature spawn event.
 pub mod creature_spawn;
+/// Creeper ignite event.
+pub mod creeper_ignite;
 /// Creeper power event.
 pub mod creeper_power;
 /// Ender dragon change phase event.
 pub mod ender_dragon_change_phase;
+/// Ender dragon flame event.
+pub mod ender_dragon_flame;
+/// Enderman attack player event.
+pub mod enderman_attack_player;
+/// Enderman escape event.
+pub mod enderman_escape;
 /// Entity air change event.
 pub mod entity_air_change;
+/// Entity attempt smash attack event.
+pub mod entity_attempt_smash_attack;
 /// Entity break door event.
 pub mod entity_break_door;
 /// Entity breeding event.
@@ -30,6 +40,8 @@ pub mod entity_damage;
 pub mod entity_damage_by_block;
 /// Entity damage by entity event.
 pub mod entity_damage_by_entity;
+/// Entity damage item event.
+pub mod entity_damage_item;
 /// Entity death and player death events.
 pub mod entity_death;
 /// Entity dismount event.
@@ -38,22 +50,38 @@ pub mod entity_dismount;
 pub mod entity_drop_item;
 /// Entity dye event.
 pub mod entity_dye;
+/// Entity effect tick event.
+pub mod entity_effect_tick;
 /// Entity enter block event.
 pub mod entity_enter_block;
 /// Entity enter love mode event.
 pub mod entity_enter_love_mode;
+/// Entity equipment changed event.
+pub mod entity_equipment_changed;
 /// Entity exhaustion event.
 pub mod entity_exhaustion;
 /// Entity explode event.
 pub mod entity_explode;
+/// Entity fertilize egg event.
+pub mod entity_fertilize_egg;
+/// Entity inside block event.
+pub mod entity_inside_block;
 /// Entity interact event.
 pub mod entity_interact;
+/// Entity jump event.
+pub mod entity_jump;
 /// Entity knockback event.
 pub mod entity_knockback;
 /// Entity knockback by entity event.
 pub mod entity_knockback_by_entity;
+/// Entity load crossbow event.
+pub mod entity_load_crossbow;
 /// Entity mount event.
 pub mod entity_mount;
+/// Entity move event.
+pub mod entity_move;
+/// Entity pathfind event.
+pub mod entity_pathfind;
 /// Entity pickup item event.
 pub mod entity_pickup_item;
 /// Entity place event.
@@ -90,14 +118,20 @@ pub mod entity_target_block;
 pub mod entity_target_living_entity;
 /// Entity teleport event.
 pub mod entity_teleport;
+/// Entity teleport end gateway event.
+pub mod entity_teleport_end_gateway;
 /// Entity toggle glide event.
 pub mod entity_toggle_glide;
+/// Entity toggle sit event.
+pub mod entity_toggle_sit;
 /// Entity toggle swim event.
 pub mod entity_toggle_swim;
 /// Entity transform event.
 pub mod entity_transform;
 /// Entity unleash event.
 pub mod entity_unleash;
+/// Entity zap event.
+pub mod entity_zap;
 /// Experience bottle event.
 pub mod exp_bottle;
 /// Explosion prime event.
@@ -114,6 +148,8 @@ pub mod item_despawn;
 pub mod item_merge;
 /// Item spawn event.
 pub mod item_spawn;
+/// Item transporting entity validate target event.
+pub mod item_transporting_entity_validate_target;
 /// Lingering potion splash event.
 pub mod lingering_potion_splash;
 /// Pig zap event.
@@ -124,6 +160,10 @@ pub mod pig_zombie_anger;
 pub mod piglin_barter;
 /// Potion splash event.
 pub mod potion_splash;
+/// Pre creature spawn event.
+pub mod pre_creature_spawn;
+/// Pre spawner spawn event.
+pub mod pre_spawner_spawn;
 /// Projectile hit event.
 pub mod projectile_hit;
 /// Projectile launch event.
@@ -138,6 +178,10 @@ pub mod slime_split;
 pub mod spawner_spawn;
 /// Strider temperature change event.
 pub mod strider_temperature_change;
+/// Tameable death message event.
+pub mod tameable_death_message;
+/// Thrown egg hatch event.
+pub mod thrown_egg_hatch;
 /// Trial spawner spawn event.
 pub mod trial_spawner_spawn;
 /// Villager acquire trade event.
@@ -150,14 +194,21 @@ pub mod villager_replenish_trade;
 pub mod villager_reputation_change;
 /// Warden anger change event.
 pub mod warden_anger_change;
+/// Water bottle splash event.
+pub mod water_bottle_splash;
 
 pub use area_effect_cloud_apply::*;
 pub use arrow_body_count_change::*;
 pub use bat_toggle_sleep::*;
 pub use creature_spawn::*;
+pub use creeper_ignite::*;
 pub use creeper_power::*;
 pub use ender_dragon_change_phase::*;
+pub use ender_dragon_flame::*;
+pub use enderman_attack_player::*;
+pub use enderman_escape::*;
 pub use entity_air_change::*;
+pub use entity_attempt_smash_attack::*;
 pub use entity_break_door::*;
 pub use entity_breed::*;
 pub use entity_change_block::*;
@@ -167,18 +218,27 @@ pub use entity_combust_by_entity::*;
 pub use entity_damage::*;
 pub use entity_damage_by_block::*;
 pub use entity_damage_by_entity::*;
+pub use entity_damage_item::*;
 pub use entity_death::*;
 pub use entity_dismount::*;
 pub use entity_drop_item::*;
 pub use entity_dye::*;
+pub use entity_effect_tick::*;
 pub use entity_enter_block::*;
 pub use entity_enter_love_mode::*;
+pub use entity_equipment_changed::*;
 pub use entity_exhaustion::*;
 pub use entity_explode::*;
+pub use entity_fertilize_egg::*;
+pub use entity_inside_block::*;
 pub use entity_interact::*;
+pub use entity_jump::*;
 pub use entity_knockback::*;
 pub use entity_knockback_by_entity::*;
+pub use entity_load_crossbow::*;
 pub use entity_mount::*;
+pub use entity_move::*;
+pub use entity_pathfind::*;
 pub use entity_pickup_item::*;
 pub use entity_place::*;
 pub use entity_portal::*;
@@ -197,10 +257,13 @@ pub use entity_target::*;
 pub use entity_target_block::*;
 pub use entity_target_living_entity::*;
 pub use entity_teleport::*;
+pub use entity_teleport_end_gateway::*;
 pub use entity_toggle_glide::*;
+pub use entity_toggle_sit::*;
 pub use entity_toggle_swim::*;
 pub use entity_transform::*;
 pub use entity_unleash::*;
+pub use entity_zap::*;
 pub use exp_bottle::*;
 pub use explosion_prime::*;
 pub use firework_explode::*;
@@ -209,11 +272,14 @@ pub use horse_jump::*;
 pub use item_despawn::*;
 pub use item_merge::*;
 pub use item_spawn::*;
+pub use item_transporting_entity_validate_target::*;
 pub use lingering_potion_splash::*;
 pub use pig_zap::*;
 pub use pig_zombie_anger::*;
 pub use piglin_barter::*;
 pub use potion_splash::*;
+pub use pre_creature_spawn::*;
+pub use pre_spawner_spawn::*;
 pub use projectile_hit::*;
 pub use projectile_launch::*;
 pub use sheep_dye_wool::*;
@@ -221,9 +287,12 @@ pub use sheep_regrow_wool::*;
 pub use slime_split::*;
 pub use spawner_spawn::*;
 pub use strider_temperature_change::*;
+pub use tameable_death_message::*;
+pub use thrown_egg_hatch::*;
 pub use trial_spawner_spawn::*;
 pub use villager_acquire_trade::*;
 pub use villager_career_change::*;
 pub use villager_replenish_trade::*;
 pub use villager_reputation_change::*;
 pub use warden_anger_change::*;
+pub use water_bottle_splash::*;
