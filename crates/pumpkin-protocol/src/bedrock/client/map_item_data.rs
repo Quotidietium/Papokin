@@ -16,9 +16,10 @@ use crate::{
     serial::PacketWrite,
 };
 
-/// An object 'tracked' on a map, either an entity or a block. On the wire both
-/// members are written as independent optionals (1.26.40+); exactly one is
-/// expected to be `Some` for the variant `object_type` names.
+/// An object 'tracked' on a map, either an entity or a block.
+///
+/// On the wire both members are written as independent optionals (1.26.40+);
+/// exactly one is expected to be `Some` for the variant `object_type` names.
 #[derive(Clone, Debug)]
 pub struct MapTrackedObject {
     /// 0 = entity, 1 = block (written as a little-endian i32 ordinal).
@@ -84,7 +85,7 @@ pub struct CMapItemData {
 
 fn write_opt_list<T: PacketWrite, W: Write>(
     writer: &mut W,
-    list: &Option<Vec<T>>,
+    list: Option<&[T]>,
 ) -> Result<(), Error> {
     match list {
         Some(items) => {
@@ -99,8 +100,17 @@ fn write_opt_list<T: PacketWrite, W: Write>(
     }
 }
 
-fn write_opt<T: PacketWrite, W: Write>(writer: &mut W, value: &Option<T>) -> Result<(), Error> {
-    value.write(writer)
+fn write_opt<T: PacketWrite + Copy, W: Write>(
+    writer: &mut W,
+    value: Option<T>,
+) -> Result<(), Error> {
+    match value {
+        Some(inner) => {
+            true.write(writer)?;
+            inner.write(writer)
+        }
+        None => false.write(writer),
+    }
 }
 
 impl PacketWrite for CMapItemData {
@@ -110,8 +120,8 @@ impl PacketWrite for CMapItemData {
         self.locked.write(writer)?;
         self.origin.write(writer)?;
 
-        write_opt_list(writer, &self.tracked_entity_ids)?;
-        write_opt(writer, &self.scale)?;
+        write_opt_list(writer, self.tracked_entity_ids.as_deref())?;
+        write_opt(writer, self.scale)?;
 
         match &self.tracked_objects {
             Some(objects) => {
@@ -142,11 +152,11 @@ impl PacketWrite for CMapItemData {
             None => false.write(writer)?,
         }
 
-        write_opt(writer, &self.width)?;
-        write_opt(writer, &self.height)?;
-        write_opt(writer, &self.x_offset)?;
-        write_opt(writer, &self.y_offset)?;
-        write_opt_list(writer, &self.colors)
+        write_opt(writer, self.width)?;
+        write_opt(writer, self.height)?;
+        write_opt(writer, self.x_offset)?;
+        write_opt(writer, self.y_offset)?;
+        write_opt_list(writer, self.colors.as_deref())
     }
 }
 

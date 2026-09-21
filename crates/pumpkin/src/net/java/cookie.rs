@@ -23,10 +23,11 @@ use super::JavaClient;
 /// `pumpkin-protocol`'s cookie packet definitions.
 pub const MAX_COOKIE_PAYLOAD: usize = 5120;
 
-/// Server-side cache of the cookies a client has reported, keyed by the
-/// cookie's resource identifier (`namespace:path`). Matches the lock-based
-/// field style of the connection structs (`std::sync::Mutex`, like
-/// `JavaClient::pending_keep_alives`).
+/// Server-side cache of the cookies a client has reported.
+///
+/// Keyed by the cookie's resource identifier (`namespace:path`). Matches the
+/// lock-based field style of the connection structs (`std::sync::Mutex`,
+/// like `JavaClient::pending_keep_alives`).
 pub type CookieStore = std::sync::Mutex<HashMap<String, Vec<u8>>>;
 
 /// Creates an empty cookie store.
@@ -35,9 +36,10 @@ pub fn new_cookie_store() -> CookieStore {
     std::sync::Mutex::new(HashMap::new())
 }
 
-/// Applies a clientbound cookie response to the store with vanilla
-/// semantics: `Some(payload)` inserts or replaces the entry, while `None`
-/// means the client does not have the cookie and the entry is removed.
+/// Applies a clientbound cookie response to the store with vanilla semantics.
+///
+/// `Some(payload)` inserts or replaces the entry, while `None` means the
+/// client does not have the cookie and the entry is removed.
 pub fn apply_cookie_response(store: &CookieStore, key: &str, payload: Option<&[u8]>) {
     let mut cookies = store
         .lock()

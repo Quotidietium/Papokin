@@ -340,9 +340,9 @@ fn map_color_to_abgr(color_id: u8) -> i32 {
     };
     let multiplier = BRIGHTNESS[(color_id & 3) as usize];
     let (r, g, b) = map_color.rgb;
-    let r = (u32::from(r) * multiplier / 255) as u32;
-    let g = (u32::from(g) * multiplier / 255) as u32;
-    let b = (u32::from(b) * multiplier / 255) as u32;
+    let r = u32::from(r) * multiplier / 255;
+    let g = u32::from(g) * multiplier / 255;
+    let b = u32::from(b) * multiplier / 255;
     (0xFF00_0000u32 | (b << 16) | (g << 8) | r) as i32
 }
 
@@ -351,14 +351,13 @@ fn map_color_to_abgr(color_id: u8) -> i32 {
 /// little-endian), mirroring Geyser's `BedrockMapIcon` table. Java types with
 /// no Bedrock image (1.21.11 additions past trial chambers) fall back to the
 /// plain white marker.
-fn bedrock_icon(java_icon_type: i32) -> (u8, i32) {
+const fn bedrock_icon(java_icon_type: i32) -> (u8, i32) {
     const fn argb(r: u32, g: u32, b: u32) -> i32 {
         (0xFF00_0000u32 | (r << 16) | (g << 8) | b) as i32
     }
     const WHITE: i32 = argb(255, 255, 255);
 
     let (image, color): (u8, i32) = match java_icon_type {
-        0 => (0, WHITE),                 // player -> marker_white
         1 => (7, WHITE),                 // frame -> marker_sign (green arrow)
         2 => (2, WHITE),                 // red_marker
         3 => (3, WHITE),                 // blue_marker
@@ -393,7 +392,8 @@ fn bedrock_icon(java_icon_type: i32) -> (u8, i32) {
         32 => (22, WHITE),               // jungle_temple
         33 => (23, WHITE),               // swamp_hut -> witch_hut
         34 => (24, WHITE),               // trial_chambers
-        _ => (0, WHITE),                 // newer types without a Bedrock image
+        // 0 = player -> marker_white; newer types have no Bedrock image
+        _ => (0, WHITE),
     };
     (image, color)
 }

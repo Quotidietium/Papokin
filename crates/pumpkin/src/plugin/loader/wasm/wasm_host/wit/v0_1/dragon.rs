@@ -21,10 +21,11 @@ use crate::world::dragon_fight::{
     DragonFight as InternalDragonFight, DragonRespawnStage as InternalDragonRespawnStage,
 };
 
-/// Host-side state behind a guest `dragon-fight` resource: a weak handle to
-/// the End world owning the fight. The fight itself lives in
-/// `World::dragon_fight`, so every call upgrades the world and locks the
-/// fight mutex for the duration of that call only.
+/// Host-side state behind a guest `dragon-fight` resource.
+///
+/// Holds a weak handle to the End world owning the fight. The fight itself
+/// lives in `World::dragon_fight`, so every call upgrades the world and
+/// locks the fight mutex for the duration of that call only.
 pub struct PluginDragonFight {
     pub world: Weak<InternalWorld>,
 }
