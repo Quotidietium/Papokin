@@ -69,6 +69,20 @@ impl Goal for CreeperIgniteGoal {
 
         if dist_sq > 49.0 || !mob.has_line_of_sight(target.get_entity()) {
             self.creeper.set_fuse_speed(-1);
+        } else if self.creeper.fuse_speed.load(Ordering::Relaxed) <= 0 {
+            // Proximity ignition (no igniting entity).
+            let entity = mob.get_entity();
+            let mut event =
+                crate::plugin::api::events::entity::creeper_ignite::CreeperIgniteEvent::new(
+                    entity.entity_id,
+                    None,
+                );
+            if let Some(server) = entity.world.load().server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if !event.cancelled {
+                self.creeper.set_fuse_speed(1);
+            }
         } else {
             self.creeper.set_fuse_speed(1);
         }

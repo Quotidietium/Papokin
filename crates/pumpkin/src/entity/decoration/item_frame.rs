@@ -420,6 +420,22 @@ impl EntityBase for ItemFrameEntity {
         let has_held_item = !item_stack.is_empty();
 
         if frame_has_item {
+            // Rotate hook.
+            let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                player.clone(),
+                self.entity.entity_id,
+                self.get_item(),
+                crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Rotate,
+            );
+            let world = self.entity.world.load();
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut change_event);
+            }
+            if change_event.cancelled {
+                return false;
+            }
             let new_rot = self.get_rotation() + 1;
             self.set_rotation(new_rot, true);
             self.entity.play_sound(self.get_rotate_item_sound());
@@ -427,6 +443,22 @@ impl EntityBase for ItemFrameEntity {
         } else if has_held_item && !self.entity.removed.load(Ordering::Relaxed) {
             let mut new_stack = item_stack.clone();
             new_stack.item_count = 1;
+            // Place hook.
+            let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                player.clone(),
+                self.entity.entity_id,
+                new_stack.clone(),
+                crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Place,
+            );
+            let world = self.entity.world.load();
+            if let Some(server) = world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut change_event);
+            }
+            if change_event.cancelled {
+                return false;
+            }
             self.set_item(new_stack, true);
 
             if !player.is_creative() {
@@ -473,6 +505,34 @@ impl EntityBase for ItemFrameEntity {
             damage_type == DamageType::EXPLOSION || damage_type == DamageType::PLAYER_EXPLOSION;
 
         if !is_explosion && has_item {
+            // Remove hook (player punching a filled frame).
+            if let Some(player) = source.and_then(|s| s.cast_any().downcast_ref::<Player>()) {
+                // The source `&Player` does not carry the `Arc`; resolve it
+                // from the world player list.
+                let Some(player_arc) = self
+                    .entity
+                    .world
+                    .load()
+                    .get_player_by_uuid(player.gameprofile.id)
+                else {
+                    return false;
+                };
+                let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                    player_arc,
+                    self.entity.entity_id,
+                    self.get_item(),
+                    crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Remove,
+                );
+                let world = self.entity.world.load();
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut change_event);
+                }
+                if change_event.cancelled {
+                    return false;
+                }
+            }
             self.drop_item(source, false);
             self.entity.play_sound(self.get_remove_item_sound());
         } else {

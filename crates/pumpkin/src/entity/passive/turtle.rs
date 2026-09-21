@@ -76,6 +76,26 @@ impl TurtleEntity {
     }
 
     pub fn set_has_egg(&self, has_egg: bool) {
+        if has_egg && !self.has_egg() {
+            // Fertilization: notify plugins, allowing cancellation.
+            let entity = self.get_entity();
+            let world = entity.world.load();
+            let breeder = self
+                .mob_entity
+                .breeder
+                .load()
+                .and_then(|uuid| world.get_player_by_uuid(uuid));
+            let mut event = crate::plugin::api::events::entity::entity_fertilize_egg::EntityFertilizeEggEvent::new(
+                entity.entity_id,
+                breeder,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+        }
         self.has_egg.store(has_egg, Ordering::Relaxed);
         let entity = self.get_entity();
         entity.set_synced_data(pumpkin_data::tracked_data::turtle::HAS_EGG, has_egg);
@@ -123,7 +143,11 @@ impl Mob for TurtleEntity {
     fn mob_read_nbt(&self, nbt: &NbtCompound) {
         self.read_ageable_nbt(nbt);
         if let Some(has_egg) = nbt.get_bool("HasEgg") {
-            self.set_has_egg(has_egg);
+            // NBT rehydration is not a fertilization; set the state directly
+            // without firing `EntityFertilizeEggEvent`.
+            self.has_egg.store(has_egg, Ordering::Relaxed);
+            self.get_entity()
+                .set_synced_data(pumpkin_data::tracked_data::turtle::HAS_EGG, has_egg);
         }
     }
 

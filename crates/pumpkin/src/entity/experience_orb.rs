@@ -128,9 +128,28 @@ impl EntityBase for ExperienceOrbEntity {
                 false
             };
             if can_pickup {
+                // Pickup hook: cancelling leaves the orb in the world; the
+                // amount may be adjusted by handlers.
+                let orb_id = self.entity.entity_id;
+                let amount = self.amount as i32;
+                let mut pickup_event = crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent::new(
+                    player.clone(),
+                    orb_id,
+                    amount,
+                );
+                let world = self.entity.world.load();
+                if let Some(server) = world.server.upgrade() {
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut pickup_event);
+                }
+                if pickup_event.cancelled {
+                    return;
+                }
+                let amount = pickup_event.amount.max(0);
+
                 player.living_entity.pickup(&self.entity, 1);
                 self.entity.remove();
-                let amount = self.amount as i32;
                 let remaining = player.apply_mending_from_xp(amount);
                 if remaining > 0 {
                     player.add_experience_points(remaining);

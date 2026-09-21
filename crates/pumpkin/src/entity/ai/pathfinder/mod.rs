@@ -715,6 +715,28 @@ impl PathNavigation {
             path_nodes.reverse();
 
             let path_target = target.node.pos;
+
+            // Notify plugins about the calculated path; cancellation means no
+            // path is found. Note: `NavigatorGoal` carries no target entity
+            // here, so `target_id` is always `None`.
+            let world = entity.entity.world.load();
+            if let Some(server) = world.server.upgrade().filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_pathfind::EntityPathfindEvent>()
+            }) {
+                let mut event =
+                    crate::plugin::api::events::entity::entity_pathfind::EntityPathfindEvent::new(
+                        entity.entity.entity_id,
+                        None,
+                        path_nodes.iter().map(|node| node.pos.0.to_f64()).collect(),
+                    );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                if event.cancelled {
+                    return None;
+                }
+            }
+
             return Some(Path::new(path_nodes, path_target, reached));
         }
 

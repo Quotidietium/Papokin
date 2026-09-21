@@ -377,6 +377,26 @@ impl LivingEntity {
         if equipment.is_empty() {
             return;
         }
+
+        // Notify plugins about each changed slot. The old item is no longer
+        // available here (callers have already updated the equipment map), so
+        // `old_item` is reported as `None`.
+        if let Some(server) = self.entity.world.load().server.upgrade() {
+            for (slot, stack) in equipment {
+                let mut event = crate::plugin::api::events::entity::entity_equipment_changed::EntityEquipmentChangedEvent::new(
+                    self.entity.entity_id,
+                    slot.to_name().to_string(),
+                    None,
+                    if stack.is_empty() {
+                        None
+                    } else {
+                        Some(stack.clone())
+                    },
+                );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+        }
+
         self.apply_and_send_equipment_attribute_modifiers(equipment);
 
         if equipment
@@ -1800,6 +1820,13 @@ impl LivingEntity {
         self.entity.velocity.store(velo);
 
         self.entity.velocity_dirty.store(true, SeqCst);
+
+        if let Some(server) = self.entity.world.load().server.upgrade() {
+            let mut event = crate::plugin::api::events::entity::entity_jump::EntityJumpEvent::new(
+                self.entity.entity_id,
+            );
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
     }
 
     fn get_jump_velocity(&self, mut strength: f64) -> f64 {
@@ -2187,13 +2214,37 @@ impl LivingEntity {
                     player.send_system_message(&final_death_message);
                 }
             }
-        } else if self.entity.custom_name.load().is_some() {
-            let death_message = Self::get_death_message(dyn_self, damage_type, source, cause);
-            tracing::info!(
-                "Named entity {} died: {}",
-                dyn_self.get_display_name().to_pretty_console(),
-                death_message.to_pretty_console()
-            );
+        } else {
+            // Vanilla parity: a tamed entity's death message goes to its owner.
+            let tameable = dyn_self
+                .get_mob()
+                .and_then(|mob| mob.as_tamable())
+                .filter(|tamable| tamable.is_tame());
+            if let Some(tameable) = tameable {
+                let death_message = Self::get_death_message(dyn_self, damage_type, source, cause);
+                let mut event = crate::plugin::api::events::entity::tameable_death_message::TameableDeathMessageEvent::new(
+                    self.entity.entity_id,
+                    death_message,
+                );
+                if let Some(server) = world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                }
+                if show_death_messages
+                    && let Some(owner_uuid) = tameable.get_owner()
+                    && let Some(owner) = world.get_player_by_uuid(owner_uuid)
+                {
+                    owner.send_system_message(&event.death_message);
+                }
+            }
+
+            if self.entity.custom_name.load().is_some() {
+                let death_message = Self::get_death_message(dyn_self, damage_type, source, cause);
+                tracing::info!(
+                    "Named entity {} died: {}",
+                    dyn_self.get_display_name().to_pretty_console(),
+                    death_message.to_pretty_console()
+                );
+            }
         }
     }
 
@@ -2286,12 +2337,31 @@ impl LivingEntity {
         let mut effects_to_remove = Vec::new();
         let mut effects_to_apply = Vec::new();
 
+        // Extremely hot path: only build events when a plugin actually listens.
+        let effect_tick_server = self.entity.world.load().server.upgrade().filter(|server| {
+            server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_effect_tick::EntityEffectTickEvent>()
+        });
+
         {
             let Ok(mut effects) = self.active_effects.try_lock() else {
                 return;
             };
             let entity_age = self.entity.age.load(Relaxed);
             for effect in effects.values_mut() {
+                if let Some(server) = &effect_tick_server {
+                    let mut event = crate::plugin::api::events::entity::entity_effect_tick::EntityEffectTickEvent::new(
+                        self.entity.entity_id,
+                        effect.effect_type.minecraft_name.to_string(),
+                        i32::from(effect.amplifier),
+                        effect.duration,
+                    );
+                    // Cancellation is intentionally ignored: this is a pure
+                    // notification fired once per active effect per tick.
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                }
+
                 if effect.duration == 0 {
                     effects_to_remove.push(effect.effect_type);
                     continue;
@@ -2448,6 +2518,19 @@ impl LivingEntity {
 
             if takes_damage {
                 let item_id = stack.item.id;
+
+                if let Some(server) = self.entity.world.load().server.upgrade() {
+                    let mut event = crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
+                        self.entity.entity_id,
+                        stack.clone(),
+                        armor_damage,
+                    );
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                    if event.cancelled {
+                        continue;
+                    }
+                }
+
                 let slot_result = stack.damage_item(armor_damage);
                 if slot_result != pumpkin_data::item_stack::DamageResult::Untouched {
                     if slot_result == pumpkin_data::item_stack::DamageResult::Broken {
@@ -3072,36 +3155,60 @@ impl LivingEntity {
 
                     let durability_damage = (amount / 1.0).floor().max(1.0) as i32;
                     if let Some(player) = caller.get_player() {
-                        let broke = player.damage_item_in_slot(&slot, durability_damage);
-                        let empty = player
-                            .inventory
-                            .get_stack_in_hand(match &slot {
-                                EquipmentSlot::OffHand(_) => Hand::Left,
-                                _ => Hand::Right,
-                            })
-                            .is_empty();
-                        if broke && empty {
-                            self.clear_active_hand();
+                        let held = player.inventory.get_stack_in_hand(match &slot {
+                            EquipmentSlot::OffHand(_) => Hand::Left,
+                            _ => Hand::Right,
+                        });
+                        let mut event = crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
+                            self.entity.entity_id,
+                            held,
+                            durability_damage,
+                        );
+                        if let Some(server) = world.server.upgrade() {
+                            server.plugin_manager.fire_blocking(&server, &mut event);
+                        }
+                        if !event.cancelled {
+                            let broke = player.damage_item_in_slot(&slot, durability_damage);
+                            let empty = player
+                                .inventory
+                                .get_stack_in_hand(match &slot {
+                                    EquipmentSlot::OffHand(_) => Hand::Left,
+                                    _ => Hand::Right,
+                                })
+                                .is_empty();
+                            if broke && empty {
+                                self.clear_active_hand();
+                            }
                         }
                     } else {
                         let mut equipment_guard = self
                             .entity_equipment
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(stack) = equipment_guard.equipment.get_mut(&slot)
-                            && stack.damage_item(durability_damage) == DamageResult::Broken
-                        {
-                            world.send_entity_status(
-                                &self.entity,
-                                crate::entity::equipment_break_status(&slot),
-                                None,
+                        if let Some(stack) = equipment_guard.equipment.get_mut(&slot) {
+                            let mut event = crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
+                                self.entity.entity_id,
+                                stack.clone(),
+                                durability_damage,
                             );
-                            *stack = ItemStack::EMPTY.clone();
-                            let broken_stack = stack.clone();
-                            drop(equipment_guard);
+                            if let Some(server) = world.server.upgrade() {
+                                server.plugin_manager.fire_blocking(&server, &mut event);
+                            }
+                            if !event.cancelled
+                                && stack.damage_item(durability_damage) == DamageResult::Broken
+                            {
+                                world.send_entity_status(
+                                    &self.entity,
+                                    crate::entity::equipment_break_status(&slot),
+                                    None,
+                                );
+                                *stack = ItemStack::EMPTY.clone();
+                                let broken_stack = stack.clone();
+                                drop(equipment_guard);
 
-                            self.send_equipment_changes(&[(slot, broken_stack)]);
-                            self.clear_active_hand();
+                                self.send_equipment_changes(&[(slot, broken_stack)]);
+                                self.clear_active_hand();
+                            }
                         }
                     }
                 }

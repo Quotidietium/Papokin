@@ -638,16 +638,58 @@ impl Player {
     ) -> Self {
         let inventory_changed = Arc::new(AtomicBool::new(true));
 
-        struct ScreenListener(Arc<AtomicBool>);
+        struct ScreenListener {
+            inventory_changed: Arc<AtomicBool>,
+            world: Weak<World>,
+            player_uuid: Uuid,
+        }
 
         impl ScreenHandlerListener for ScreenListener {
             fn on_slot_update(
                 &self,
-                _screen_handler: &ScreenHandlerBehaviour,
-                _slot: u8,
-                _stack: ItemStack,
+                screen_handler: &ScreenHandlerBehaviour,
+                slot: u8,
+                stack: ItemStack,
             ) {
-                self.0.store(true, Ordering::Relaxed);
+                self.inventory_changed.store(true, Ordering::Relaxed);
+
+                // Inventory-slot-change hook: high-frequency notification,
+                // gated on an actual listener before doing any work.
+                let Some(world) = self.world.upgrade() else {
+                    return;
+                };
+                let Some(server) = world.server.upgrade() else {
+                    return;
+                };
+                if !server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_inventory_slot_change::PlayerInventorySlotChangeEvent>()
+                {
+                    return;
+                }
+                // Only player inventory slots (those past the container's own
+                // slots) are reported.
+                let slot_index = slot as usize;
+                if slot_index < screen_handler.container_slots {
+                    return;
+                }
+                let Some(player) = world.get_player_by_uuid(self.player_uuid) else {
+                    return;
+                };
+                let old_item = screen_handler
+                    .previous_tracked_stacks
+                    .get(slot_index)
+                    .and_then(|tracked| tracked.received_stack.clone());
+                let new_item = if stack.is_empty() { None } else { Some(stack) };
+                let mut slot_event = crate::plugin::api::events::player::player_inventory_slot_change::PlayerInventorySlotChangeEvent::new(
+                    player,
+                    i32::from(slot),
+                    old_item,
+                    new_item,
+                );
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut slot_event);
             }
         }
 
@@ -792,7 +834,11 @@ impl Player {
             experience_progress: AtomicCell::new(0.0),
             experience_points: AtomicI32::new(0),
             item_cooldowns: std::sync::Mutex::new(HashMap::new()),
-            chunk_sender: Mutex::new(crate::net::ChunkSender::new()),
+            chunk_sender: Mutex::new({
+                let mut sender = crate::net::ChunkSender::new();
+                sender.set_owner(world, player_uuid);
+                sender
+            }),
             chunk_listener: Mutex::new(world.level.chunk_listener.add_global_chunk_listener()),
             held_chunk_tickets: Mutex::new(None),
             chunk_send_epoch: AtomicU32::new(0),
@@ -808,7 +854,11 @@ impl Player {
             player_screen_handler: player_screen_handler.clone(),
             current_screen_handler: std::sync::Mutex::new(player_screen_handler),
             screen_handler_sync_id: AtomicU8::new(0),
-            screen_handler_listener: Arc::new(ScreenListener(inventory_changed.clone())),
+            screen_handler_listener: Arc::new(ScreenListener {
+                inventory_changed: inventory_changed.clone(),
+                world: Arc::downgrade(world),
+                player_uuid,
+            }),
             inventory_changed,
             screen_handler_sync_handler: Arc::new(SyncHandler::new()),
             tab_list_header: Mutex::new(TextComponent::text("")),
@@ -855,6 +905,51 @@ impl Player {
     }
 
     pub fn start_cooldown(&self, group: String, duration: i32) {
+        // Cooldown hooks: the group variant carries the raw cooldown group;
+        // the item variant is fired as well (this engine keys cooldowns by
+        // group, which is the item id for plain item cooldowns).
+        let world = self.world();
+        let server_player = world
+            .server
+            .upgrade()
+            .zip(world.get_player_by_uuid(self.gameprofile.id));
+        if let Some((server, player_arc)) = server_player {
+            let mut group_event =
+                crate::plugin::api::events::player::player_item_group_cooldown::PlayerItemGroupCooldownEvent::new(
+                    player_arc.clone(),
+                    group.clone(),
+                    duration,
+                );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut group_event);
+            if group_event.cancelled {
+                return;
+            }
+            let duration = group_event.cooldown;
+
+            let mut item_event =
+                crate::plugin::api::events::player::player_item_cooldown::PlayerItemCooldownEvent::new(
+                    player_arc,
+                    group.clone(),
+                    duration,
+                );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut item_event);
+            if item_event.cancelled {
+                return;
+            }
+            let duration = item_event.cooldown;
+
+            self.insert_cooldown(group, duration);
+            return;
+        }
+
+        self.insert_cooldown(group, duration);
+    }
+
+    fn insert_cooldown(&self, group: String, duration: i32) {
         let mut cooldowns = self
             .item_cooldowns
             .lock()
@@ -1176,6 +1271,23 @@ impl Player {
         let attacker_entity = &self.living_entity.entity;
         let config = &server.advanced_config.pvp;
 
+        // Pre-attack hook: handlers may cancel or redirect the attack.
+        let target_id = victim_entity.entity_id;
+        let Some(player_arc) = world.get_player_by_uuid(self.gameprofile.id) else {
+            return;
+        };
+        let mut pre_attack =
+            crate::plugin::api::events::player::pre_player_attack_entity::PrePlayerAttackEntityEvent::new(
+                player_arc.clone(),
+                target_id,
+            );
+        server
+            .plugin_manager
+            .fire_blocking(&server, &mut pre_attack);
+        if pre_attack.cancelled {
+            return;
+        }
+
         let inventory = self.inventory();
         let item_stack = inventory.held_item();
         if !item_stack.is_empty() {
@@ -1261,7 +1373,19 @@ impl Player {
         } else {
             self.get_attack_cooldown_progress(f64::from(server.basic_config.tps), 0.5, attack_speed)
         };
-        self.last_attacked_ticks.store(0, Ordering::Relaxed);
+        // Attack-cooldown reset hook: fired when the attack resets the
+        // cooldown; cancelling keeps the previous cooldown value.
+        let mut cooldown_reset =
+            crate::plugin::api::events::player::player_attack_entity_cooldown_reset::PlayerAttackEntityCooldownResetEvent::new(
+                player_arc,
+                target_id,
+            );
+        server
+            .plugin_manager
+            .fire_blocking(&server, &mut cooldown_reset);
+        if !cooldown_reset.cancelled {
+            self.last_attacked_ticks.store(0, Ordering::Relaxed);
+        }
 
         // Only reduce attack damage if in cooldown
         // TODO: Enchantments are reduced in the same way, just without the square.
@@ -2605,9 +2729,27 @@ impl Player {
                         }
                     }
                 } else {
-                    // Target no longer exists, reset camera back to player
-                    self.camera_target_id.store(None);
-                    self.try_send_client_packet(&CSetCamera::new(self.entity_id().into()));
+                    // Target no longer exists: fire stop-spectating before
+                    // resetting the camera back to the player. A cancelled
+                    // event keeps the (stale) camera target for this tick.
+                    let world = self.world();
+                    let stop_event_fired = world.server.upgrade().and_then(|server_arc| {
+                        world.get_player_by_uuid(self.gameprofile.id).map(|player_arc| {
+                            let mut stop_event =
+                                crate::plugin::api::events::player::player_stop_spectating_entity::PlayerStopSpectatingEntityEvent::new(
+                                    player_arc,
+                                    camera_id,
+                                );
+                            server_arc
+                                .plugin_manager
+                                .fire_blocking(&server_arc, &mut stop_event);
+                            stop_event.cancelled
+                        })
+                    });
+                    if stop_event_fired != Some(true) {
+                        self.camera_target_id.store(None);
+                        self.try_send_client_packet(&CSetCamera::new(self.entity_id().into()));
+                    }
                 }
             }
         }
@@ -2763,6 +2905,21 @@ impl Player {
             && sleeping_since < 101
         {
             self.sleeping_since.store(Some(sleeping_since + 1));
+            // Deep sleep fires exactly once, when the counter reaches 100.
+            if sleeping_since + 1 == 100 {
+                let world = self.world();
+                if let Some(server_arc) = world.server.upgrade()
+                    && let Some(player_arc) = world.get_player_by_uuid(self.gameprofile.id)
+                {
+                    let mut deep_sleep =
+                        crate::plugin::api::events::player::player_deep_sleep::PlayerDeepSleepEvent::new(
+                            player_arc,
+                        );
+                    server_arc
+                        .plugin_manager
+                        .fire_blocking(&server_arc, &mut deep_sleep);
+                }
+            }
         }
 
         if self.mining.load(Ordering::Relaxed)
@@ -2937,6 +3094,27 @@ impl Player {
     }
 
     pub fn jump(&self) {
+        // Paper parity: from == to == the player's current position; a
+        // cancelled jump only skips the statistic and exhaustion bookkeeping.
+        // The world lookup provides the canonical `Arc<Player>`; when the
+        // player is not yet registered (early login ticks) the event is
+        // skipped because no sane handler can run without a player handle.
+        let from = self.position();
+        let world = self.world();
+        let Some(player_arc) = world.get_player_by_uuid(self.gameprofile.id) else {
+            return;
+        };
+        let mut jump_event = crate::plugin::api::events::player::player_jump::PlayerJumpEvent::new(
+            player_arc, from, from,
+        );
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut jump_event);
+        }
+        if jump_event.cancelled {
+            return;
+        }
         self.stats
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -3068,6 +3246,26 @@ impl Player {
 
     /// Resets the player's camera back to their own perspective.
     pub fn reset_camera(&self) {
+        // Stop-spectating hook: cancelling keeps the camera on the target.
+        if let Some(target_id) = self.camera_target_id.load() {
+            let world = self.world();
+            let cancelled = world.server.upgrade().is_some_and(|server_arc| {
+                world.get_player_by_uuid(self.gameprofile.id).is_some_and(|player_arc| {
+                    let mut stop_event =
+                        crate::plugin::api::events::player::player_stop_spectating_entity::PlayerStopSpectatingEntityEvent::new(
+                            player_arc,
+                            target_id,
+                        );
+                    server_arc
+                        .plugin_manager
+                        .fire_blocking(&server_arc, &mut stop_event);
+                    stop_event.cancelled
+                })
+            });
+            if cancelled {
+                return;
+            }
+        }
         self.camera_target_id.store(None);
         self.try_send_client_packet(&CSetCamera::new(self.entity_id().into()));
     }
@@ -4692,7 +4890,24 @@ impl Player {
     }
 
     pub async fn respawn(self: &Arc<Self>) {
+        let is_bed_spawn = self
+            .respawn_point
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
         self.world().respawn_player(self, false).await;
+        // Post-respawn notification, fired after the player has been moved to
+        // the respawn location.
+        let respawn_location = self.position();
+        if let Some(server) = self.world().server.upgrade() {
+            let mut post_respawn =
+                crate::plugin::api::events::player::player_post_respawn::PlayerPostRespawnEvent::new(
+                    self.clone(),
+                    respawn_location,
+                    is_bed_spawn,
+                );
+            server.plugin_manager.fire(&server, &mut post_respawn).await;
+        }
         // The client rebuilt its attribute state on respawn, so send the held
         // weapon modifiers again.
         crate::entity::attributes::send_attribute_updates_for_living(
@@ -5770,6 +5985,62 @@ impl Player {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
+        // Merchant trade hook: install the purchase/trade gate so completing
+        // a trade fires the cancellable plugin events first.
+        if let Some(merchant) = screen_handler
+            .as_any_mut()
+            .downcast_mut::<MerchantScreenHandler>()
+        {
+            let world_weak = Arc::downgrade(&self.world());
+            let player_uuid = self.gameprofile.id;
+            merchant.trade_check = Some(Box::new(
+                move |inventory_player, offer, merchant_entity_id| {
+                    let _ = inventory_player;
+                    let world = world_weak.upgrade()?;
+                    let server = world.server.upgrade()?;
+                    let player = world.get_player_by_uuid(player_uuid)?;
+
+                    let mut ingredients = vec![offer.base_cost_a.0.as_ref().clone()];
+                    if let Some(cost_b) = &offer.cost_b {
+                        ingredients.push(cost_b.0.as_ref().clone());
+                    }
+                    let result = offer.output.0.as_ref().clone();
+
+                    // Purchase first (generic merchant hook)...
+                    let mut purchase_event = crate::plugin::api::events::player::player_purchase::PlayerPurchaseEvent::new(
+                        player.clone(),
+                        merchant_entity_id,
+                        ingredients.clone(),
+                        result.clone(),
+                    );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut purchase_event);
+                    if purchase_event.cancelled {
+                        return None;
+                    }
+
+                    // ...then the villager-specific trade hook. The villager
+                    // experience is modifiable and returned to the handler.
+                    let mut trade_event =
+                        crate::plugin::api::events::player::player_trade::PlayerTradeEvent::new(
+                            player,
+                            merchant_entity_id.unwrap_or(-1),
+                            ingredients,
+                            result,
+                            offer.xp,
+                        );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut trade_event);
+                    if trade_event.cancelled {
+                        return None;
+                    }
+                    Some(trade_event.villager_experience)
+                },
+            ));
+        }
+
         screen_handler.add_listener(self.screen_handler_listener.clone());
         screen_handler.update_sync_handler(self.screen_handler_sync_handler.clone());
     }
@@ -6119,7 +6390,7 @@ impl Player {
                 slot,
                 raw_slot,
                 clicked_item.clone(),
-                cursor_item,
+                cursor_item.clone(),
                 i32::from(hotbar_button),
             );
             'after: {}
@@ -6141,6 +6412,49 @@ impl Player {
         if interact_event.cancelled {
             cancel_screen();
             return;
+        }
+
+        // Swap-with-equipment-slot hook: player inventory screen only, armor
+        // slots 5..=8 (head/chest/legs/feet). Triggered by clicking an armor
+        // slot with an equippable item on the cursor, or by hotbar-swapping
+        // onto an armor slot. Cancelling vetoes the swap.
+        if window_type.is_none()
+            && (5..=8).contains(&slot)
+            && (matches!(packet.mode, SlotActionType::Swap)
+                || (matches!(packet.mode, SlotActionType::Pickup)
+                    && cursor_item.as_ref().is_some_and(|cursor| {
+                        !cursor.is_empty()
+                            && cursor.get_data_component::<EquippableImpl>().is_some()
+                    })))
+        {
+            let slot_name = match slot {
+                5 => "head",
+                6 => "chest",
+                7 => "legs",
+                _ => "feet",
+            };
+            let equipped_item = clicked_item.clone().filter(|stack| !stack.is_empty());
+            let source_item = if matches!(packet.mode, SlotActionType::Swap) {
+                let hotbar_stack = self.inventory().get_slot(packet.button as usize);
+                if hotbar_stack.is_empty() {
+                    None
+                } else {
+                    Some(hotbar_stack)
+                }
+            } else {
+                cursor_item.filter(|stack| !stack.is_empty())
+            };
+            let mut swap_event = crate::plugin::api::events::player::player_swap_with_equipment_slot::PlayerSwapWithEquipmentSlotEvent::new(
+                self.clone(),
+                slot_name,
+                equipped_item,
+                source_item,
+            );
+            server.plugin_manager.fire_blocking(server, &mut swap_event);
+            if swap_event.cancelled {
+                cancel_screen();
+                return;
+            }
         }
 
         if slot == 0
@@ -6379,7 +6693,61 @@ impl Player {
             return;
         }
 
-        screen_handler.on_button_click(self, packet.button_id.0);
+        // Loom-pattern / stonecutter-recipe selection hooks: cancelling vetoes
+        // the selection (the button click is dropped). A modified loom pattern
+        // is mapped back to its index in the selectable pattern list.
+        let mut button_id = packet.button_id.0;
+        {
+            let world = self.world();
+            let server = world.server.upgrade();
+            let player = world.get_player_by_uuid(self.gameprofile.id);
+            if let (Some(server), Some(player)) = (server, player) {
+                if let Some(loom) = screen_handler
+                    .as_any()
+                    .downcast_ref::<pumpkin_inventory::loom_screen_handler::LoomScreenHandler>(
+                ) {
+                    let pattern = (button_id >= 0).then(|| {
+                        loom.selectable_patterns.get(button_id as usize).cloned()
+                    });
+                    if let Some(Some(pattern)) = pattern {
+                        let mut loom_event = crate::plugin::api::events::player::player_loom_pattern_select::PlayerLoomPatternSelectEvent::new(
+                            player,
+                            pattern,
+                        );
+                        server
+                            .plugin_manager
+                            .fire_blocking(&server, &mut loom_event);
+                        if loom_event.cancelled {
+                            return;
+                        }
+                        if let Some(new_index) = loom
+                            .selectable_patterns
+                            .iter()
+                            .position(|p| p == &loom_event.pattern)
+                        {
+                            button_id = new_index as i32;
+                        }
+                    }
+                } else if let Some(stonecutter) = screen_handler
+                    .as_any()
+                    .downcast_ref::<pumpkin_inventory::stonecutter_screen_handler::StonecutterScreenHandler>()
+                    && let Some(recipe_id) = stonecutter.recipe_id_for_button(button_id)
+                {
+                    let mut stonecutter_event = crate::plugin::api::events::player::player_stonecutter_recipe_select::PlayerStonecutterRecipeSelectEvent::new(
+                        player,
+                        recipe_id,
+                    );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut stonecutter_event);
+                    if stonecutter_event.cancelled {
+                        return;
+                    }
+                }
+            }
+        }
+
+        screen_handler.on_button_click(self, button_id);
     }
 
     pub fn has_permission(self: &Arc<Self>, server: &Server, node: &str) -> bool {
@@ -7952,6 +8320,32 @@ impl InventoryPlayer for Player {
     fn enqueue_equipment_change(&self, slot: &EquipmentSlot, stack: &ItemStack) {
         self.living_entity
             .send_equipment_changes(&[(slot.clone(), stack.clone())]);
+
+        // Armor-change hook: humanoid armor slots only. Pure notification;
+        // the previous content is not observable at this point, so `old_item`
+        // is always `None`.
+        if slot.slot_type() == pumpkin_data::data_component_impl::EquipmentType::HumanoidArmor {
+            let world = self.world();
+            if let Some(server) = world.server.upgrade()
+                && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_armor_change::PlayerArmorChangeEvent>()
+                && let Some(player) = world.get_player_by_uuid(self.gameprofile.id)
+            {
+                let new_item = if stack.is_empty() {
+                    None
+                } else {
+                    Some(stack.clone())
+                };
+                let mut armor_event = crate::plugin::api::events::player::player_armor_change::PlayerArmorChangeEvent::new(
+                    player,
+                    slot.to_name().to_string(),
+                    None,
+                    new_item,
+                );
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut armor_event);
+            }
+        }
 
         if let Some(equippable) = stack.get_data_component::<EquippableImpl>() {
             self.world().play_sound_event(

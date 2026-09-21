@@ -261,6 +261,20 @@ impl EntityBase for LightningBoltEntity {
                     }
                     let hit_id = hit_entity.get_entity().entity_id;
                     if hit_guard.insert(hit_id) {
+                        // Generic zap hook; cancellation skips the strike
+                        // effects but the entity is still recorded as hit.
+                        let mut event =
+                            crate::plugin::api::events::entity::entity_zap::EntityZapEvent::new(
+                                hit_id,
+                                entity.entity_id,
+                                "lightning".to_string(),
+                            );
+                        if let Some(server) = world.server.upgrade() {
+                            server.plugin_manager.fire_blocking(&server, &mut event);
+                        }
+                        if event.cancelled {
+                            continue;
+                        }
                         hit_entity.on_lightning_strike(hit_entity.as_ref(), self);
                     }
                 }

@@ -115,6 +115,21 @@ impl EntityBase for EggEntity {
         let mut hatching = to_spawn > 0;
         let mut hatching_type: &'static EntityType = &EntityType::CHICKEN;
 
+        // Entity-domain hatch decision event: fires for every thrown egg.
+        let mut event =
+            crate::plugin::api::events::entity::thrown_egg_hatch::ThrownEggHatchEvent::new(
+                self.get_entity().entity_id,
+                hatching,
+                to_spawn as u8,
+                hatching_type,
+            );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        hatching = event.will_hatch;
+        to_spawn = (event.num_hatches as usize).min(MAX_EGG_HATCH_EVENT_SPAWNS);
+        hatching_type = event.hatching_type;
+
         let owner_id = self.thrown.owner_id;
         let entity_uuid = self.get_entity().entity_uuid;
         let variant_name = {

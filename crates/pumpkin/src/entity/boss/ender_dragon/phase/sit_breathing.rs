@@ -71,6 +71,20 @@ impl super::Phase for SitBreathingPhase {
                 0.5,  // radius on use
                 -100, // duration on use
             );
+
+            // The dragon's breath attack can be cancelled by plugins.
+            let mut event =
+                crate::plugin::api::events::entity::ender_dragon_flame::EnderDragonFlameEvent::new(
+                    entity.entity_id,
+                    cloud.get_entity().entity_id,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+
             world.spawn_entity(cloud);
         }
     }

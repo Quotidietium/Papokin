@@ -59,6 +59,19 @@ pub trait TamableAnimal: Animal {
     fn set_in_sitting_pose(&self, sitting: bool) {
         let mob_entity = self.get_mob_entity();
         let entity = &mob_entity.living_entity.entity;
+        if sitting != self.is_in_sitting_pose() {
+            let mut event =
+                crate::plugin::api::events::entity::entity_toggle_sit::EntityToggleSitEvent::new(
+                    entity.entity_id,
+                    sitting,
+                );
+            if let Some(server) = entity.world.load().server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+        }
         self.get_tamable_data()
             .ordered_to_sit
             .store(sitting, Relaxed);
@@ -156,6 +169,20 @@ pub trait TamableAnimal: Animal {
             .get_bool("Sitting")
             .or_else(|| nbt.get_byte("Sitting").map(|b| b != 0))
             .unwrap_or(false);
-        self.set_ordered_to_sit(sitting);
+        // NBT rehydration is not a player command; set the pose directly
+        // without firing `EntityToggleSitEvent`.
+        self.get_tamable_data()
+            .ordered_to_sit
+            .store(sitting, Relaxed);
+        let mob_entity = self.get_mob_entity();
+        let entity = &mob_entity.living_entity.entity;
+        let mut flags = if sitting { SITTING_FLAG } else { 0 };
+        if self.is_tame() {
+            flags |= TAME_FLAG;
+        }
+        entity.set_synced_data(
+            pumpkin_data::tracked_data::tamable_animal::DATA_FLAGS_ID,
+            flags as i8,
+        );
     }
 }

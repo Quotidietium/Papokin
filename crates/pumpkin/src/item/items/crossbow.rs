@@ -70,6 +70,19 @@ impl ItemBehaviour for CrossbowItem {
 
                 let drawn = ProjectileWeaponItem::draw(&stack, &projectile, is_creative);
                 if !drawn.is_empty() {
+                    let mut event = crate::plugin::api::events::entity::entity_load_crossbow::EntityLoadCrossbowEvent::new(
+                        player.entity_id(),
+                        stack.clone(),
+                        drawn.clone(),
+                    );
+                    if let Some(server) = player.world().server.upgrade() {
+                        server.plugin_manager.fire_blocking(&server, &mut event);
+                    }
+                    if event.cancelled {
+                        player.living_entity.clear_active_hand();
+                        return;
+                    }
+
                     let mut charged_nbts = Vec::new();
                     for item in drawn {
                         let mut arrow_nbt = pumpkin_nbt::compound::NbtCompound::new();

@@ -121,6 +121,21 @@ impl EndermanEntity {
 
     pub fn teleport_randomly(&self) -> bool {
         let entity = &self.mob_entity.living_entity.entity;
+
+        // The enderman escapes combat by teleporting away.
+        let world = entity.world.load();
+        let mut event =
+            crate::plugin::api::events::entity::enderman_escape::EndermanEscapeEvent::new(
+                entity.entity_id,
+                "teleport".to_string(),
+            );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return false;
+        }
+
         let pos = entity.pos.load();
         let (x, y, z) = {
             let mut rng = self.get_random();

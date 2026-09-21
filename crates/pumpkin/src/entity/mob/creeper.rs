@@ -242,6 +242,17 @@ impl Mob for CreeperEntity {
         let world = entity.world.load();
         let pos = entity.pos.load();
 
+        let mut event = crate::plugin::api::events::entity::creeper_ignite::CreeperIgniteEvent::new(
+            entity.entity_id,
+            Some(player.entity_id()),
+        );
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
+        if event.cancelled {
+            return true;
+        }
+
         world.play_sound_fine(
             Sound::ItemFlintandsteelUse,
             SoundCategory::Hostile,

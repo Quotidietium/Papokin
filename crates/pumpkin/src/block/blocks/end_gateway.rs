@@ -36,6 +36,19 @@ impl BlockBehaviour for EndGatewayBlock {
         end_gateway.trigger_cooldown(args.world, *args.position);
 
         if let Some(destination) = end_gateway.get_portal_position(args.world, *args.position) {
+            let mut event = crate::plugin::api::events::entity::entity_teleport_end_gateway::EntityTeleportEndGatewayEvent::new(
+                entity.entity_id,
+                *args.position,
+                entity.pos.load(),
+                destination,
+            );
+            if let Some(server) = args.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+
             let yaw = entity.yaw.load();
             let pitch = entity.pitch.load();
             args.entity

@@ -214,6 +214,43 @@ impl EntityBase for SplashPotionEntity {
 
         // If no effects, just splash (like water bottles)
         if effects.is_empty() {
+            // Water bottle splash: gather the living entities in range and
+            // notify plugins (cancellable).
+            let radius = 4.0f64;
+            let min = Vector3::new(hit_pos.x - radius, hit_pos.y - radius, hit_pos.z - radius);
+            let max = Vector3::new(hit_pos.x + radius, hit_pos.y + radius, hit_pos.z + radius);
+            let aabb = BoundingBox::new(min, max);
+
+            let mut candidates = world.get_entities_at_box(&aabb);
+            let players = world.get_players_at_box(&aabb);
+            for p in players {
+                candidates.push(p.clone() as Arc<dyn EntityBase>);
+            }
+
+            let affected_ids: Vec<i32> = candidates
+                .iter()
+                .filter(|cand| cand.get_living_entity().is_some())
+                .filter(|cand| {
+                    let pos = cand.get_entity().pos.load();
+                    let dx = pos.x - hit_pos.x;
+                    let dy = pos.y - hit_pos.y;
+                    let dz = pos.z - hit_pos.z;
+                    (dx * dx + dy * dy + dz * dz).sqrt() <= radius
+                })
+                .map(|cand| cand.get_entity().entity_id)
+                .collect();
+
+            let mut event =
+                crate::plugin::api::events::entity::water_bottle_splash::WaterBottleSplashEvent::new(
+                    self.get_entity().entity_id,
+                    affected_ids,
+                );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            // Cancellation currently has no further effect to suppress (water
+            // damage to water-sensitive mobs is not implemented yet), but the
+            // flag is still read back for future use.
             return;
         }
 

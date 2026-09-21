@@ -149,6 +149,20 @@ impl FoxEntity {
     }
 
     pub fn set_sitting(&self, val: bool) {
+        if val != self.is_sitting() {
+            let entity = self.get_entity();
+            let mut event =
+                crate::plugin::api::events::entity::entity_toggle_sit::EntityToggleSitEvent::new(
+                    entity.entity_id,
+                    val,
+                );
+            if let Some(server) = entity.world.load().server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
+        }
         self.set_flag(1, val);
     }
 
@@ -253,7 +267,9 @@ impl Mob for FoxEntity {
             self.set_sleeping(sleeping);
         }
         if let Some(sitting) = nbt.get_bool("Sitting") {
-            self.set_sitting(sitting);
+            // NBT rehydration is not a gameplay toggle; set the flag directly
+            // without firing `EntityToggleSitEvent`.
+            self.set_flag(1, sitting);
         }
         if let Some(crouching) = nbt.get_bool("Crouching") {
             self.set_crouching(crouching);

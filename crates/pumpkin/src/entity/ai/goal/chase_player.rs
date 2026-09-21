@@ -47,6 +47,22 @@ impl Goal for ChasePlayerGoal {
             return false;
         }
 
+        // The enderman is provoked and about to attack the player.
+        let world = entity.world.load();
+        if let Some(player_arc) = world.get_player_by_id(target.get_entity().entity_id) {
+            let mut event = crate::plugin::api::events::entity::enderman_attack_player::EndermanAttackPlayerEvent::new(
+                entity.entity_id,
+                player_arc,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                self.target = None;
+                return false;
+            }
+        }
+
         self.target = Some(target);
         true
     }

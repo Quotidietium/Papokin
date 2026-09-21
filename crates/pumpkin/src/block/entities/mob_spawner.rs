@@ -146,6 +146,23 @@ impl BlockEntity for MobSpawnerBlockEntity {
             let spawn_range = self.spawn_range;
             let mut spawned_any = false;
             let mut cancelled_any = false;
+
+            // Early filtering hook before any spawn attempt is made.
+            let mut pre_event =
+                crate::plugin::api::events::entity::pre_spawner_spawn::PreSpawnerSpawnEvent::new(
+                    self.position,
+                    format!("minecraft:{}", entity_type.resource_name),
+                );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut pre_event);
+            }
+            if pre_event.cancelled {
+                // Count a cancelled spawn round as completed so the spawner
+                // goes on cooldown instead of retrying every tick.
+                self.update_spawns(world);
+                return;
+            }
+
             for _ in 0..self.spawn_count {
                 let pos = self.position.0;
 

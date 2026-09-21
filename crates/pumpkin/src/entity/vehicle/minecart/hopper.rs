@@ -45,7 +45,27 @@ impl HopperMinecart {
         let inventory = &self.inventory;
         let cart_box = entity.bounding_box.load().expand(0.25, 0.0, 0.25);
 
-        if let Some(block_entity) = world.get_block_entity(&source_pos)
+        // Runs every tick for every active hopper minecart: only build the
+        // event when a plugin actually listens.
+        let target_valid = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server.plugin_manager.has_handlers::<
+                    crate::plugin::api::events::entity::item_transporting_entity_validate_target::ItemTransportingEntityValidateTargetEvent,
+                >()
+            })
+            .is_none_or(|server| {
+                let mut event = crate::plugin::api::events::entity::item_transporting_entity_validate_target::ItemTransportingEntityValidateTargetEvent::new(
+                    entity.entity_id,
+                    source_pos,
+                );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                !event.cancelled
+            });
+
+        if target_valid
+            && let Some(block_entity) = world.get_block_entity(&source_pos)
             && let Some(source) = block_entity.get_inventory()
         {
             for slot in 0..source.size() {
