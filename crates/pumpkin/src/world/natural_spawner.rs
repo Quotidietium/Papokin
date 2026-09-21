@@ -512,6 +512,40 @@ pub fn spawn_for_chunk(
     spawn_list: &Vec<&'static MobCategory>,
     is_thundering: bool,
 ) -> Vec<Arc<dyn EntityBase>> {
+    // Associate the spawn batch with the nearest non-spectator player to this
+    // chunk (the vanilla spawner only activates chunks near players). Plugins
+    // may cancel the whole batch for that player.
+    {
+        let center_x = f64::from(chunk_pos.x << 4) + 8.0;
+        let center_z = f64::from(chunk_pos.y << 4) + 8.0;
+        let nearest_player = world
+            .players
+            .load()
+            .iter()
+            .filter(|p| p.gamemode.load() != GameMode::Spectator)
+            .min_by(|a, b| {
+                let pa = a.position();
+                let pb = b.position();
+                let da = (center_x - pa.x).powi(2) + (center_z - pa.z).powi(2);
+                let db = (center_x - pb.x).powi(2) + (center_z - pb.z).powi(2);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned();
+        if let Some(player) = nearest_player {
+            let mut event = crate::plugin::api::events::player::player_naturally_spawn_creatures::PlayerNaturallySpawnCreaturesEvent::new(
+                player,
+                chunk_pos.x,
+                chunk_pos.y,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return Vec::new();
+            }
+        }
+    }
+
     let mut entities = Vec::new();
     for category in spawn_list {
         if spawn_state.can_spawn_for_category_local(world, category, chunk_pos) {
@@ -612,6 +646,20 @@ pub fn spawn_mobs_for_chunk_generation(
                         fz,
                     )) && check_spawn_rules(entity_type, world, &check_pos, false)
                     {
+                        // Early filtering hook before the entity is created.
+                        let mut pre_event = crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
+                            spawn_pos_f64,
+                            world.clone(),
+                            format!("minecraft:{}", entity_type.resource_name),
+                            "CHUNK_GENERATION".to_string(),
+                        );
+                        if let Some(server) = world.server.upgrade() {
+                            server.plugin_manager.fire_blocking(&server, &mut pre_event);
+                        }
+                        if pre_event.cancelled {
+                            continue;
+                        }
+
                         let entity = from_type(entity_type, spawn_pos_f64, world, Uuid::new_v4());
                         entity
                             .get_entity()
