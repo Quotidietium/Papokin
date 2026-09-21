@@ -95,6 +95,12 @@ world plugin {
     import %map;
     /// Provides structure template registration and placement.
     import structure;
+    /// Provides loot table queries and loot generation.
+    import loot;
+    /// Provides End dragon battle (DragonBattle) inspection and control.
+    import dragon;
+    /// Provides client cookie storage (Paper ClientCookie API equivalent).
+    import cookie;
 
     // --- Plugin-provided exports ---
 

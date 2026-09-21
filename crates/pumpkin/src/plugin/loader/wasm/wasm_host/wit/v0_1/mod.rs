@@ -26,11 +26,15 @@ pub mod config;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod context;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod cookie;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod damage_type;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod datapack;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod display;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod dragon;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod enchantment;
 #[allow(clippy::unused_async_trait_impl)]
@@ -52,6 +56,8 @@ pub mod java_dialogs;
 pub mod living_entity;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod logging;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod loot;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod map;
 #[allow(clippy::unused_async_trait_impl)]

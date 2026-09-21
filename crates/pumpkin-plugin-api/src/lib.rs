@@ -89,12 +89,16 @@ pub mod combat;
 pub mod commands;
 /// Plugin configuration files (getConfig equivalent).
 pub mod config;
+/// Client cookie storage (Paper ClientCookie API equivalent).
+pub mod cookie;
 /// Custom damage type registration and builder utilities.
 pub mod damage_type;
 /// Datapack management and query utilities.
 pub mod datapack;
 /// Display and interaction entity utilities and builders.
 pub mod display;
+/// End dragon battle (DragonBattle) inspection and control.
+pub mod dragon;
 /// Custom enchantment registration and builder utilities.
 pub mod enchantment;
 /// Event system and event handlers.
@@ -107,6 +111,8 @@ pub(crate) mod generated;
 pub mod inventory;
 /// Typed item definitions and `ItemStack` construction helpers.
 pub mod item;
+/// Loot table query and generation.
+pub mod loot;
 /// Custom map rendering (MapView): pixel drawing, cursors, terrain render.
 pub mod map;
 /// Merchant (villager / wandering trader) trade offer management.
@@ -151,7 +157,7 @@ pub use wit::pumpkin::plugin::{
     command as command_wit, common,
     context::{self, Context, MarketplaceMetadata, Server},
     damage_types as damage_types_wit, data_components, datapack as datapack_wit,
-    display as display_wit, enchantments as enchantments_wit, entity,
+    display as display_wit, dragon as dragon_wit, enchantments as enchantments_wit, entity,
     entity_statuses as entity_statuses_wit,
     entity_types::EntityType,
     event::{self as events_wit, EventType},
@@ -165,6 +171,7 @@ pub use wit::pumpkin::plugin::{
 // name them directly (e.g. build an `ItemStack` for a GUI or `/give`).
 pub use block::{BlockStateTypeExt, BlockType, BlockTypeExt, IntoBlockKey};
 pub use combat::{CombatEntry, PlayerCombatExt};
+pub use cookie::PlayerCookieExt;
 pub use damage_type::{
     CustomDamageType, DamageEffects, DamageScaling, DamageTypeBuilder, DamageTypeError,
     DamageTypeManager, DeathMessageType, RegistrableDamageType,

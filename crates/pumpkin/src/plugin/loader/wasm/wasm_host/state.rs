@@ -193,6 +193,8 @@ pub type InteractionEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type MerchantResource = WasmResource<Arc<dyn EntityBase>>;
 pub type MapViewResource =
     WasmResource<crate::plugin::loader::wasm::wasm_host::wit::v0_1::map::PluginMapView>;
+pub type DragonFightResource =
+    WasmResource<crate::plugin::loader::wasm::wasm_host::wit::v0_1::dragon::PluginDragonFight>;
 
 #[derive(Clone)]
 pub struct ChunkBuffer {
@@ -710,6 +712,23 @@ impl PluginHostState {
         &self,
         resource: &wasmtime::component::Resource<T>,
     ) -> wasmtime::Result<&MapViewResource> {
+        Ok(self
+            .resource_table
+            .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)
+    }
+
+    pub fn add_dragon_fight<T>(
+        &mut self,
+        provider: crate::plugin::loader::wasm::wasm_host::wit::v0_1::dragon::PluginDragonFight,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self.resource_table.push(DragonFightResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn get_dragon_fight_res<T>(
+        &self,
+        resource: &wasmtime::component::Resource<T>,
+    ) -> wasmtime::Result<&DragonFightResource> {
         Ok(self
             .resource_table
             .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)

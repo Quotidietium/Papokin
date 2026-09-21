@@ -768,6 +768,89 @@ impl Plugin for E2ePlugin {
             Err(err) => tracing::info!("E2E structure-register-failed {err}"),
         }
 
+        // Loot table API (new mechanism): pure-data generation against the
+        // static datapack tables, so it runs headless with no world or player
+        // context; a fixed seed makes every roll deterministic.
+        match pumpkin_plugin_api::loot::generate_loot("minecraft:chests/simple_dungeon", 0x5EED) {
+            Ok(stacks) => {
+                let total: u32 = stacks.iter().map(|s| u32::from(s.get_count())).sum();
+                let context = pumpkin_plugin_api::loot::LootContext::new()
+                    .killed_by_player(true)
+                    .tool(ItemStack::new("minecraft:diamond_sword", 1));
+                let zombie_drops = pumpkin_plugin_api::loot::generate_loot_with_context(
+                    "minecraft:entities/zombie",
+                    0x5EED,
+                    context,
+                )
+                .map(|drops| drops.len());
+                tracing::info!(
+                    "E2E loot-generate stacks={} items={total} zombie-stacks={zombie_drops:?}",
+                    stacks.len()
+                );
+            }
+            Err(err) => tracing::info!("E2E loot-generate-failed {err}"),
+        }
+        let known = pumpkin_plugin_api::loot::has_loot_table("minecraft:chests/simple_dungeon");
+        let unknown = pumpkin_plugin_api::loot::has_loot_table("minecraft:e2e/no_such_table");
+        if known && !unknown {
+            tracing::info!("E2E loot-has-table true-and-false-paths-ok");
+        } else {
+            tracing::info!("E2E loot-has-table-broken known={known} unknown={unknown}");
+        }
+
+        // Client cookie API (new mechanism): no real client connects during
+        // the headless run, so the store/request round trip cannot run here.
+        // Exercise the startup-safe surface instead (guest-side key
+        // validation mirroring the host, plus the payload limit constant) and
+        // mark the API as linked.
+        let valid = pumpkin_plugin_api::cookie::is_valid_cookie_key("e2e:session");
+        let invalid = pumpkin_plugin_api::cookie::is_valid_cookie_key("E2E:Bad Key");
+        if valid && !invalid {
+            tracing::info!(
+                "E2E cookie-api-ready max_payload={}",
+                pumpkin_plugin_api::cookie::MAX_COOKIE_PAYLOAD
+            );
+        } else {
+            tracing::info!("E2E cookie-api-broken valid={valid} invalid={invalid}");
+        }
+
+        // DragonBattle dragon fight (new mechanism): only The End carries a
+        // dragon fight, so querying the overworld must return none. When an
+        // End world is present, run the read-only queries plus the guarded
+        // mutation entry points (all no-ops while the dragon is not dead and
+        // no respawn sequence is running, so the headless run with no players
+        // and no dragon spawned stays safe).
+        {
+            use pumpkin_plugin_api::dragon::{DragonRespawnStage, WorldDragonFightExt};
+
+            let worlds = context.get_server().get_all_worlds();
+            if worlds.is_empty() {
+                tracing::info!("E2E dragon-fight-skipped no-world");
+            }
+            for world in &worlds {
+                let Some(fight) = world.get_dragon_fight() else {
+                    tracing::info!("E2E dragon-fight-none world={}", world.get_id());
+                    continue;
+                };
+                let noop_initiated = fight.initiate_respawn();
+                let noop_stage_set = fight.set_respawn_stage(DragonRespawnStage::End);
+                let noop_aborted = fight.abort_respawn();
+                tracing::info!(
+                    "E2E dragon-fight-api-ready world={} uuid_tracked={} alive={} killed_before={} stage={:?} crystals={} portal={:?} guards={}{}{}",
+                    world.get_id(),
+                    fight.get_dragon_uuid().is_some(),
+                    fight.is_dragon_alive(),
+                    fight.has_been_killed_previously(),
+                    fight.get_respawn_stage(),
+                    fight.get_alive_crystals(),
+                    fight.get_exit_portal_location(),
+                    noop_initiated,
+                    noop_stage_set,
+                    noop_aborted,
+                );
+            }
+        }
+
         tracing::info!("E2E on_enable ok");
         Ok(())
     }
