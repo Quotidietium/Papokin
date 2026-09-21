@@ -703,6 +703,18 @@ fn execute_click_commands_if_present(
         if let Ok(component) = serde_json::from_str::<TextComponent>(msg)
             && let Some(ClickEvent::RunCommand { command }) = &component.0.style.click_event
         {
+            // Let plugins preprocess (and optionally cancel/rewrite) the
+            // sign's click command before it runs.
+            let mut event = crate::plugin::api::events::player::player_sign_command_preprocess::PlayerSignCommandPreprocessEvent::new(
+                player.clone(),
+                *position,
+                command.clone(),
+            );
+            server.plugin_manager.fire_blocking(&server, &mut event);
+            if event.cancelled {
+                continue;
+            }
+
             let source = CommandSource::new(
                 CommandSender::Dummy,
                 world.clone(),
@@ -713,7 +725,7 @@ fn execute_click_commands_if_present(
                 player.get_display_name(),
                 server.clone(),
             );
-            let command_str = command.strip_prefix('/').unwrap_or(command);
+            let command_str = event.command.strip_prefix('/').unwrap_or(&event.command);
             let dispatcher = server.command_dispatcher.load();
             dispatcher.handle_command(&source, command_str);
             has_run_command = true;
