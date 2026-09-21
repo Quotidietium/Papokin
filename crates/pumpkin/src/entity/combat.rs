@@ -378,6 +378,16 @@ impl CombatTracker {
         }
     }
 
+    /// The damage entries of the current combat episode, oldest first.
+    ///
+    /// Read-only view for reporting (death messages, plugin queries); the
+    /// entries are cleared by [`Self::recheck_status`] once the episode times
+    /// out.
+    #[must_use]
+    pub fn entries(&self) -> &[CombatEntry] {
+        &self.entries
+    }
+
     #[must_use]
     pub const fn get_combat_duration(&self, current_tick: i64) -> i64 {
         if self.in_combat {

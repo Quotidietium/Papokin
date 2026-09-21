@@ -81,10 +81,14 @@ use std::sync::OnceLock;
 
 /// Block definitions and block type helpers.
 pub mod block;
+/// Read-only combat tracker queries for living entities and players.
+pub mod combat;
 /// Plugin command registration and handling utilities.
 pub mod commands;
 /// Plugin configuration files (getConfig equivalent).
 pub mod config;
+/// Custom damage type registration and builder utilities.
+pub mod damage_type;
 /// Datapack management and query utilities.
 pub mod datapack;
 /// Display and interaction entity utilities and builders.
@@ -101,6 +105,8 @@ pub(crate) mod generated;
 pub mod inventory;
 /// Typed item definitions and `ItemStack` construction helpers.
 pub mod item;
+/// Merchant (villager / wandering trader) trade offer management.
+pub mod merchant;
 /// Plugin messaging channels (Messenger equivalent).
 pub mod messaging;
 /// Specialized mob entity wrappers and helpers.
@@ -111,12 +117,16 @@ pub mod mobs;
 pub mod permissions;
 /// Custom recipe registration and builder utilities.
 pub mod recipe;
+/// Custom registry entry registration and query utilities.
+pub mod registry;
 /// Scheduler utilities.
 pub mod scheduler;
 /// Server-level queries: build info and offline player lookup.
 pub mod server;
 /// Cross-plugin service registry (ServicesManager equivalent).
 pub mod services;
+/// Tag modification and query utilities.
+pub mod tag;
 /// Scoreboard team management and builder utilities.
 pub mod team;
 /// Custom world and chunk generation utilities and traits.
@@ -131,7 +141,7 @@ pub mod command {
 }
 
 pub use wit::pumpkin::plugin::{
-    advancement as advancement_wit, bedrock_packets, block_entity, boss_bar,
+    advancement as advancement_wit, bedrock_packets, block_entity, boss_bar, combat as combat_wit,
     command as command_wit, common,
     context::{self, Context, MarketplaceMetadata, Server},
     damage_types as damage_types_wit, data_components, datapack as datapack_wit,
@@ -140,14 +150,19 @@ pub use wit::pumpkin::plugin::{
     entity_types::EntityType,
     event::{self as events_wit, EventType},
     game_events as game_events_wit, gui, i18n, inventory as inventory_wit, ipc, item_stack,
-    java_dialogs, java_packets, particles, permission, player, potions as potions_wit,
-    recipe as recipe_wit, scoreboard, screens as screens_wit, statistics as statistics_wit, text,
-    uuid, world,
+    java_dialogs, java_packets, merchant as merchant_wit, particles, permission, player,
+    potions as potions_wit, recipe as recipe_wit, registry as registry_wit, scoreboard,
+    screens as screens_wit, statistics as statistics_wit, tag as tag_wit, text, uuid, world,
 };
 
 // Convenience re-exports of commonly-used plugin types so plugin authors can
 // name them directly (e.g. build an `ItemStack` for a GUI or `/give`).
 pub use block::{BlockStateTypeExt, BlockType, BlockTypeExt, IntoBlockKey};
+pub use combat::{CombatEntry, PlayerCombatExt};
+pub use damage_type::{
+    CustomDamageType, DamageEffects, DamageScaling, DamageTypeBuilder, DamageTypeError,
+    DamageTypeManager, DeathMessageType, RegistrableDamageType,
+};
 pub use damage_types_wit::DamageType;
 pub use datapack::{DatapackInfo, DatapackManager, EnablePosition};
 pub use display::{
@@ -166,6 +181,7 @@ pub use ext::player::{PlayerCooldownExt, PlayerEnderChestExt};
 pub use game_events_wit::GameEvent;
 pub use inventory::{Inventory, PlayerInventory};
 pub use item::{IntoItemKey, Item, ItemStackExt};
+pub use merchant::{EntityMerchantExt, Merchant, TradeOffer, TradeOfferBuilder};
 pub use mobs::{
     Ageable, AgeableData, Cat, CatData, Creeper, CreeperData, DyeColor, Enderman, EndermanData,
     EntityCastExt, Fox, FoxData, IronGolem, IronGolemData, MobCast, MobData, Sheep, SheepData,
@@ -178,9 +194,11 @@ pub use recipe::{
     RecipeManager, RegistrableRecipe, ShapedRecipeBuilder, ShapelessRecipeBuilder,
     SmithingTransformRecipeBuilder, SmithingTrimRecipeBuilder, StonecuttingRecipeBuilder,
 };
+pub use registry::{RegistryError, RegistryManager};
 pub use screens_wit::Screen;
 pub use server::{BuildInfo, OfflinePlayerInfo};
 pub use statistics_wit::{CustomStatistic, StatisticCategory};
+pub use tag::{TagError, TagManager};
 pub use team::{PlayerTeamExt, ScoreboardTeamExt, Team, TeamSettingsBuilder};
 pub use wit::pumpkin::plugin::attributes::{Attribute, AttributeModifier, ModifierOperation};
 pub use wit::pumpkin::plugin::item_stack::{ItemAttributeModifier, ItemStack};

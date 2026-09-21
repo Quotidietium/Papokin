@@ -11,6 +11,7 @@ interface %world {
     use item-stack.{item-stack};
     use damage-types.{damage-type};
     use game-rules.{game-rule, game-rule-value};
+    use combat.{combat-entry};
 
     use uuid.{uuid};
 
@@ -583,6 +584,30 @@ interface %world {
         /// ("myplugin:frost"). Traps when the name is not a registered damage type.
         damage-by-name: func(amount: f32, damage-type-name: string);
         is-dead: func() -> bool;
+
+        // Combat tracker (read-only)
+
+        /// Returns the recorded damage entries of the current combat episode,
+        /// oldest first. Empty when the entity has not taken damage recently
+        /// (the tracker resets after a timeout without damage).
+        get-combat-entries: func() -> list<combat-entry>;
+        /// Returns the damage entry of the attacker credited with the kill:
+        /// the highest-damage living attacker, preferring the player when the
+        /// player's total meets the vanilla one-third rule. `none` when no
+        /// living attacker is recorded.
+        get-killer: func() -> option<combat-entry>;
+        /// Returns whether this entity is currently flagged as in combat.
+        is-in-combat: func() -> bool;
+        /// Returns the combat duration in milliseconds: combat end minus
+        /// combat start, or now minus combat start while still in combat.
+        get-combat-duration-ms: func() -> s64;
+        /// Returns the name of the damage type of the last confirmed hit:
+        /// the vanilla message id (e.g. "arrow") or the namespaced name of a
+        /// plugin-registered custom damage type. `none` when no hit is
+        /// remembered (forgotten after 40 ticks).
+        get-last-damage-type-name: func() -> option<string>;
+        /// Returns whether any attacker in the current combat episode was a player.
+        has-player-attacker: func() -> bool;
 
         get-absorption: func() -> f32;
         set-absorption: func(amount: f32);

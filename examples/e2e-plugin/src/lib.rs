@@ -8,13 +8,15 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use pumpkin_plugin_api::damage_type::{DamageEffects, DamageScaling, DamageTypeBuilder};
 use pumpkin_plugin_api::events::player::{
     AsyncTabCompleteEvent, PlayerHandshakeEvent, PlayerItemCooldownEvent, PlayerJumpEvent,
-    PlayerPurchaseEvent, PlayerTrackEntityEvent,
+    PlayerPurchaseEvent, PlayerTrackEntityEvent, PlayerTradeEvent,
 };
 use pumpkin_plugin_api::events::{
     EventData, EventHandler, EventPriority, PlayerJoinEvent, ServerTickStartEvent,
 };
+use pumpkin_plugin_api::merchant::TradeOfferBuilder;
 use pumpkin_plugin_api::recipe::{
     BrewingRecipeBuilder, SmithingTransformRecipeBuilder, SmithingTrimRecipeBuilder,
     StonecuttingRecipeBuilder,
@@ -33,6 +35,7 @@ type PlayerTrackEntityEventData = EventData<PlayerTrackEntityEvent>;
 type AsyncTabCompleteEventData = EventData<AsyncTabCompleteEvent>;
 type PlayerHandshakeEventData = EventData<PlayerHandshakeEvent>;
 type PlayerPurchaseEventData = EventData<PlayerPurchaseEvent>;
+type PlayerTradeEventData = EventData<PlayerTradeEvent>;
 
 static JOIN_COUNT: AtomicU32 = AtomicU32::new(0);
 static TICK_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -42,6 +45,8 @@ static TRACK_SEEN: AtomicBool = AtomicBool::new(false);
 static TAB_COMPLETE_SEEN: AtomicBool = AtomicBool::new(false);
 static HANDSHAKE_SEEN: AtomicBool = AtomicBool::new(false);
 static PURCHASE_SEEN: AtomicBool = AtomicBool::new(false);
+static TRADE_SEEN: AtomicBool = AtomicBool::new(false);
+static COMBAT_CHECKED: AtomicBool = AtomicBool::new(false);
 
 struct JoinAnnouncerLowest;
 
@@ -69,6 +74,32 @@ impl EventHandler<PlayerJoinEvent> for JoinAnnouncerHighest {
         // Bukkit ordering: LOWEST runs first, HIGHEST runs last, so this
         // handler must observe the counter already bumped by the LOWEST one.
         tracing::info!("E2E join-highest sees count={n} (expected >=1: priority order verified)");
+
+        // CombatTracker read-only queries (new mechanism): on the first join,
+        // deal one generic hit so the entry mapping, kill-credit, combat-state
+        // and damage-type-name queries all flow through the host boundary.
+        if !COMBAT_CHECKED.swap(true, Ordering::Relaxed) {
+            use pumpkin_plugin_api::PlayerCombatExt;
+            let player = &event.player;
+            let before = player.get_combat_entries().len();
+            player.damage(1.0, pumpkin_plugin_api::DamageType::Generic);
+            let entries = player.get_combat_entries();
+            let killer = player.get_killer();
+            let in_combat = player.is_in_combat();
+            let duration_ms = player.get_combat_duration_ms();
+            let last_damage_type = player.get_last_damage_type_name();
+            let player_attacker = player.has_player_attacker();
+            tracing::info!(
+                "E2E combat-queries entries={}->{} killer={} in_combat={} duration_ms={} last_damage_type={:?} player_attacker={}",
+                before,
+                entries.len(),
+                killer.is_some(),
+                in_combat,
+                duration_ms,
+                last_damage_type,
+                player_attacker
+            );
+        }
         event
     }
 }
@@ -182,6 +213,21 @@ impl EventHandler<PlayerPurchaseEvent> for PurchaseWatcher {
     }
 }
 
+struct TradeWatcher;
+
+impl EventHandler<PlayerTradeEvent> for TradeWatcher {
+    fn handle(
+        &self,
+        _server: pumpkin_plugin_api::Server,
+        event: PlayerTradeEventData,
+    ) -> PlayerTradeEventData {
+        if !TRADE_SEEN.swap(true, Ordering::Relaxed) {
+            tracing::info!("E2E evt-player-trade merchant_id={}", event.merchant_id);
+        }
+        event
+    }
+}
+
 struct E2ePlugin;
 
 impl Plugin for E2ePlugin {
@@ -231,7 +277,8 @@ impl Plugin for E2ePlugin {
         context.register_event_handler(TabCompleteWatcher, EventPriority::Normal, false, false)?;
         context.register_event_handler(HandshakeWatcher, EventPriority::Normal, false, false)?;
         context.register_event_handler(PurchaseWatcher, EventPriority::Normal, false, false)?;
-        tracing::info!("E2E paper-events-registered count=6");
+        context.register_event_handler(TradeWatcher, EventPriority::Normal, false, false)?;
+        tracing::info!("E2E paper-events-registered count=7");
 
         // Async wall-clock task (new mechanism).
         context.schedule_async_delayed_task(300, |_server| {
@@ -320,6 +367,64 @@ impl Plugin for E2ePlugin {
             Err(err) => tracing::info!("E2E recipe-brewing-failed {err}"),
         }
 
+        // Custom damage type registration (new mechanism): registered through
+        // the damage type manager, which also appends it to the synced
+        // damage_type registry.
+        match context.register_damage_type(
+            DamageTypeBuilder::new("e2e:frostbite", "frostbite")
+                .scaling(DamageScaling::Always)
+                .exhaustion(0.2)
+                .effects(DamageEffects::Freezing),
+        ) {
+            Ok(()) => tracing::info!("E2E registry-damage-type-registered"),
+            Err(err) => tracing::info!("E2E registry-damage-type-failed {err}"),
+        }
+        let damage_type_manager = context.get_damage_type_manager();
+        if damage_type_manager.has("e2e:frostbite")
+            && damage_type_manager
+                .get_all_custom_names()
+                .iter()
+                .any(|name| name == "e2e:frostbite")
+        {
+            tracing::info!("E2E registry-damage-type-queryable");
+        }
+
+        // Tag overlay (new mechanism): a brand-new damage_type tag holding the
+        // custom damage type registered above.
+        match context.add_to_tag("damage_type", "e2e:custom_damage", "e2e:frostbite") {
+            Ok(()) => {
+                let values = context
+                    .get_tag_manager()
+                    .get_values("damage_type", "e2e:custom_damage");
+                if values.iter().any(|name| name == "e2e:frostbite") {
+                    tracing::info!("E2E registry-tag-entry-added values={values:?}");
+                } else {
+                    tracing::info!("E2E registry-tag-missing-entry {values:?}");
+                }
+            }
+            Err(err) => tracing::info!("E2E registry-tag-failed {err}"),
+        }
+
+        // Generic custom registry entry (new mechanism): an inert domain that
+        // no vanilla synced registry matches, so nothing extra is sent to
+        // clients; the call still exercises registration, indexing, and the
+        // network-id lookup against the real damage_type domain.
+        // The payload is a valid empty NBT compound in network format.
+        let registry_manager = context.get_registry_manager();
+        match registry_manager.register("e2e/custom", "e2e:marker", vec![0x0A, 0x00, 0x00, 0x00]) {
+            Ok(index) => {
+                let frostbite_id = registry_manager.network_id("damage_type", "e2e:frostbite");
+                if registry_manager.has("e2e/custom", "e2e:marker") {
+                    tracing::info!(
+                        "E2E registry-entry-registered index={index} frostbite-network-id={frostbite_id:?}"
+                    );
+                } else {
+                    tracing::info!("E2E registry-entry-unqueryable index={index}");
+                }
+            }
+            Err(err) => tracing::info!("E2E registry-entry-failed {err}"),
+        }
+
         // Server build info (new mechanism).
         let build = context.get_build_info();
         tracing::info!(
@@ -352,6 +457,51 @@ impl Plugin for E2ePlugin {
         } else {
             tracing::info!("E2E teleport-flags-broken {flags:?}");
         }
+
+        // Merchant trade offers (new mechanism): headless e2e has no merchant
+        // entity to grab, so this exercises the `TradeOffer` builder and the
+        // item-stack round trip only; `Entity::as_merchant` /
+        // `Merchant::{get,set,add,remove}_trade_offers` are the runtime entry
+        // points exercised in-game.
+        let offer = TradeOfferBuilder::new(
+            ItemStack::new("minecraft:emerald", 3),
+            ItemStack::new("minecraft:diamond", 1),
+        )
+        .cost_b(ItemStack::new("minecraft:book", 1))
+        .max_uses(16)
+        .xp(5)
+        .build();
+        if offer.max_uses == 16
+            && offer.xp == 5
+            && offer.reward_exp
+            && offer.base_cost_a.get_count() == 3
+            && offer.base_cost_a.get_registry_key() == "minecraft:emerald"
+            && offer.cost_b.is_some()
+        {
+            tracing::info!(
+                "E2E merchant-trade-offer-builder max_uses={} xp={} cost_b={}",
+                offer.max_uses,
+                offer.xp,
+                offer.cost_b.is_some()
+            );
+        } else {
+            tracing::info!("E2E merchant-trade-offer-broken");
+        }
+
+        // Registry-domain summary: all three managers must report the entries
+        // registered above.
+        tracing::info!(
+            "E2E registry-summary damage-type={} tag={} entry={}",
+            context.get_damage_type_manager().has("e2e:frostbite"),
+            context
+                .get_tag_manager()
+                .get_values("damage_type", "e2e:custom_damage")
+                .iter()
+                .any(|name| name == "e2e:frostbite"),
+            context
+                .get_registry_manager()
+                .has("e2e/custom", "e2e:marker"),
+        );
 
         tracing::info!("E2E on_enable ok");
         Ok(())

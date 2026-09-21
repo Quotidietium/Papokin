@@ -26,6 +26,8 @@ pub mod config;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod context;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod damage_type;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod datapack;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod display;
@@ -51,6 +53,8 @@ pub mod living_entity;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod logging;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod merchant;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod messaging;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod mob;
@@ -59,6 +63,8 @@ pub mod permission;
 pub mod player;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod recipe;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod registry;
 pub mod scheduler;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod scoreboard;
@@ -67,6 +73,8 @@ pub mod server;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod services;
 pub mod status_effect;
+#[allow(clippy::unused_async_trait_impl)]
+pub mod tag;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod text;
 #[allow(clippy::unused_async_trait_impl)]
@@ -84,6 +92,9 @@ impl pumpkin::plugin::biomes::Host for PluginHostState {}
 impl pumpkin::plugin::attributes::Host for PluginHostState {}
 impl pumpkin::plugin::advancement::Host for PluginHostState {}
 impl pumpkin::plugin::damage_types::Host for PluginHostState {}
+impl pumpkin::plugin::tag::Host for PluginHostState {}
+impl pumpkin::plugin::registry::Host for PluginHostState {}
+impl pumpkin::plugin::combat::Host for PluginHostState {}
 impl pumpkin::plugin::screens::Host for PluginHostState {}
 impl pumpkin::plugin::statistics::Host for PluginHostState {}
 impl pumpkin::plugin::game_rules::Host for PluginHostState {}

@@ -140,6 +140,10 @@ pub type OpManagerResource = WasmResource<Arc<Server>>;
 pub type BanManagerResource = WasmResource<Arc<Server>>;
 pub type WhitelistManagerResource = WasmResource<Arc<Server>>;
 pub type DatapackManagerResource = WasmResource<Arc<Server>>;
+pub type DamageTypeManagerResource =
+    WasmResource<Arc<crate::server::damage_type::DamageTypeManager>>;
+pub type TagManagerResource = WasmResource<Arc<crate::server::tag::TagManager>>;
+pub type RegistryManagerResource = WasmResource<Arc<crate::server::registry::RegistryManager>>;
 pub type BlockEntityResource = WasmResource<Arc<dyn crate::block::entities::BlockEntity>>;
 
 #[derive(Clone)]
@@ -168,6 +172,7 @@ pub type BlockDisplayEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type ItemDisplayEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type TextDisplayEntityResource = WasmResource<Arc<dyn EntityBase>>;
 pub type InteractionEntityResource = WasmResource<Arc<dyn EntityBase>>;
+pub type MerchantResource = WasmResource<Arc<dyn EntityBase>>;
 
 #[derive(Clone)]
 pub struct ChunkBuffer {
@@ -474,6 +479,34 @@ impl PluginHostState {
         Ok(wasmtime::component::Resource::new_own(resource.rep()))
     }
 
+    pub fn add_damage_type_manager<T>(
+        &mut self,
+        provider: Arc<crate::server::damage_type::DamageTypeManager>,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self
+            .resource_table
+            .push(DamageTypeManagerResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn add_tag_manager<T>(
+        &mut self,
+        provider: Arc<crate::server::tag::TagManager>,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self.resource_table.push(TagManagerResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn add_registry_manager<T>(
+        &mut self,
+        provider: Arc<crate::server::registry::RegistryManager>,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self
+            .resource_table
+            .push(RegistryManagerResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
     pub fn add_inventory<T>(
         &mut self,
         provider: InventoryProvider,
@@ -604,6 +637,23 @@ impl PluginHostState {
         &self,
         resource: &wasmtime::component::Resource<T>,
     ) -> wasmtime::Result<&InteractionEntityResource> {
+        Ok(self
+            .resource_table
+            .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)
+    }
+
+    pub fn add_merchant<T>(
+        &mut self,
+        provider: Arc<dyn EntityBase>,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self.resource_table.push(MerchantResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn get_merchant_res<T>(
+        &self,
+        resource: &wasmtime::component::Resource<T>,
+    ) -> wasmtime::Result<&MerchantResource> {
         Ok(self
             .resource_table
             .get(&wasmtime::component::Resource::new_borrow(resource.rep()))?)

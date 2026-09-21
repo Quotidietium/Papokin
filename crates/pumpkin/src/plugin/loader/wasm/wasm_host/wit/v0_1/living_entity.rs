@@ -8,6 +8,7 @@ use crate::plugin::loader::wasm::wasm_host::{
             Attribute, AttributeModifier as WitAttributeModifier,
             ModifierOperation as WitModifierOperation,
         },
+        combat::CombatEntry as WitCombatEntry,
         damage_types::DamageType as WitDamageType,
         item_stack::ItemStack as WitHostItemStack,
         text::TextComponent,
@@ -163,6 +164,38 @@ pub fn resolve_damage_type_by_name(
         .ok_or_else(|| wasmtime::Error::msg(format!("Unknown damage type '{name}'")))
 }
 
+/// Milliseconds per server tick (20 TPS), used to expose the tick-based
+/// combat tracker clock as milliseconds over the plugin boundary.
+const MS_PER_TICK: i64 = 50;
+
+/// The display name of a resolved damage type: the namespaced registration
+/// name for custom types, the vanilla message id otherwise.
+fn damage_type_name(damage_type: &pumpkin_data::damage_ext::ResolvedDamageType) -> String {
+    damage_type
+        .custom_name()
+        .map_or_else(|| damage_type.message_id().to_string(), str::to_string)
+}
+
+fn to_wit_combat_entry(entry: &crate::entity::combat::CombatEntry) -> WitCombatEntry {
+    WitCombatEntry {
+        damage_type: damage_type_name(&entry.damage_type),
+        damage: entry.damage,
+        fall_distance: entry.fall_distance,
+        source_id: entry.source_id,
+        attacker_id: entry.attacker_id,
+        attacker_name: entry
+            .attacker_name
+            .clone()
+            .map(pumpkin_util::text::TextComponent::to_pretty_console),
+        attacker_item_name: entry
+            .attacker_item_name
+            .clone()
+            .map(pumpkin_util::text::TextComponent::to_pretty_console),
+        attacker_is_player: entry.attacker_is_player,
+        timestamp_ms: entry.timestamp.saturating_mul(MS_PER_TICK),
+    }
+}
+
 impl HostLivingEntity for PluginHostState {
     async fn as_entity(
         &mut self,
@@ -233,6 +266,92 @@ impl HostLivingEntity for PluginHostState {
             || entity.get_entity().removal_reason.load().is_some(),
             |living| living.dead.load(std::sync::atomic::Ordering::Relaxed),
         ))
+    }
+
+    async fn get_combat_entries(
+        &mut self,
+        this: Resource<WitLivingEntity>,
+    ) -> wasmtime::Result<Vec<WitCombatEntry>> {
+        let entity = living_entity_from_resource(self, &this)?;
+        let Some(living) = entity.get_living_entity() else {
+            return Ok(Vec::new());
+        };
+        let tracker = living
+            .combat_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(tracker.entries().iter().map(to_wit_combat_entry).collect())
+    }
+
+    async fn get_killer(
+        &mut self,
+        this: Resource<WitLivingEntity>,
+    ) -> wasmtime::Result<Option<WitCombatEntry>> {
+        let entity = living_entity_from_resource(self, &this)?;
+        let Some(living) = entity.get_living_entity() else {
+            return Ok(None);
+        };
+        let tracker = living
+            .combat_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(tracker.get_killer_entry().map(to_wit_combat_entry))
+    }
+
+    async fn is_in_combat(&mut self, this: Resource<WitLivingEntity>) -> wasmtime::Result<bool> {
+        let entity = living_entity_from_resource(self, &this)?;
+        Ok(entity.get_living_entity().is_some_and(|living| {
+            living
+                .combat_tracker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_in_combat()
+        }))
+    }
+
+    async fn get_combat_duration_ms(
+        &mut self,
+        this: Resource<WitLivingEntity>,
+    ) -> wasmtime::Result<i64> {
+        let entity = living_entity_from_resource(self, &this)?;
+        let Some(living) = entity.get_living_entity() else {
+            return Ok(0);
+        };
+        let current_tick = living.entity.world.load().level_info.load().day_time;
+        let tracker = living
+            .combat_tracker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(tracker
+            .get_combat_duration(current_tick)
+            .saturating_mul(MS_PER_TICK))
+    }
+
+    async fn get_last_damage_type_name(
+        &mut self,
+        this: Resource<WitLivingEntity>,
+    ) -> wasmtime::Result<Option<String>> {
+        let entity = living_entity_from_resource(self, &this)?;
+        let Some(living) = entity.get_living_entity() else {
+            return Ok(None);
+        };
+        Ok(living
+            .get_last_resolved_damage_type()
+            .map(|damage_type| damage_type_name(&damage_type)))
+    }
+
+    async fn has_player_attacker(
+        &mut self,
+        this: Resource<WitLivingEntity>,
+    ) -> wasmtime::Result<bool> {
+        let entity = living_entity_from_resource(self, &this)?;
+        Ok(entity.get_living_entity().is_some_and(|living| {
+            living
+                .combat_tracker
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .has_player_attacker()
+        }))
     }
 
     async fn get_absorption(&mut self, this: Resource<WitLivingEntity>) -> wasmtime::Result<f32> {
