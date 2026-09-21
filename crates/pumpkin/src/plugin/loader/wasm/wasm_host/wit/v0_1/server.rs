@@ -19,14 +19,17 @@ use crate::plugin::{
         wit::v0_1::pumpkin::{
             self,
             plugin::{
+                damage_types::DamageTypeManager as WitDamageTypeManager,
                 datapack::DatapackManager as WitDatapackManager,
                 player::{BanIpOptions, BanPlayerOptions, Player},
+                registry::RegistryManager as WitRegistryManager,
                 server::{
                     BanManager as WitBanManager, BannedIpEntry, BannedPlayerEntry, Difficulty,
                     Dimension, OfflinePlayerInfo, OpEntry, OpManager as WitOpManager, Server,
                     ServerBuildInfo, SysInfo, WhitelistEntry as WitWhitelistEntry,
                     WhitelistManager as WitWhitelistManager,
                 },
+                tag::TagManager as WitTagManager,
                 uuid::Uuid as WitUuid,
             },
         },
@@ -613,6 +616,39 @@ impl pumpkin::plugin::server::HostServer for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
         self.add_datapack_manager(server.clone())
+    }
+
+    async fn get_damage_type_manager(
+        &mut self,
+        _rep: Resource<Server>,
+    ) -> wasmtime::Result<Resource<WitDamageTypeManager>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        self.add_damage_type_manager(server.damage_type_manager.clone())
+    }
+
+    async fn get_tag_manager(
+        &mut self,
+        _rep: Resource<Server>,
+    ) -> wasmtime::Result<Resource<WitTagManager>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        self.add_tag_manager(server.tag_manager.clone())
+    }
+
+    async fn get_registry_manager(
+        &mut self,
+        _rep: Resource<Server>,
+    ) -> wasmtime::Result<Resource<WitRegistryManager>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+        self.add_registry_manager(server.registry_manager.clone())
     }
 
     async fn set_server_links(

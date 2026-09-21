@@ -9,6 +9,9 @@ interface server {
     use permission.{permission-level};
     use advancement.{advancement-info};
     use datapack.{datapack-manager, datapack-info};
+    use damage-types.{damage-type-manager};
+    use tag.{tag-manager};
+    use registry.{registry-manager};
 
     /// Represents an operator entry in the ops configuration.
     record op-entry {
@@ -329,6 +332,15 @@ interface server {
 
         /// Returns the global datapack manager for inspecting, enabling, disabling, and reloading datapacks.
         get-datapack-manager: func() -> datapack-manager;
+
+        /// Returns the global damage type manager for registering and querying custom damage types.
+        get-damage-type-manager: func() -> damage-type-manager;
+
+        /// Returns the global tag manager for modifying and querying the tag tables.
+        get-tag-manager: func() -> tag-manager;
+
+        /// Returns the global registry manager for registering and querying custom registry entries.
+        get-registry-manager: func() -> registry-manager;
 
         /// Broadcasts custom server links to all connected players (displayed in the client Esc pause menu in 1.21+).
         set-server-links: func(links: list<server-link>);

@@ -1,0 +1,34 @@
+package pumpkin:plugin@0.1.0;
+
+/// Plugin-writable registry: custom entries for the synced registries.
+interface registry {
+  /// Global manager holding plugin-registered custom registry entries and
+  /// handing out their network ids.
+  ///
+  /// Registration is only possible while the server is starting up (plugin
+  /// loading); once the registries are frozen `register-entry` returns an
+  /// error.
+  resource registry-manager {
+    /// Registers a custom entry under `domain` (e.g. "damage_type", without
+    /// the "minecraft:" prefix) with its serialized NBT payload (network
+    /// format). Returns the entry's index within the domain; the entry's
+    /// network id for a client is that client's vanilla entry count plus this
+    /// index.
+    register-entry: func(domain: string, name: string, nbt: list<u8>) -> result<u16, string>;
+
+    /// Network id of a custom entry for the server's native protocol version:
+    /// the vanilla entry count of the domain plus the entry's registration
+    /// index. Returns none for unknown domains or names, and for registries
+    /// that are not synced to clients.
+    custom-network-id: func(domain: string, name: string) -> option<u16>;
+
+    /// Whether registration has closed (plugin loading finished).
+    is-frozen: func() -> bool;
+
+    /// Whether a custom entry with this name is registered under `domain`.
+    has-entry: func(domain: string, name: string) -> bool;
+
+    /// Names of all custom entries of a domain, in registration order.
+    get-entries: func(domain: string) -> list<string>;
+  }
+}

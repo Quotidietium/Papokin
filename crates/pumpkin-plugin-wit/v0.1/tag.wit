@@ -1,0 +1,39 @@
+package pumpkin:plugin@0.1.0;
+
+/// Plugin-writable tag overlay: runtime additions to the static tag tables.
+interface tag {
+  /// Global manager for modifying and querying tags.
+  ///
+  /// Modifications are only possible while the server is starting up (plugin
+  /// loading); once the tag tables are frozen, all mutating calls return an
+  /// error.
+  resource tag-manager {
+    /// Appends `entry-name` to the tag `tag-name` of `registry-key`, creating
+    /// the tag when it exists neither in the static tables nor in the plugin
+    /// overlay.
+    ///
+    /// * `registry-key`: the registry the tag belongs to, e.g. "item",
+    ///   "block" or "damage_type" (a "minecraft:" prefix is accepted).
+    /// * `tag-name`: namespaced tag name, e.g. "minecraft:anvil" or
+    ///   "my_plugin:things".
+    /// * `entry-name`: resource name of the entry: a vanilla name
+    ///   ("minecraft:stone" or bare "stone") or a plugin-registered custom
+    ///   namespaced id ("my_plugin:frost").
+    ///
+    /// Adding a name that is already in the tag is a no-op; adding a name
+    /// that was previously removed re-adds it (the last operation wins).
+    add-to-tag: func(registry-key: string, tag-name: string, entry-name: string) -> result<_, string>;
+
+    /// Removes `entry-name` from the tag `tag-name` of `registry-key`. The
+    /// entry may come from the static tables or from a previous `add-to-tag`.
+    remove-from-tag: func(registry-key: string, tag-name: string, entry-name: string) -> result<_, string>;
+
+    /// Creates a new, initially empty tag. `add-to-tag` creates tags
+    /// implicitly; an explicit create is useful to publish an empty tag.
+    create-tag: func(registry-key: string, tag-name: string) -> result<_, string>;
+
+    /// Merged view of one tag's entry names: the static table plus plugin
+    /// additions, minus plugin removals. Empty when the tag is unknown.
+    get-tag-values: func(registry-key: string, tag-name: string) -> list<string>;
+  }
+}
