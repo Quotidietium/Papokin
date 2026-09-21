@@ -1,11 +1,26 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
+use crate::net::is_first_join;
 use crate::server::registry::inject_custom_entries;
 
 impl JavaClient {
     pub async fn handle_known_packs(&self, server: &Server) -> Option<PacketHandlerResult> {
         debug!("Handling known packs");
+
+        // The configuration phase starts here; notify plugins asynchronously.
+        if let Some(server_arc) = crate::net::server_arc(server) {
+            let profile = &self.gameprofile;
+            let mut event = crate::plugin::api::events::server::async_player_connection_configure::AsyncPlayerConnectionConfigureEvent::new(
+                profile.name.clone(),
+                profile.id,
+                is_first_join(server, &profile.id),
+            );
+            server_arc
+                .plugin_manager
+                .fire(&server_arc, &mut event)
+                .await;
+        }
 
         let version = self.version.load();
 

@@ -71,6 +71,11 @@ impl CommandExecutor for OnExecutor {
         if previous {
             Err(ERROR_ALREADY_ON.create_without_context())
         } else {
+            let mut event =
+                crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
+                    true,
+                );
+            server.plugin_manager.fire_blocking(server, &mut event);
             context.source.send_feedback(
                 pumpkin_macros::translate_cross!(
                     translation::java::COMMANDS_WHITELIST_ENABLED,
@@ -91,6 +96,11 @@ impl CommandExecutor for OffExecutor {
         let server = context.source.server();
         let previous = server.white_list.swap(false, Ordering::Relaxed);
         if previous {
+            let mut event =
+                crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
+                    false,
+                );
+            server.plugin_manager.fire_blocking(server, &mut event);
             context.source.send_feedback(
                 pumpkin_macros::translate_cross!(
                     translation::java::COMMANDS_WHITELIST_DISABLED,
@@ -193,6 +203,7 @@ impl CommandExecutor for AddExecutor {
         let mut whitelist = server.data.whitelist_config.write().unwrap();
         let mut successes: i32 = 0;
         let mut modified = false;
+        let mut added: Vec<(String, uuid::Uuid)> = Vec::new();
 
         for profile in &targets {
             if let Some(existing_entry) = whitelist
@@ -217,12 +228,24 @@ impl CommandExecutor for AddExecutor {
                 ),
                 true,
             );
+            added.push((profile.name.clone(), profile.id));
             successes += 1;
             modified = true;
         }
 
         if modified {
             whitelist.save();
+        }
+        drop(whitelist);
+
+        for (name, uuid) in added {
+            let mut event =
+                crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
+                    name,
+                    uuid,
+                    crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Added,
+                );
+            server.plugin_manager.fire_blocking(server, &mut event);
         }
 
         if successes == 0 {
@@ -257,6 +280,7 @@ impl CommandExecutor for RemoveExecutor {
         let server = context.source.server();
         let mut whitelist = server.data.whitelist_config.write().unwrap();
         let mut successes: i32 = 0;
+        let mut removed: Vec<(String, uuid::Uuid)> = Vec::new();
         for player in &targets {
             let i = whitelist
                 .whitelist
@@ -273,6 +297,7 @@ impl CommandExecutor for RemoveExecutor {
                     ),
                     true,
                 );
+                removed.push((player.name.clone(), player.id));
                 successes += 1;
             }
         }
@@ -282,6 +307,16 @@ impl CommandExecutor for RemoveExecutor {
         } else {
             whitelist.save();
             drop(whitelist);
+
+            for (name, uuid) in removed {
+                let mut event =
+                    crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
+                        name,
+                        uuid,
+                        crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Removed,
+                    );
+                server.plugin_manager.fire_blocking(server, &mut event);
+            }
 
             kick_non_whitelisted_players(server);
 

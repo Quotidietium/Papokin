@@ -211,6 +211,27 @@ impl CommandExecutor for LocateStructureExecutor {
                 .create_without_context(TextComponent::text(searched.printable())));
         };
 
+        // Notify plugins and let them rewrite the located positions.
+        let structure_id = match &searched {
+            ResourceOrTag::Resource(id) => id.to_string(),
+            ResourceOrTag::Tag(_) => searched.printable(),
+        };
+        let mut event =
+            crate::plugin::api::events::world::structures_locate::StructuresLocateEvent::new(
+                world.clone(),
+                origin,
+                structure_id,
+                STRUCTURE_SEARCH_RADIUS,
+                vec![target],
+            );
+        let server = context.source.server();
+        server.plugin_manager.fire_blocking(server, &mut event);
+
+        let Some(&target) = event.results.first() else {
+            return Err(STRUCTURE_NOT_FOUND_ERROR_TYPE
+                .create_without_context(TextComponent::text(searched.printable())));
+        };
+
         let distance = horizontal_distance(&origin, &target);
         send_success(
             context,

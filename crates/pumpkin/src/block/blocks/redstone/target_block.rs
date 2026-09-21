@@ -61,6 +61,17 @@ impl BlockBehaviour for TargetBlock {
             .is_block_tick_scheduled(args.position, args.block)
         {
             let power = get_redstone_strength(args.hit_pos);
+            let mut event = crate::plugin::api::events::block::target_hit::TargetHitEvent::new(
+                args.projectile.get_owner_id(),
+                *args.position,
+                i32::from(power),
+            );
+            if let Some(server) = args.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return;
+            }
             let mut props = TargetProperties::from_state_id(args.state.id);
             props.r#power = power;
             args.world.set_block_state(

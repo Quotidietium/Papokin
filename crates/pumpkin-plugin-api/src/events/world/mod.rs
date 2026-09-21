@@ -28,10 +28,18 @@ pub mod loot_generate;
 pub mod portal_create;
 #[doc = "Structure grow event."]
 pub mod structure_grow;
+#[doc = "Structures locate event."]
+pub mod structures_locate;
 #[doc = "Time skip event."]
 pub mod time_skip;
 #[doc = "Weather change event."]
 pub mod weather_change;
+#[doc = "World border bounds and center change events."]
+pub mod world_border_change;
+#[doc = "World difficulty change event."]
+pub mod world_difficulty_change;
+#[doc = "World game rule change event."]
+pub mod world_game_rule_change;
 #[doc = "World init event."]
 pub mod world_init;
 #[doc = "World load event."]
@@ -53,8 +61,12 @@ pub use lightning_strike::*;
 pub use loot_generate::*;
 pub use portal_create::*;
 pub use structure_grow::*;
+pub use structures_locate::*;
 pub use time_skip::*;
 pub use weather_change::*;
+pub use world_border_change::*;
+pub use world_difficulty_change::*;
+pub use world_game_rule_change::*;
 pub use world_init::*;
 pub use world_load::*;
 pub use world_save::*;

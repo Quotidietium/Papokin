@@ -11,9 +11,19 @@ use crate::command::argument_types::core::integer::IntegerArgumentType;
 use crate::command::context::command_context::CommandContext;
 use crate::command::node::dispatcher::CommandDispatcher;
 use crate::command::node::{CommandExecutor, CommandExecutorResult};
+use crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent;
 
 const DESCRIPTION: &str = "Sets or queries a game rule value.";
 const PERMISSION: &str = "minecraft:command.gamerule";
+
+/// Notifies plugins that a game rule value changed. Pure notification: the
+/// write has already been applied when this runs.
+fn fire_game_rule_change(context: &CommandContext, rule: &GameRule, value: String) {
+    let server = context.source.server().clone();
+    let world = context.source.world().clone();
+    let mut event = WorldGameRuleChangeEvent::new(world, rule.to_string(), value);
+    server.plugin_manager.fire_blocking(&server, &mut event);
+}
 
 struct QueryExecutor(GameRule);
 
@@ -58,6 +68,8 @@ impl CommandExecutor for SetIntExecutor {
 
         context.server().level_info.store(Arc::new(new_info));
 
+        fire_game_rule_change(context, &self.0, arg_value.to_string());
+
         let value_component = TextComponent::text(arg_value.to_string());
         context.source.send_feedback(
             TextComponent::translate_cross(
@@ -87,6 +99,8 @@ impl CommandExecutor for SetBoolExecutor {
         }
 
         context.server().level_info.store(Arc::new(new_info));
+
+        fire_game_rule_change(context, &self.0, arg_value.to_string());
 
         if self.0 == GameRule::SpectatorsGenerateChunks {
             let server = context.server();

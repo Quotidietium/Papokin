@@ -34,6 +34,7 @@ impl BlockBehaviour for VaultBlock {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn use_with_item(&self, args: UseWithItemArgs<'_>) -> BlockActionResult {
         let item_id = args.item_stack.item.id;
         let is_trial_key = item_id == Item::TRIAL_KEY.id || item_id == Item::OMINOUS_TRIAL_KEY.id;
@@ -79,12 +80,25 @@ impl BlockBehaviour for VaultBlock {
 
             let state_id = args.world.get_block_state_id(args.position);
             let mut props = VaultLikeProperties::from_state_id(state_id);
-            props.vault_state = VaultState::Ejecting;
-            args.world.set_block_state(
-                args.position,
-                props.to_state_id(args.block),
-                BlockFlags::NOTIFY_ALL,
-            );
+            let mut state_event =
+                crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent::new(
+                    *args.position,
+                    props.vault_state,
+                    VaultState::Ejecting,
+                );
+            if let Some(server) = args.world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut state_event);
+            }
+            if !state_event.cancelled {
+                props.vault_state = VaultState::Ejecting;
+                args.world.set_block_state(
+                    args.position,
+                    props.to_state_id(args.block),
+                    BlockFlags::NOTIFY_ALL,
+                );
+            }
 
             args.world.play_sound(
                 Sound::BlockVaultEjectItem,
@@ -114,12 +128,25 @@ impl BlockBehaviour for VaultBlock {
                 }
             }
 
-            props.vault_state = VaultState::Active;
-            args.world.set_block_state(
-                args.position,
-                props.to_state_id(args.block),
-                BlockFlags::NOTIFY_ALL,
-            );
+            let mut state_event =
+                crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent::new(
+                    *args.position,
+                    props.vault_state,
+                    VaultState::Active,
+                );
+            if let Some(server) = args.world.server.upgrade() {
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut state_event);
+            }
+            if !state_event.cancelled {
+                props.vault_state = VaultState::Active;
+                args.world.set_block_state(
+                    args.position,
+                    props.to_state_id(args.block),
+                    BlockFlags::NOTIFY_ALL,
+                );
+            }
 
             return BlockActionResult::Success;
         }

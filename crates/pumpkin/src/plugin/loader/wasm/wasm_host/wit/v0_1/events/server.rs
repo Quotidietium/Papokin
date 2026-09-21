@@ -6,23 +6,41 @@ use crate::plugin::{
             events::{ToFromWasmEvent, cleanup_event, consume_text_component},
             generated_packets,
             pumpkin::plugin::event::{
-                ClientboundPacket, Event, MapInitializeEventData, PacketReceivedEventData,
-                PacketSentEventData, ServerBroadcastEventData, ServerCommandEventData,
+                AsyncPlayerConnectionConfigureEventData, ClientboundPacket,
+                CommandRegisteredEventData,
+                ConnectionValidationResult as WitConnectionValidationResult, Event,
+                MapInitializeEventData, PacketReceivedEventData, PacketSentEventData,
+                PlayerConnectionInitialConfigureEventData, PlayerConnectionValidateLoginEventData,
+                ProfileWhitelistVerifyEventData, ServerBroadcastEventData, ServerCommandEventData,
                 ServerListPingAddress, ServerListPingEventData, ServerLoadEventData,
-                ServerLoadType, ServerTickEndEventData, ServerTickStartEventData,
-                ServerboundPacket,
+                ServerLoadType, ServerResourcesReloadedEventData, ServerTickEndEventData,
+                ServerTickStartEventData, ServerboundPacket, WhitelistStateUpdateEventData,
+                WhitelistStateUpdateStatus as WitWhitelistStateUpdateStatus,
+                WhitelistToggleEventData, WhitelistVerifyResult as WitWhitelistVerifyResult,
             },
+            pumpkin::plugin::uuid::Uuid as WitUuid,
+            uuid::UuidExt,
         },
     },
     server::{
+        async_player_connection_configure::AsyncPlayerConnectionConfigureEvent,
+        command_registered::CommandRegisteredEvent,
         list_ping::ServerListPingEvent,
         map_initialize::MapInitializeEvent,
         packet::{PacketReceivedEvent, PacketSentEvent},
+        player_connection_initial_configure::PlayerConnectionInitialConfigureEvent,
+        player_connection_validate_login::{
+            ConnectionValidationResult, PlayerConnectionValidateLoginEvent,
+        },
+        profile_whitelist_verify::{ProfileWhitelistVerifyEvent, WhitelistVerifyResult},
         server_broadcast::ServerBroadcastEvent,
         server_command::ServerCommandEvent,
         server_load::{LoadType, ServerLoadEvent},
+        server_resources_reloaded::ServerResourcesReloadedEvent,
         server_tick_end::ServerTickEndEvent,
         server_tick_start::ServerTickStartEvent,
+        whitelist_state_update::{WhitelistStateUpdateEvent, WhitelistStateUpdateStatus},
+        whitelist_toggle::WhitelistToggleEvent,
     },
 };
 
@@ -288,6 +306,223 @@ impl ToFromWasmEvent for MapInitializeEvent {
         match event {
             Event::MapInitializeEvent(data) => Self {
                 map_id: data.map_id,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+const fn to_wasm_connection_validation_result(
+    result: ConnectionValidationResult,
+) -> WitConnectionValidationResult {
+    match result {
+        ConnectionValidationResult::Allowed => WitConnectionValidationResult::Allowed,
+        ConnectionValidationResult::Denied => WitConnectionValidationResult::Denied,
+    }
+}
+
+const fn from_wasm_connection_validation_result(
+    result: WitConnectionValidationResult,
+) -> ConnectionValidationResult {
+    match result {
+        WitConnectionValidationResult::Allowed => ConnectionValidationResult::Allowed,
+        WitConnectionValidationResult::Denied => ConnectionValidationResult::Denied,
+    }
+}
+
+const fn to_wasm_whitelist_verify_result(
+    result: WhitelistVerifyResult,
+) -> WitWhitelistVerifyResult {
+    match result {
+        WhitelistVerifyResult::Allowed => WitWhitelistVerifyResult::Allowed,
+        WhitelistVerifyResult::Denied => WitWhitelistVerifyResult::Denied,
+    }
+}
+
+const fn from_wasm_whitelist_verify_result(
+    result: WitWhitelistVerifyResult,
+) -> WhitelistVerifyResult {
+    match result {
+        WitWhitelistVerifyResult::Allowed => WhitelistVerifyResult::Allowed,
+        WitWhitelistVerifyResult::Denied => WhitelistVerifyResult::Denied,
+    }
+}
+
+const fn to_wasm_whitelist_state_update_status(
+    status: WhitelistStateUpdateStatus,
+) -> WitWhitelistStateUpdateStatus {
+    match status {
+        WhitelistStateUpdateStatus::Added => WitWhitelistStateUpdateStatus::Added,
+        WhitelistStateUpdateStatus::Removed => WitWhitelistStateUpdateStatus::Removed,
+    }
+}
+
+const fn from_wasm_whitelist_state_update_status(
+    status: WitWhitelistStateUpdateStatus,
+) -> WhitelistStateUpdateStatus {
+    match status {
+        WitWhitelistStateUpdateStatus::Added => WhitelistStateUpdateStatus::Added,
+        WitWhitelistStateUpdateStatus::Removed => WhitelistStateUpdateStatus::Removed,
+    }
+}
+
+impl ToFromWasmEvent for PlayerConnectionValidateLoginEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let kick_message = state
+            .add_text_component(self.kick_message.clone())
+            .expect("failed to add text-component resource");
+        Event::PlayerConnectionValidateLoginEvent(PlayerConnectionValidateLoginEventData {
+            ip_address: self.ip_address.clone(),
+            kick_message,
+            result: to_wasm_connection_validation_result(self.result),
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::PlayerConnectionValidateLoginEvent(data) => Self {
+                ip_address: data.ip_address,
+                kick_message: consume_text_component(state, &data.kick_message),
+                result: from_wasm_connection_validation_result(data.result),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for AsyncPlayerConnectionConfigureEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::AsyncPlayerConnectionConfigureEvent(AsyncPlayerConnectionConfigureEventData {
+            player_name: self.player_name.clone(),
+            player_uuid: WitUuid::to_wit(&self.player_uuid),
+            first_join: self.first_join,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::AsyncPlayerConnectionConfigureEvent(data) => Self {
+                player_name: data.player_name,
+                player_uuid: WitUuid::from_wit(&data.player_uuid),
+                first_join: data.first_join,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for PlayerConnectionInitialConfigureEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::PlayerConnectionInitialConfigureEvent(PlayerConnectionInitialConfigureEventData {
+            player_name: self.player_name.clone(),
+            player_uuid: WitUuid::to_wit(&self.player_uuid),
+            first_join: self.first_join,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::PlayerConnectionInitialConfigureEvent(data) => Self {
+                player_name: data.player_name,
+                player_uuid: WitUuid::from_wit(&data.player_uuid),
+                first_join: data.first_join,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for ServerResourcesReloadedEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::ServerResourcesReloadedEvent(ServerResourcesReloadedEventData {
+            cause: self.cause.clone(),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::ServerResourcesReloadedEvent(data) => Self { cause: data.cause },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WhitelistStateUpdateEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::WhitelistStateUpdateEvent(WhitelistStateUpdateEventData {
+            player_name: self.player_name.clone(),
+            player_uuid: WitUuid::to_wit(&self.player_uuid),
+            status: to_wasm_whitelist_state_update_status(self.status),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WhitelistStateUpdateEvent(data) => Self {
+                player_name: data.player_name,
+                player_uuid: WitUuid::from_wit(&data.player_uuid),
+                status: from_wasm_whitelist_state_update_status(data.status),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WhitelistToggleEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::WhitelistToggleEvent(WhitelistToggleEventData {
+            enabled: self.enabled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WhitelistToggleEvent(data) => Self {
+                enabled: data.enabled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for CommandRegisteredEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::CommandRegisteredEvent(CommandRegisteredEventData {
+            command_label: self.command_label.clone(),
+            plugin: self.plugin.clone(),
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::CommandRegisteredEvent(data) => Self {
+                command_label: data.command_label,
+                plugin: data.plugin,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for ProfileWhitelistVerifyEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let kick_message = state
+            .add_text_component(self.kick_message.clone())
+            .expect("failed to add text-component resource");
+        Event::ProfileWhitelistVerifyEvent(ProfileWhitelistVerifyEventData {
+            player_uuid: WitUuid::to_wit(&self.player_uuid),
+            player_name: self.player_name.clone(),
+            kick_message,
+            result: to_wasm_whitelist_verify_result(self.result),
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::ProfileWhitelistVerifyEvent(data) => Self {
+                player_uuid: WitUuid::from_wit(&data.player_uuid),
+                player_name: data.player_name,
+                kick_message: consume_text_component(state, &data.kick_message),
+                result: from_wasm_whitelist_verify_result(data.result),
             },
             _ => panic!("unexpected event type"),
         }

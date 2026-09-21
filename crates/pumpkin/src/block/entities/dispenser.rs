@@ -1,4 +1,6 @@
 use crate::block::entities::BlockEntity;
+use crate::plugin::api::events::block::block_failed_dispense::BlockFailedDispenseEvent;
+use crate::world::World;
 use pumpkin_data::item_stack::ItemStack;
 use pumpkin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
 use pumpkin_nbt::compound::NbtCompound;
@@ -99,7 +101,7 @@ impl DispenserBlockEntity {
         }
     }
 
-    pub fn get_random_slot(&self) -> Option<(usize, ItemStack)> {
+    pub fn get_random_slot(&self, world: &Arc<World>) -> Option<(usize, ItemStack)> {
         let items = self
             .items
             .read()
@@ -111,6 +113,11 @@ impl DispenserBlockEntity {
             }
         }
         if non_empty.is_empty() {
+            // The dispenser holds no item to dispense; notify plugins of the failure.
+            let mut event = BlockFailedDispenseEvent::new(self.position, ItemStack::EMPTY.clone());
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
             None
         } else {
             let selected = rng().random_range(0..non_empty.len());

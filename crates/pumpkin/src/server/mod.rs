@@ -593,6 +593,14 @@ impl Server {
                 }
             }
         }
+
+        // Notify plugins that the server resources have been reloaded. Every
+        // current caller reaches this through a command or an internal
+        // datapack operation, so the cause is reported as `command`.
+        let mut event = crate::plugin::api::events::server::server_resources_reloaded::ServerResourcesReloadedEvent::new(
+            "command".to_string(),
+        );
+        self.plugin_manager.fire_blocking(server, &mut event);
     }
 
     #[must_use]
@@ -911,6 +919,7 @@ impl Server {
         self.level_info.store(Arc::new(new_info));
 
         for world in self.worlds.load().iter() {
+            let old_difficulty = world.level_info.load().difficulty;
             world.set_difficulty(difficulty);
             world.broadcast_editioned(
                 &CChangeDifficulty::new(difficulty as u8, locked),
@@ -918,6 +927,19 @@ impl Server {
                     difficulty: (difficulty as u32).into(),
                 },
             );
+
+            // Notify plugins of the per-world difficulty change. Pure
+            // notification: the new difficulty has already been applied.
+            // `set_difficulty` only has `&self`, so recover an `Arc<Server>`
+            // through the worlds' weak back-reference.
+            if let Some(server) = crate::net::server_arc(self) {
+                let mut event = crate::plugin::api::events::world::world_difficulty_change::WorldDifficultyChangeEvent::new(
+                    world.clone(),
+                    old_difficulty.name().to_string(),
+                    difficulty.name().to_string(),
+                );
+                self.plugin_manager.fire_blocking(&server, &mut event);
+            }
         }
     }
 

@@ -896,6 +896,20 @@ impl BlockRegistry {
         state: &BlockState,
         server: &Server,
     ) {
+        // High-frequency event: skip all work when no plugin listens.
+        if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::entity::entity_inside_block::EntityInsideBlockEvent>()
+            && let Some(server_arc) = crate::net::server_arc(server)
+        {
+            let mut event = crate::plugin::api::events::entity::entity_inside_block::EntityInsideBlockEvent::new(
+                entity.get_entity().entity_id,
+                *position,
+                format!("minecraft:{}", block.name),
+            );
+            server.plugin_manager.fire_blocking(&server_arc, &mut event);
+        }
+
         let pumpkin_block = self.get_pumpkin_block(block.id);
         if let Some(pumpkin_block) = pumpkin_block {
             pumpkin_block.on_entity_collision(OnEntityCollisionArgs {

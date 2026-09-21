@@ -1,9 +1,17 @@
+/// Beacon activated event.
+pub mod beacon_activated;
+/// Beacon deactivated event.
+pub mod beacon_deactivated;
+/// Beacon effect event.
+pub mod beacon_effect;
 /// Bell resonate event.
 pub mod bell_resonate;
 /// Bell ring event.
 pub mod bell_ring;
 /// Block break event.
 pub mod block_break;
+/// Block break progress update event.
+pub mod block_break_progress_update;
 /// Block brush event.
 pub mod block_brush;
 /// Block burn event.
@@ -30,6 +38,8 @@ pub mod block_exp;
 pub mod block_explode;
 /// Block fade event.
 pub mod block_fade;
+/// Block failed dispense event.
+pub mod block_failed_dispense;
 /// Block fertilize event.
 pub mod block_fertilize;
 /// Block form event.
@@ -62,6 +72,8 @@ pub mod brewing_start;
 pub mod campfire_start;
 /// Cauldron level change event.
 pub mod cauldron_level_change;
+/// Compost item event.
+pub mod compost_item;
 /// Crafter craft event.
 pub mod crafter_craft;
 /// Entity block form event.
@@ -82,14 +94,22 @@ pub mod sculk_bloom;
 pub mod sign_change;
 /// Sponge absorb water event.
 pub mod sponge_absorb;
+/// Target hit event.
+pub mod target_hit;
 /// TNT prime event.
 pub mod tnt_prime;
+/// Vault change state event.
+pub mod vault_change_state;
 /// Vault display item event.
 pub mod vault_display_item;
 
+pub use beacon_activated::*;
+pub use beacon_deactivated::*;
+pub use beacon_effect::*;
 pub use bell_resonate::*;
 pub use bell_ring::*;
 pub use block_break::*;
+pub use block_break_progress_update::*;
 pub use block_brush::*;
 pub use block_burn::*;
 pub use block_can_build::*;
@@ -103,6 +123,7 @@ pub use block_drop_item::*;
 pub use block_exp::*;
 pub use block_explode::*;
 pub use block_fade::*;
+pub use block_failed_dispense::*;
 pub use block_fertilize::*;
 pub use block_form::*;
 pub use block_from_to::*;
@@ -119,6 +140,7 @@ pub use block_spread::*;
 pub use brewing_start::*;
 pub use campfire_start::*;
 pub use cauldron_level_change::*;
+pub use compost_item::*;
 pub use crafter_craft::*;
 pub use entity_block_form::*;
 pub use fluid_level_change::*;
@@ -129,5 +151,7 @@ pub use note_play::*;
 pub use sculk_bloom::*;
 pub use sign_change::*;
 pub use sponge_absorb::*;
+pub use target_hit::*;
 pub use tnt_prime::*;
+pub use vault_change_state::*;
 pub use vault_display_item::*;

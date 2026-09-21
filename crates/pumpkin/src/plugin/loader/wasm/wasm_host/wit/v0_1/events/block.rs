@@ -1,12 +1,18 @@
 use pumpkin_data::BlockStateId;
+use pumpkin_data::block_properties::VaultState;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use wasmtime::component::Resource;
 
 use crate::plugin::{
     block::{
+        beacon_activated::BeaconActivatedEvent,
+        beacon_deactivated::BeaconDeactivatedEvent,
+        beacon_effect::BeaconEffectEvent,
         bell_resonate::BellResonateEvent,
         bell_ring::BellRingEvent,
         block_break::BlockBreakEvent,
+        block_break_progress_update::BlockBreakProgressUpdateEvent,
         block_brush::BlockBrushEvent,
         block_burn::BlockBurnEvent,
         block_can_build::BlockCanBuildEvent,
@@ -20,6 +26,7 @@ use crate::plugin::{
         block_exp::BlockExpEvent,
         block_explode::BlockExplodeEvent,
         block_fade::BlockFadeEvent,
+        block_failed_dispense::BlockFailedDispenseEvent,
         block_fertilize::BlockFertilizeEvent,
         block_form::BlockFormEvent,
         block_from_to::BlockFromToEvent,
@@ -36,6 +43,7 @@ use crate::plugin::{
         brewing_start::BrewingStartEvent,
         campfire_start::CampfireStartEvent,
         cauldron_level_change::CauldronLevelChangeEvent,
+        compost_item::CompostItemEvent,
         crafter_craft::CrafterCraftEvent,
         entity_block_form::EntityBlockFormEvent,
         fluid_level_change::FluidLevelChangeEvent,
@@ -46,11 +54,13 @@ use crate::plugin::{
         sculk_bloom::SculkBloomEvent,
         sign_change::SignChangeEvent,
         sponge_absorb::SpongeAbsorbEvent,
+        target_hit::TargetHitEvent,
         tnt_prime::TNTPrimeEvent,
+        vault_change_state::VaultChangeStateEvent,
         vault_display_item::VaultDisplayItemEvent,
     },
     loader::wasm::wasm_host::{
-        state::PluginHostState,
+        state::{ItemStackResource, PluginHostState},
         wit::v0_1::{
             events::{
                 ToFromWasmEvent, cleanup_event, consume_player, consume_world,
@@ -58,21 +68,24 @@ use crate::plugin::{
                 to_wasm_block_position,
             },
             pumpkin::plugin::event::{
-                BellResonateEventData, BellRingEventData, BlockBreakEventData, BlockBrushEventData,
-                BlockBurnEventData, BlockCanBuildEventData, BlockCookEventData,
-                BlockDamageAbortEventData, BlockDamageEventData, BlockDispenseArmorEventData,
-                BlockDispenseEventData, BlockDispenseLootEventData, BlockDropItemEventData,
-                BlockExpEventData, BlockExplodeEventData, BlockFadeEventData,
+                BeaconActivatedEventData, BeaconDeactivatedEventData, BeaconEffectEventData,
+                BellResonateEventData, BellRingEventData, BlockBreakEventData,
+                BlockBreakProgressUpdateEventData, BlockBrushEventData, BlockBurnEventData,
+                BlockCanBuildEventData, BlockCookEventData, BlockDamageAbortEventData,
+                BlockDamageEventData, BlockDispenseArmorEventData, BlockDispenseEventData,
+                BlockDispenseLootEventData, BlockDropItemEventData, BlockExpEventData,
+                BlockExplodeEventData, BlockFadeEventData, BlockFailedDispenseEventData,
                 BlockFertilizeEventData, BlockFormEventData, BlockFromToEventData,
                 BlockGrowEventData, BlockIgniteEventData, BlockMultiPlaceEventData,
                 BlockPhysicsEventData, BlockPistonExtendEventData, BlockPistonRetractEventData,
                 BlockPlaceEventData, BlockReceiveGameEventData, BlockRedstoneEventData,
                 BlockShearEntityEventData, BlockSpreadEventData, BrewingStartEventData,
-                CampfireStartEventData, CauldronLevelChangeEventData, CrafterCraftEventData,
-                EntityBlockFormEventData, Event, FluidLevelChangeEventData,
+                CampfireStartEventData, CauldronLevelChangeEventData, CompostItemEventData,
+                CrafterCraftEventData, EntityBlockFormEventData, Event, FluidLevelChangeEventData,
                 InventoryBlockStartEventData, LeavesDecayEventData, MoistureChangeEventData,
                 NotePlayEventData, SculkBloomEventData, SignChangeEventData, SpongeAbsorbEventData,
-                TntPrimeEventData, VaultDisplayItemEventData,
+                TargetHitEventData, TntPrimeEventData, VaultChangeStateEventData,
+                VaultDisplayItemEventData, VaultState as WitVaultState,
             },
         },
     },
@@ -1398,6 +1411,245 @@ impl ToFromWasmEvent for VaultDisplayItemEvent {
             Event::VaultDisplayItemEvent(_) => {
                 panic!("Cannot construct VaultDisplayItemEvent from WASM")
             }
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+fn consume_item_stack(
+    state: &mut PluginHostState,
+    item: &Resource<
+        crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::item_stack::ItemStack,
+    >,
+) -> pumpkin_data::item_stack::ItemStack {
+    let mutex = state
+        .resource_table
+        .delete::<ItemStackResource>(Resource::new_own(item.rep()))
+        .expect("invalid item stack resource handle")
+        .provider;
+    mutex.try_lock().expect("lock item stack").clone()
+}
+
+const fn to_wasm_vault_state(state: VaultState) -> WitVaultState {
+    match state {
+        VaultState::Inactive => WitVaultState::Inactive,
+        VaultState::Active => WitVaultState::Active,
+        VaultState::Unlocking => WitVaultState::Unlocking,
+        VaultState::Ejecting => WitVaultState::Ejecting,
+    }
+}
+
+const fn from_wasm_vault_state(state: WitVaultState) -> VaultState {
+    match state {
+        WitVaultState::Inactive => VaultState::Inactive,
+        WitVaultState::Active => VaultState::Active,
+        WitVaultState::Unlocking => VaultState::Unlocking,
+        WitVaultState::Ejecting => VaultState::Ejecting,
+    }
+}
+
+impl ToFromWasmEvent for BeaconActivatedEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = state
+            .add_player(self.player.clone())
+            .expect("failed to add player resource");
+        Event::BeaconActivatedEvent(BeaconActivatedEventData {
+            player,
+            block_pos: to_wasm_block_position(self.block_pos),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::BeaconActivatedEvent(data) => Self {
+                player: consume_player(state, &data.player),
+                block_pos: from_wasm_block_position(data.block_pos),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for BeaconDeactivatedEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = self.player.as_ref().map(|p| {
+            state
+                .add_player(p.clone())
+                .expect("failed to add player resource")
+        });
+        Event::BeaconDeactivatedEvent(BeaconDeactivatedEventData {
+            player,
+            block_pos: to_wasm_block_position(self.block_pos),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::BeaconDeactivatedEvent(data) => Self {
+                player: data.player.map(|p| consume_player(state, &p)),
+                block_pos: from_wasm_block_position(data.block_pos),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for BeaconEffectEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = state
+            .add_player(self.player.clone())
+            .expect("failed to add player resource");
+        Event::BeaconEffectEvent(BeaconEffectEventData {
+            player,
+            effect: self.effect.clone(),
+            primary: self.primary,
+            block_pos: to_wasm_block_position(self.block_pos),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::BeaconEffectEvent(data) => Self {
+                player: consume_player(state, &data.player),
+                effect: data.effect,
+                primary: data.primary,
+                block_pos: from_wasm_block_position(data.block_pos),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for BlockBreakProgressUpdateEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = state
+            .add_player(self.player.clone())
+            .expect("failed to add player resource");
+        Event::BlockBreakProgressUpdateEvent(BlockBreakProgressUpdateEventData {
+            player,
+            block_pos: to_wasm_block_position(self.block_pos),
+            progress: self.progress,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::BlockBreakProgressUpdateEvent(data) => Self {
+                player: consume_player(state, &data.player),
+                block_pos: from_wasm_block_position(data.block_pos),
+                progress: data.progress,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for BlockFailedDispenseEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let item = state
+            .add_item_stack(Arc::new(Mutex::new(self.item.clone())))
+            .expect("failed to add item stack resource");
+        Event::BlockFailedDispenseEvent(BlockFailedDispenseEventData {
+            block_pos: to_wasm_block_position(self.block_pos),
+            item,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::BlockFailedDispenseEvent(data) => Self {
+                block_pos: from_wasm_block_position(data.block_pos),
+                item: consume_item_stack(state, &data.item),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for CompostItemEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let player = self.player.as_ref().map(|p| {
+            state
+                .add_player(p.clone())
+                .expect("failed to add player resource")
+        });
+        let item = state
+            .add_item_stack(Arc::new(Mutex::new(self.item.clone())))
+            .expect("failed to add item stack resource");
+        Event::CompostItemEvent(CompostItemEventData {
+            player,
+            block_pos: to_wasm_block_position(self.block_pos),
+            item,
+            will_raise_level: self.will_raise_level,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::CompostItemEvent(data) => Self {
+                player: data.player.map(|p| consume_player(state, &p)),
+                block_pos: from_wasm_block_position(data.block_pos),
+                item: consume_item_stack(state, &data.item),
+                will_raise_level: data.will_raise_level,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for TargetHitEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::TargetHitEvent(TargetHitEventData {
+            shooter_id: self.shooter_id,
+            block_pos: to_wasm_block_position(self.block_pos),
+            signal_strength: self.signal_strength,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::TargetHitEvent(data) => Self {
+                shooter_id: data.shooter_id,
+                block_pos: from_wasm_block_position(data.block_pos),
+                signal_strength: data.signal_strength,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for VaultChangeStateEvent {
+    fn to_wasm_event(&self, _state: &mut PluginHostState) -> Event {
+        Event::VaultChangeStateEvent(VaultChangeStateEventData {
+            block_pos: to_wasm_block_position(self.block_pos),
+            previous_state: to_wasm_vault_state(self.previous_state),
+            new_state: to_wasm_vault_state(self.new_state),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, _state: &mut PluginHostState) -> Self {
+        match event {
+            Event::VaultChangeStateEvent(data) => Self {
+                block_pos: from_wasm_block_position(data.block_pos),
+                previous_state: from_wasm_vault_state(data.previous_state),
+                new_state: from_wasm_vault_state(data.new_state),
+                cancelled: data.cancelled,
+            },
             _ => panic!("unexpected event type"),
         }
     }

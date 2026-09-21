@@ -338,6 +338,7 @@ impl ClientPlatform {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn can_not_join(
     profile: &GameProfile,
     address: &SocketAddr,
@@ -347,76 +348,199 @@ pub async fn can_not_join(
         "[year]-[month]-[day] at [hour]:[minute]:[second] [offset_hour sign:mandatory]:[offset_minute]"
     );
 
-    let mut banned_players = server
-        .data
-        .banned_player_list
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(entry) = banned_players.get_entry(profile) {
-        let text = TextComponent::translate_cross(
-            translation::java::MULTIPLAYER_DISCONNECT_BANNED_REASON,
-            translation::java::MULTIPLAYER_DISCONNECT_BANNED_REASON,
-            [TextComponent::text(entry.reason.clone())],
-        );
-        return Some(match entry.expires {
-            Some(expires) => text.add_child(TextComponent::translate_cross(
-                translation::java::MULTIPLAYER_DISCONNECT_BANNED_EXPIRATION,
-                translation::java::MULTIPLAYER_DISCONNECT_BANNED_EXPIRATION,
-                [TextComponent::text(
-                    expires.format(FORMAT_DESCRIPTION).unwrap_or_default(),
-                )],
-            )),
-            None => text,
-        });
-    }
-    drop(banned_players);
+    // The plugin manager dispatches through `Arc<Server>`; recover it from any
+    // loaded world (worlds hold a weak back-reference to the server).
+    let server_arc = server_arc(server);
 
-    if server.white_list.load(Ordering::Relaxed) {
-        let ops = server
+    let banned_player_reason = {
+        let mut banned_players = server
             .data
-            .operator_config
-            .read()
+            .banned_player_list
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let whitelist = server
-            .data
-            .whitelist_config
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        if ops.get_entry(&profile.id).is_none() && !whitelist.is_whitelisted(profile) {
-            return Some(TextComponent::translate_cross(
-                translation::java::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED,
-                translation::java::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED,
-                &[],
-            ));
+        banned_players.get_entry(profile).map(|entry| {
+            let text = TextComponent::translate_cross(
+                translation::java::MULTIPLAYER_DISCONNECT_BANNED_REASON,
+                translation::java::MULTIPLAYER_DISCONNECT_BANNED_REASON,
+                [TextComponent::text(entry.reason.clone())],
+            );
+            match entry.expires {
+                Some(expires) => text.add_child(TextComponent::translate_cross(
+                    translation::java::MULTIPLAYER_DISCONNECT_BANNED_EXPIRATION,
+                    translation::java::MULTIPLAYER_DISCONNECT_BANNED_EXPIRATION,
+                    [TextComponent::text(
+                        expires.format(FORMAT_DESCRIPTION).unwrap_or_default(),
+                    )],
+                )),
+                None => text,
+            }
+        })
+    };
+    if let Some(reason) = banned_player_reason {
+        if let Some(server_arc) = &server_arc {
+            // A plugin may override the rejection by allowing the login.
+            if let Some(kick_message) =
+                validate_login_with_plugins(server_arc, address, reason).await
+            {
+                return Some(kick_message);
+            }
+        } else {
+            return Some(reason);
         }
     }
 
-    if let Some(entry) = server
-        .data
-        .banned_ip_list
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .get_entry(&address.ip())
-    {
-        let text = TextComponent::translate_cross(
-            translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_REASON,
-            translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_REASON,
-            [TextComponent::text(entry.reason.clone())],
-        );
-        return Some(match entry.expires {
-            Some(expires) => text.add_child(TextComponent::translate_cross(
-                translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_EXPIRATION,
-                translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_EXPIRATION,
-                [TextComponent::text(
-                    expires.format(FORMAT_DESCRIPTION).unwrap_or_default(),
-                )],
-            )),
-            None => text,
-        });
+    if server.white_list.load(Ordering::Relaxed) {
+        let vanilla_allowed = {
+            let ops = server
+                .data
+                .operator_config
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let whitelist = server
+                .data
+                .whitelist_config
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            ops.get_entry(&profile.id).is_some() || whitelist.is_whitelisted(profile)
+        };
+
+        let not_whitelisted_reason = || {
+            TextComponent::translate_cross(
+                translation::java::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED,
+                translation::java::MULTIPLAYER_DISCONNECT_NOT_WHITELISTED,
+                &[],
+            )
+        };
+
+        let denied_reason = if let Some(server_arc) = &server_arc {
+            let mut verify_event =
+                crate::plugin::api::events::server::profile_whitelist_verify::ProfileWhitelistVerifyEvent::new(
+                    profile.id,
+                    profile.name.clone(),
+                    not_whitelisted_reason(),
+                    if vanilla_allowed {
+                        crate::plugin::api::events::server::profile_whitelist_verify::WhitelistVerifyResult::Allowed
+                    } else {
+                        crate::plugin::api::events::server::profile_whitelist_verify::WhitelistVerifyResult::Denied
+                    },
+                );
+            server_arc
+                .plugin_manager
+                .fire(server_arc, &mut verify_event)
+                .await;
+            match verify_event.result {
+                crate::plugin::api::events::server::profile_whitelist_verify::WhitelistVerifyResult::Allowed => None,
+                crate::plugin::api::events::server::profile_whitelist_verify::WhitelistVerifyResult::Denied => {
+                    Some(verify_event.kick_message)
+                }
+            }
+        } else if vanilla_allowed {
+            None
+        } else {
+            Some(not_whitelisted_reason())
+        };
+
+        if let Some(reason) = denied_reason {
+            if let Some(server_arc) = &server_arc {
+                // A plugin may override the rejection by allowing the login.
+                if let Some(kick_message) =
+                    validate_login_with_plugins(server_arc, address, reason).await
+                {
+                    return Some(kick_message);
+                }
+            } else {
+                return Some(reason);
+            }
+        }
+    }
+
+    let banned_ip_reason = {
+        let mut banned_ips = server
+            .data
+            .banned_ip_list
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        banned_ips.get_entry(&address.ip()).map(|entry| {
+            let text = TextComponent::translate_cross(
+                translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_REASON,
+                translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_REASON,
+                [TextComponent::text(entry.reason.clone())],
+            );
+            match entry.expires {
+                Some(expires) => text.add_child(TextComponent::translate_cross(
+                    translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_EXPIRATION,
+                    translation::java::MULTIPLAYER_DISCONNECT_BANNED_IP_EXPIRATION,
+                    [TextComponent::text(
+                        expires.format(FORMAT_DESCRIPTION).unwrap_or_default(),
+                    )],
+                )),
+                None => text,
+            }
+        })
+    };
+    if let Some(reason) = banned_ip_reason {
+        if let Some(server_arc) = &server_arc {
+            // A plugin may override the rejection by allowing the login.
+            if let Some(kick_message) =
+                validate_login_with_plugins(server_arc, address, reason).await
+            {
+                return Some(kick_message);
+            }
+        } else {
+            return Some(reason);
+        }
     }
 
     None
+}
+
+/// Recovers the `Arc<Server>` for a `&Server` through any loaded world
+/// (worlds hold a weak back-reference to their server). Returns `None` only
+/// when no world is loaded yet, which cannot happen once connections are
+/// accepted.
+pub(crate) fn server_arc(server: &Server) -> Option<Arc<Server>> {
+    server
+        .worlds
+        .load()
+        .first()
+        .and_then(|world| world.server.upgrade())
+}
+
+/// Whether the connecting player has no saved player data, i.e. joins for the
+/// first time.
+pub(crate) fn is_first_join(server: &Server, uuid: &Uuid) -> bool {
+    server
+        .player_data_storage
+        .load_data(uuid)
+        .ok()
+        .flatten()
+        .is_none()
+}
+
+/// Fires [`PlayerConnectionValidateLoginEvent`](crate::plugin::api::events::server::player_connection_validate_login::PlayerConnectionValidateLoginEvent)
+/// for a rejected login and reports the final verdict: `Some(kick_message)`
+/// when the login stays denied (possibly with a plugin-modified message),
+/// `None` when a plugin allowed the login.
+async fn validate_login_with_plugins(
+    server: &Arc<Server>,
+    address: &SocketAddr,
+    reason: TextComponent,
+) -> Option<TextComponent> {
+    use crate::plugin::api::events::server::player_connection_validate_login::{
+        ConnectionValidationResult, PlayerConnectionValidateLoginEvent,
+    };
+
+    let mut event = PlayerConnectionValidateLoginEvent::new(
+        address.ip().to_string(),
+        reason,
+        ConnectionValidationResult::Denied,
+    );
+    server.plugin_manager.fire(server, &mut event).await;
+    match event.result {
+        ConnectionValidationResult::Denied => Some(event.kick_message),
+        ConnectionValidationResult::Allowed => None,
+    }
 }
 
 #[derive(Error, Debug)]

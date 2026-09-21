@@ -6,18 +6,26 @@ use crate::plugin::{
         wit::v0_1::{
             events::{
                 ToFromWasmEvent, cleanup_event, consume_world, from_wasm_block_position,
-                to_wasm_block_position,
+                from_wasm_position, to_wasm_block_position, to_wasm_position,
             },
             pumpkin::plugin::event::{
                 ChunkLoadEventData, ChunkSaveEventData, ChunkSendEventData, Event,
-                SpawnChangeEventData, ThunderChangeEventData, WeatherChangeEventData,
-                WorldLoadEventData, WorldUnloadEventData,
+                SpawnChangeEventData, StructuresLocateEventData, ThunderChangeEventData,
+                WeatherChangeEventData, WorldBorderBoundsChangeEventData,
+                WorldBorderCenterChangeEventData, WorldDifficultyChangeEventData,
+                WorldGameRuleChangeEventData, WorldLoadEventData, WorldUnloadEventData,
             },
         },
     },
     world::{
-        chunk_load::ChunkLoad, chunk_save::ChunkSave, chunk_send::ChunkSend,
+        chunk_load::ChunkLoad,
+        chunk_save::ChunkSave,
+        chunk_send::ChunkSend,
         spawn_change::SpawnChangeEvent,
+        structures_locate::StructuresLocateEvent,
+        world_border_change::{WorldBorderBoundsChangeEvent, WorldBorderCenterChangeEvent},
+        world_difficulty_change::WorldDifficultyChangeEvent,
+        world_game_rule_change::WorldGameRuleChangeEvent,
     },
 };
 
@@ -722,6 +730,146 @@ impl ToFromWasmEvent for crate::plugin::api::events::world::lightning_strike::Li
         cleanup_event(&event, state);
         if let Event::LightningStrikeEvent(data) = event {
             self.cancelled = data.cancelled;
+        }
+    }
+}
+
+impl ToFromWasmEvent for StructuresLocateEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::StructuresLocateEvent(StructuresLocateEventData {
+            target_world,
+            origin: to_wasm_block_position(self.origin),
+            structure: self.structure.clone(),
+            radius: self.radius,
+            results: self
+                .results
+                .iter()
+                .map(|pos| to_wasm_block_position(*pos))
+                .collect(),
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::StructuresLocateEvent(data) => Self {
+                world: consume_world(state, &data.target_world),
+                origin: from_wasm_block_position(data.origin),
+                structure: data.structure,
+                radius: data.radius,
+                results: data
+                    .results
+                    .into_iter()
+                    .map(from_wasm_block_position)
+                    .collect(),
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WorldDifficultyChangeEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::WorldDifficultyChangeEvent(WorldDifficultyChangeEventData {
+            target_world,
+            old_difficulty: self.old_difficulty.clone(),
+            new_difficulty: self.new_difficulty.clone(),
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WorldDifficultyChangeEvent(data) => Self {
+                world: consume_world(state, &data.target_world),
+                old_difficulty: data.old_difficulty,
+                new_difficulty: data.new_difficulty,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WorldGameRuleChangeEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::WorldGameRuleChangeEvent(WorldGameRuleChangeEventData {
+            target_world,
+            rule: self.rule.clone(),
+            value: self.value.clone(),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WorldGameRuleChangeEvent(data) => Self {
+                world: consume_world(state, &data.target_world),
+                rule: data.rule,
+                value: data.value,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WorldBorderBoundsChangeEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::WorldBorderBoundsChangeEvent(WorldBorderBoundsChangeEventData {
+            target_world,
+            old_diameter: self.old_diameter,
+            new_diameter: self.new_diameter,
+            duration_ms: self.duration_ms,
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WorldBorderBoundsChangeEvent(data) => Self {
+                world: consume_world(state, &data.target_world),
+                old_diameter: data.old_diameter,
+                new_diameter: data.new_diameter,
+                duration_ms: data.duration_ms,
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
+        }
+    }
+}
+
+impl ToFromWasmEvent for WorldBorderCenterChangeEvent {
+    fn to_wasm_event(&self, state: &mut PluginHostState) -> Event {
+        let target_world = state
+            .add_world(self.world.clone())
+            .expect("failed to add world resource");
+        Event::WorldBorderCenterChangeEvent(WorldBorderCenterChangeEventData {
+            target_world,
+            old_center: to_wasm_position(self.old_center),
+            new_center: to_wasm_position(self.new_center),
+            cancelled: self.cancelled,
+        })
+    }
+
+    fn from_wasm_event(event: Event, state: &mut PluginHostState) -> Self {
+        match event {
+            Event::WorldBorderCenterChangeEvent(data) => Self {
+                world: consume_world(state, &data.target_world),
+                old_center: from_wasm_position(data.old_center),
+                new_center: from_wasm_position(data.new_center),
+                cancelled: data.cancelled,
+            },
+            _ => panic!("unexpected event type"),
         }
     }
 }

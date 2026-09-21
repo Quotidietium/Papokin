@@ -277,7 +277,7 @@ impl BlockBehaviour for DispenserBlock {
                 return;
             };
 
-            if let Some((slot_index, mut item)) = dispenser.get_random_slot() {
+            if let Some((slot_index, mut item)) = dispenser.get_random_slot(args.world) {
                 let props = DispenserLikeProperties::from_state_id(state.id);
                 let ctx = DispenseContext {
                     world: args.world,

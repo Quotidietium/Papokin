@@ -55,13 +55,29 @@ impl BlockBehaviour for ComposterBlock {
                 return BlockActionResult::Pass;
             };
 
+            // Determine if the composter level should increase
+            let will_raise_level =
+                level < 7 && (level == 0 || rand::rng().random_bool(f64::from(chance)));
+
+            let mut event = crate::plugin::api::events::block::compost_item::CompostItemEvent::new(
+                Some(args.player.clone()),
+                *args.position,
+                item_stack.clone(),
+                will_raise_level,
+            );
+            if let Some(server) = args.world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
+            if event.cancelled {
+                return BlockActionResult::Pass;
+            }
+
             // Consume one item from the stack (if in survival mode)
             if !args.player.has_infinite_materials() {
                 item_stack.decrement(1);
             }
 
-            // Determine if the composter level should increase
-            if level < 7 && (level == 0 || rand::rng().random_bool(f64::from(chance))) {
+            if event.will_raise_level {
                 self.update_level_composter(
                     args.world,
                     args.position,

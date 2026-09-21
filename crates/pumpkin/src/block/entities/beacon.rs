@@ -11,6 +11,10 @@ use pumpkin_util::math::boundingbox::BoundingBox;
 use pumpkin_util::math::position::BlockPos;
 
 use crate::block::entities::BlockEntity;
+use crate::entity::player::Player;
+use crate::plugin::api::events::block::beacon_activated::BeaconActivatedEvent;
+use crate::plugin::api::events::block::beacon_deactivated::BeaconDeactivatedEvent;
+use crate::plugin::api::events::block::beacon_effect::BeaconEffectEvent;
 use crate::world::World;
 use pumpkin_inventory::{Clearable, Inventory};
 
@@ -188,6 +192,8 @@ impl BeaconBlockEntity {
         ];
         let bounds = BoundingBox::new_array(box_min, box_max);
 
+        let server = world.server.upgrade();
+
         // Apply effect to all players in range
         let players = world.players.load();
         for player in players.iter() {
@@ -196,6 +202,15 @@ impl BeaconBlockEntity {
             }
 
             if let Some(effect) = primary_effect {
+                if let Some(server) = &server {
+                    let mut event = BeaconEffectEvent::new(
+                        player.clone(),
+                        effect.minecraft_name.to_string(),
+                        true,
+                        self.position,
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                }
                 player.add_effect(pumpkin_data::potion::Effect {
                     effect_type: effect,
                     duration: duration_ticks,
@@ -211,6 +226,15 @@ impl BeaconBlockEntity {
                 && primary_id != secondary_id
                 && let Some(effect) = secondary_effect
             {
+                if let Some(server) = &server {
+                    let mut event = BeaconEffectEvent::new(
+                        player.clone(),
+                        effect.minecraft_name.to_string(),
+                        false,
+                        self.position,
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                }
                 player.add_effect(pumpkin_data::potion::Effect {
                     effect_type: effect,
                     duration: duration_ticks,
@@ -222,6 +246,40 @@ impl BeaconBlockEntity {
                 });
             }
         }
+    }
+
+    /// The nearest player within the beacon's effect range for `levels`, used
+    /// to attribute beacon (de)activation events.
+    fn nearest_player_in_range(&self, world: &Arc<World>, levels: i32) -> Option<Arc<Player>> {
+        let range = f64::from(levels.max(1) * 10 + 10);
+        let pos = self.position.0.to_f64();
+        let bounds = BoundingBox::new_array(
+            [pos.x - range, pos.y - range, pos.z - range],
+            [
+                pos.x + range + 1.0,
+                pos.y + range + 1.0 + 384.0,
+                pos.z + range + 1.0,
+            ],
+        );
+
+        let players = world.players.load();
+        let mut nearest: Option<(f64, Arc<Player>)> = None;
+        for player in players.iter() {
+            if !bounds.intersects(&player.living_entity.entity.bounding_box.load()) {
+                continue;
+            }
+            let distance = player
+                .living_entity
+                .entity
+                .pos
+                .load()
+                .squared_distance_to_vec(&pos);
+            let closer = nearest.as_ref().is_none_or(|(best, _)| distance < *best);
+            if closer {
+                nearest = Some((distance, player.clone()));
+            }
+        }
+        nearest.map(|(_, player)| player)
     }
 }
 
@@ -314,8 +372,26 @@ impl BlockEntity for BeaconBlockEntity {
     fn tick(&self, world: &Arc<World>) {
         // Check properties every 80 ticks matching Java
         if world.get_time_of_day() % 80 == 0 {
+            let previous_levels = self.levels.load(Ordering::Relaxed);
             let levels = self.update_base(world);
             self.levels.store(levels, Ordering::Relaxed);
+
+            // Notify plugins about beacon (de)activation on tier transitions
+            if previous_levels == 0 && levels > 0 {
+                if let Some(server) = world.server.upgrade()
+                    && let Some(player) = self.nearest_player_in_range(world, levels)
+                {
+                    let mut event = BeaconActivatedEvent::new(player, self.position);
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                }
+            } else if previous_levels > 0
+                && levels == 0
+                && let Some(server) = world.server.upgrade()
+            {
+                let player = self.nearest_player_in_range(world, previous_levels);
+                let mut event = BeaconDeactivatedEvent::new(player, self.position);
+                server.plugin_manager.fire_blocking(&server, &mut event);
+            }
 
             if levels > 0 {
                 self.apply_effects(world, levels);

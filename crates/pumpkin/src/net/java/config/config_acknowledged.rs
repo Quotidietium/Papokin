@@ -9,6 +9,20 @@ impl JavaClient {
         let profile = self.gameprofile.clone();
         let address = self.address;
 
+        // The initial configuration completes here; notify plugins before the
+        // player enters the world.
+        if let Some(server_arc) = crate::net::server_arc(server) {
+            let mut event = crate::plugin::api::events::server::player_connection_initial_configure::PlayerConnectionInitialConfigureEvent::new(
+                profile.name.clone(),
+                profile.id,
+                crate::net::is_first_join(server, &profile.id),
+            );
+            server_arc
+                .plugin_manager
+                .fire(&server_arc, &mut event)
+                .await;
+        }
+
         if let Some(reason) = can_not_join(&profile, &address, server).await {
             self.kick(reason).await;
             return PacketHandlerResult::Stop;

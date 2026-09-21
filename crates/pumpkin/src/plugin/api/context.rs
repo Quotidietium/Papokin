@@ -239,6 +239,17 @@ impl Context {
             Arc::new(new_dispatcher)
         });
 
+        // Notify plugins that a command was registered. The label reflects
+        // any fallback prefix applied above.
+        let mut event =
+            crate::plugin::api::events::server::command_registered::CommandRegisteredEvent::new(
+                node.meta.literal.to_string(),
+                self.metadata.name.clone(),
+            );
+        self.server
+            .plugin_manager
+            .fire_blocking(&self.server, &mut event);
+
         self.reload_commands_for_everyone();
     }
 

@@ -2,8 +2,12 @@ use pumpkin_protocol::java::client::play::{
     CInitializeWorldBorder, CSetBorderCenter, CSetBorderLerpSize, CSetBorderSize,
     CSetBorderWarningDelay, CSetBorderWarningDistance,
 };
+use pumpkin_util::math::vector3::Vector3;
 
 use crate::net::java::JavaClient;
+use crate::plugin::api::events::world::world_border_change::{
+    WorldBorderBoundsChangeEvent, WorldBorderCenterChangeEvent,
+};
 
 use super::World;
 
@@ -60,10 +64,25 @@ impl Worldborder {
     }
 
     pub fn set_center(&mut self, world: &World, x: f64, z: f64) {
+        let old_center = Vector3::new(self.center_x, 0.0, self.center_z);
         self.center_x = x;
         self.center_z = z;
 
         world.broadcast_packet_all(&CSetBorderCenter::new(self.center_x, self.center_z));
+
+        // Pure notification: the center has already been applied.
+        if let Some(server) = world.server.upgrade()
+            && let Some(world_arc) = server
+                .worlds
+                .load()
+                .iter()
+                .find(|w| w.uuid == world.uuid)
+                .cloned()
+        {
+            let mut event =
+                WorldBorderCenterChangeEvent::new(world_arc, old_center, Vector3::new(x, 0.0, z));
+            server.plugin_manager.fire_blocking(&server, &mut event);
+        }
     }
 
     pub fn set_diameter(&mut self, world: &World, diameter: f64, speed: Option<i64>) {
@@ -81,6 +100,24 @@ impl Worldborder {
             None => {
                 world.broadcast_packet_all(&CSetBorderSize::new(self.new_diameter));
             }
+        }
+
+        // Pure notification: the resize has already been applied.
+        if let Some(server) = world.server.upgrade()
+            && let Some(world_arc) = server
+                .worlds
+                .load()
+                .iter()
+                .find(|w| w.uuid == world.uuid)
+                .cloned()
+        {
+            let mut event = WorldBorderBoundsChangeEvent::new(
+                world_arc,
+                self.old_diameter,
+                self.new_diameter,
+                speed.unwrap_or(0).max(0) as u64,
+            );
+            server.plugin_manager.fire_blocking(&server, &mut event);
         }
     }
 
