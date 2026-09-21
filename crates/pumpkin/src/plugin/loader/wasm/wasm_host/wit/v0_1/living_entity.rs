@@ -145,6 +145,24 @@ pub fn from_wit_damage_type(wit: WitDamageType) -> pumpkin_data::damage::DamageT
         .unwrap_or(pumpkin_data::damage::DamageType::GENERIC)
 }
 
+/// Resolves a plugin-provided damage type name for the damage execution path.
+///
+/// Vanilla names (with or without the "minecraft:" prefix) map to the static
+/// table; anything else must be a plugin-registered custom damage type.
+pub fn resolve_damage_type_by_name(
+    state: &PluginHostState,
+    name: &str,
+) -> wasmtime::Result<pumpkin_data::damage_ext::ResolvedDamageType> {
+    let server = state
+        .server
+        .as_ref()
+        .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
+    server
+        .damage_type_manager
+        .resolve(name)
+        .ok_or_else(|| wasmtime::Error::msg(format!("Unknown damage type '{name}'")))
+}
+
 impl HostLivingEntity for PluginHostState {
     async fn as_entity(
         &mut self,
@@ -522,6 +540,28 @@ impl crate::plugin::loader::wasm::wasm_host::wit::v0_1::pumpkin::plugin::world::
             .store
             .pump_blocking(&mut host, move || {
                 entity.damage(&*entity, amount, damage_type);
+            })
+            .await
+    }
+
+    async fn damage_by_name(
+        mut host: Access<'_, PluginHostState, Self>,
+        this: Resource<WitLivingEntity>,
+        amount: f32,
+        damage_type_name: String,
+    ) -> wasmtime::Result<()> {
+        let (entity, plugin, damage_type) = {
+            let state = host.get();
+            (
+                living_entity_from_resource(state, &this)?,
+                active_plugin(state)?,
+                resolve_damage_type_by_name(state, &damage_type_name)?,
+            )
+        };
+        plugin
+            .store
+            .pump_blocking(&mut host, move || {
+                entity.damage_resolved(&*entity, amount, &damage_type);
             })
             .await
     }

@@ -175,6 +175,10 @@ impl ToFromWasmEvent for EntityDamageEvent {
                 entity_id: data.entity_id,
                 damage: data.damage,
                 damage_type: from_wit_damage_type(data.damage_type),
+                // The WIT enum only names vanilla damage types; plugins deal
+                // custom damage through `damage-by-name`, which does not
+                // round-trip through this conversion.
+                custom_damage_type: None,
                 cancelled: data.cancelled,
             },
             _ => panic!("unexpected event type"),

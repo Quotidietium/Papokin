@@ -1031,6 +1031,10 @@ interface player {
         heal: func(amount: f32);
         /// Deals damage to the player by a specified amount with a damage type.
         damage: func(amount: f32, damage-type: damage-type);
+        /// Deals damage to the player by damage type name: either a vanilla damage type
+        /// ("minecraft:arrow" or "arrow") or a plugin-registered custom damage type
+        /// ("myplugin:frost"). Traps when the name is not a registered damage type.
+        damage-by-name: func(amount: f32, damage-type-name: string);
         /// Kills the player instantly.
         kill: func();
 

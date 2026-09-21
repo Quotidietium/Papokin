@@ -26,6 +26,7 @@ use pumpkin_data::{Block, BlockDirection};
 use pumpkin_data::{
     block_properties::{Facing, HorizontalFacing},
     damage::DamageType,
+    damage_ext::ResolvedDamageType,
     entity::{EntityPose, EntityType},
     sound::{Sound, SoundCategory},
 };
@@ -334,6 +335,17 @@ pub trait EntityBase: Send + Sync + std::any::Any {
         caller.damage_with_context(caller, amount, damage_type, None, None, None)
     }
 
+    /// Returns if damage was successful or not. Accepts a resolved (vanilla
+    /// or plugin-registered custom) damage type.
+    fn damage_resolved(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: &ResolvedDamageType,
+    ) -> bool {
+        caller.damage_with_resolved_context(caller, amount, damage_type, None, None, None)
+    }
+
     fn on_lightning_strike(
         &self,
         caller: &dyn EntityBase,
@@ -498,6 +510,30 @@ pub trait EntityBase: Send + Sync + std::any::Any {
     ) -> bool {
         if let Some(living) = caller.get_living_entity() {
             return living.damage_with_context(
+                caller,
+                amount,
+                damage_type,
+                position,
+                source,
+                cause,
+            );
+        }
+        false
+    }
+
+    /// Damage entry point accepting a resolved (vanilla or plugin-registered
+    /// custom) damage type; mirrors [`Self::damage_with_context`].
+    fn damage_with_resolved_context(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: &ResolvedDamageType,
+        position: Option<Vector3<f64>>,
+        source: Option<&dyn EntityBase>,
+        cause: Option<&dyn EntityBase>,
+    ) -> bool {
+        if let Some(living) = caller.get_living_entity() {
+            return living.damage_with_resolved_context(
                 caller,
                 amount,
                 damage_type,
@@ -3441,6 +3477,17 @@ impl Entity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(damage_type)
+    }
+
+    /// Checks if the entity is invulnerable to a resolved (vanilla or
+    /// plugin-registered custom) damage type. Custom types are never
+    /// void/kill damage and match no static immunity entry, so only the
+    /// general invulnerability flag applies to them.
+    pub fn is_invulnerable_to_resolved(&self, damage_type: &ResolvedDamageType) -> bool {
+        damage_type.vanilla().map_or_else(
+            || self.invulnerable.load(Ordering::Relaxed),
+            |vanilla| self.is_invulnerable_to(&vanilla),
+        )
     }
 
     /// Sets if the entity is invulnerable to a specific damage type

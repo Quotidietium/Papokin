@@ -56,8 +56,12 @@ impl ClientPacket for CDamageEvent {
         version: &JavaMinecraftVersion,
     ) -> Result<(), crate::ser::WritingError> {
         // Damage types are a synced registry; translate the dataset id into
-        // the id space this client received at configuration time.
-        let source_type_id = pumpkin_data::sync_id_remap::remap_damage_type_id_for_version(
+        // the id space this client received at configuration time. Vanilla ids
+        // go through the static remap tables; ids of plugin-registered custom
+        // entries (>= the native vanilla count) are shifted by the difference
+        // in vanilla entry counts, or degraded to `generic` for clients that
+        // never received the custom entries.
+        let source_type_id = pumpkin_data::damage_ext::translate_damage_type_id_for_version(
             u16::try_from(self.source_type_id.0).unwrap_or(0),
             *version,
         );
@@ -111,5 +115,46 @@ mod tests {
         );
         assert_ne!(expected, u16::from(DamageType::SULFUR_CUBE_HOT.id));
         assert_eq!(old[1], u8::try_from(expected).unwrap());
+    }
+
+    #[test]
+    fn damage_event_translates_custom_ids_per_version() {
+        use pumpkin_data::damage_ext::{
+            damage_type_vanilla_count_for_version, native_damage_type_count,
+        };
+
+        // The first plugin-registered custom damage type sits right after the
+        // vanilla entries in the native id space.
+        let native_count = native_damage_type_count();
+        let packet =
+            CDamageEvent::new(VarInt(1), VarInt(i32::from(native_count)), None, None, None);
+        let serialize_with = |version: JavaMinecraftVersion| {
+            let mut buf = Vec::new();
+            packet.write_packet_data(&mut buf, &version).unwrap();
+            buf
+        };
+
+        // A 1.21.11 client receives the custom entry after *its* vanilla
+        // entries, not after the native ones.
+        let vanilla_1_21_11 =
+            damage_type_vanilla_count_for_version(JavaMinecraftVersion::V_1_21_11).unwrap();
+        let old = serialize_with(JavaMinecraftVersion::V_1_21_11);
+        // entity id (varint 1) comes first, the damage type id second — both
+        // single-byte varints at these values.
+        assert_eq!(old[1], u8::try_from(vanilla_1_21_11).unwrap());
+
+        // In the native id space the id is sent unchanged.
+        let native = serialize_with(JavaMinecraftVersion::V_26_3);
+        assert_eq!(native[1], u8::try_from(native_count).unwrap());
+
+        // A client whose registries are not synced through the configuration
+        // state (1.20/1.20.1) never received the custom entry and gets the
+        // version's `generic` id instead of an out-of-range one.
+        let legacy = serialize_with(JavaMinecraftVersion::V_1_20);
+        let expected_generic = remap_damage_type_id_for_version(
+            u16::from(DamageType::GENERIC.id),
+            JavaMinecraftVersion::V_1_20,
+        );
+        assert_eq!(legacy[1], u8::try_from(expected_generic).unwrap());
     }
 }

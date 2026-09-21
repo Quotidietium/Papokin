@@ -252,6 +252,12 @@ pub mod scoreboard;
 #[path = "generated/damage_type.rs"]
 pub mod damage;
 
+/// Runtime support for plugin-registered custom damage types: the resolved
+/// vanilla-or-custom representation used by the damage execution path, the
+/// client-sync NBT blobs, and the per-version network id translation.
+#[cfg(all(feature = "damage", feature = "registry", feature = "tag"))]
+pub mod damage_ext;
+
 #[cfg(feature = "fluid")]
 #[rustfmt::skip]
 #[path = "generated/fluid.rs"]

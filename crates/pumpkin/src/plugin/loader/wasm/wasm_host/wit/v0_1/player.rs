@@ -3173,6 +3173,29 @@ impl pumpkin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             .await
     }
 
+    async fn damage_by_name(
+        mut host: Access<'_, PluginHostState, Self>,
+        player: Resource<Player>,
+        amount: f32,
+        damage_type_name: String,
+    ) -> wasmtime::Result<()> {
+        let (player, plugin, damage_type) = {
+            let state = host.get();
+            (
+                player_from_resource(state, &player)?,
+                plugin_from_state(state)?,
+                super::living_entity::resolve_damage_type_by_name(state, &damage_type_name)?,
+            )
+        };
+
+        plugin
+            .store
+            .pump_blocking(&mut host, move || {
+                player.damage_resolved(&*player, amount, &damage_type);
+            })
+            .await
+    }
+
     async fn kill(
         mut host: Access<'_, PluginHostState, Self>,
         player: Resource<Player>,

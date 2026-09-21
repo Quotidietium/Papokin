@@ -4635,18 +4635,54 @@ impl Player {
         source: Option<&dyn crate::entity::EntityBase>,
         cause: Option<&dyn crate::entity::EntityBase>,
     ) -> bool {
+        self.damage_with_resolved_context(
+            caller,
+            amount,
+            &pumpkin_data::damage_ext::ResolvedDamageType::Vanilla(damage_type),
+            position,
+            source,
+            cause,
+        )
+    }
+
+    /// Deals damage with a resolved (vanilla or plugin-registered custom)
+    /// damage type.
+    pub fn damage_resolved(
+        &self,
+        caller: &dyn crate::entity::EntityBase,
+        amount: f32,
+        damage_type: &pumpkin_data::damage_ext::ResolvedDamageType,
+    ) -> bool {
+        self.damage_with_resolved_context(caller, amount, damage_type, None, None, None)
+    }
+
+    pub fn damage_with_resolved_context(
+        &self,
+        caller: &dyn crate::entity::EntityBase,
+        amount: f32,
+        damage_type: &pumpkin_data::damage_ext::ResolvedDamageType,
+        position: Option<Vector3<f64>>,
+        source: Option<&dyn crate::entity::EntityBase>,
+        cause: Option<&dyn crate::entity::EntityBase>,
+    ) -> bool {
         if self
             .abilities
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .invulnerable
-            && damage_type != pumpkin_data::damage::DamageType::GENERIC_KILL
-            && damage_type != pumpkin_data::damage::DamageType::OUT_OF_WORLD
+            && !damage_type.is(pumpkin_data::damage::DamageType::GENERIC_KILL)
+            && !damage_type.is(pumpkin_data::damage::DamageType::OUT_OF_WORLD)
         {
             return false;
         }
-        self.living_entity
-            .damage_with_context(caller, amount, damage_type, position, source, cause)
+        self.living_entity.damage_with_resolved_context(
+            caller,
+            amount,
+            damage_type,
+            position,
+            source,
+            cause,
+        )
     }
 
     pub fn damage_generic(&self, amount: f32) -> bool {
@@ -7244,6 +7280,18 @@ impl EntityBase for Player {
         cause: Option<&dyn EntityBase>,
     ) -> bool {
         self.damage_with_context(caller, amount, damage_type, position, source, cause)
+    }
+
+    fn damage_with_resolved_context(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: &pumpkin_data::damage_ext::ResolvedDamageType,
+        position: Option<Vector3<f64>>,
+        source: Option<&dyn EntityBase>,
+        cause: Option<&dyn EntityBase>,
+    ) -> bool {
+        self.damage_with_resolved_context(caller, amount, damage_type, position, source, cause)
     }
 
     fn teleport(

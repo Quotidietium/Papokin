@@ -578,6 +578,10 @@ interface %world {
         get-max-health: func() -> f32;
         set-max-health: func(max-health: f32);
         damage: func(amount: f32, damage-type: damage-type);
+        /// Deals damage by damage type name: either a vanilla damage type
+        /// ("minecraft:arrow" or "arrow") or a plugin-registered custom damage type
+        /// ("myplugin:frost"). Traps when the name is not a registered damage type.
+        damage-by-name: func(amount: f32, damage-type-name: string);
         is-dead: func() -> bool;
 
         get-absorption: func() -> f32;

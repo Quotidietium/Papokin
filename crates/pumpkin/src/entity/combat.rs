@@ -257,7 +257,7 @@ impl FallLocation {
 
 #[derive(Clone)]
 pub struct CombatEntry {
-    pub damage_type: pumpkin_data::damage::DamageType,
+    pub damage_type: pumpkin_data::damage_ext::ResolvedDamageType,
     pub damage: f32,
     pub fall_location: Option<FallLocation>,
     pub fall_distance: f32,
@@ -293,7 +293,7 @@ impl CombatTracker {
         is_alive: bool,
         fall_distance: f32,
         fall_location: FallLocation,
-        damage_type: pumpkin_data::damage::DamageType,
+        damage_type: pumpkin_data::damage_ext::ResolvedDamageType,
         damage: f32,
         source: Option<&dyn EntityBase>,
         cause: Option<&dyn EntityBase>,
@@ -439,10 +439,10 @@ impl CombatTracker {
         }
 
         let killing_blow = &self.entries[self.entries.len() - 1];
-        let killing_damage_type = killing_blow.damage_type;
+        let killing_damage_type = &killing_blow.damage_type;
         let knock_off_entry = self.get_most_significant_fall();
 
-        match killing_damage_type.death_message_type {
+        match killing_damage_type.death_message_type() {
             pumpkin_data::damage::DeathMessageType::FallVariants => {
                 if let Some(knock_off) = knock_off_entry {
                     Self::get_fall_message(victim_name, knock_off, killing_blow)
@@ -456,7 +456,7 @@ impl CombatTracker {
                 }
             }
             pumpkin_data::damage::DeathMessageType::IntentionalGameDesign => {
-                let death_msg = format!("death.attack.{}", killing_damage_type.message_id);
+                let death_msg = format!("death.attack.{}", killing_damage_type.message_id());
                 let link = pumpkin_util::text::TextComponent::text("[")
                     .add_child(pumpkin_util::text::TextComponent::translate_cross(
                         format!("{death_msg}.link"),
@@ -492,7 +492,7 @@ impl CombatTracker {
         for i in 0..self.entries.len() {
             let entry = &self.entries[i];
             let previous = (i > 0).then(|| &self.entries[i - 1]);
-            let damage_type = entry.damage_type;
+            let damage_type = &entry.damage_type;
             let is_fake_fall = damage_type
                 .has_tag(&pumpkin_data::tag::DamageType::MINECRAFT_ALWAYS_MOST_SIGNIFICANT_FALL);
             let fall_distance = if is_fake_fall {
@@ -535,7 +535,7 @@ impl CombatTracker {
         knock_off_entry: &CombatEntry,
         killing_blow: &CombatEntry,
     ) -> pumpkin_util::text::TextComponent {
-        let knock_off_type = knock_off_entry.damage_type;
+        let knock_off_type = &knock_off_entry.damage_type;
         if !knock_off_type.has_tag(&pumpkin_data::tag::DamageType::MINECRAFT_IS_FALL)
             && !knock_off_type
                 .has_tag(&pumpkin_data::tag::DamageType::MINECRAFT_ALWAYS_MOST_SIGNIFICANT_FALL)
@@ -609,8 +609,8 @@ impl CombatTracker {
         killing_blow: &CombatEntry,
         kill_credit_name: Option<pumpkin_util::text::TextComponent>,
     ) -> pumpkin_util::text::TextComponent {
-        let damage_type = killing_blow.damage_type;
-        let msg_id = damage_type.message_id;
+        let damage_type = &killing_blow.damage_type;
+        let msg_id = damage_type.message_id();
 
         if let Some(attacker_name) = &killing_blow.attacker_name {
             if let Some(item_name) = &killing_blow.attacker_item_name {

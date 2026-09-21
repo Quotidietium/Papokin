@@ -38,6 +38,7 @@ use crate::world::loot::LootContextParameters;
 use crossbeam::atomic::AtomicCell;
 use pumpkin_data::AttributeModifierSlot;
 use pumpkin_data::attributes::Attributes;
+use pumpkin_data::damage_ext::ResolvedDamageType;
 use pumpkin_data::data_component_impl::Operation;
 use pumpkin_data::data_component_impl::food::{ConsumableImpl, ConsumeEffect};
 use pumpkin_data::data_component_impl::{
@@ -112,7 +113,7 @@ pub struct LivingEntity {
     pub last_attacker_id: AtomicI32,
     /// The tick at which this entity was last attacked (entity age).
     pub last_attacked_time: AtomicI32,
-    last_damage_type: std::sync::Mutex<Option<DamageType>>,
+    last_damage_type: std::sync::Mutex<Option<ResolvedDamageType>>,
     last_damage_stamp: std::sync::atomic::AtomicI64,
 
     /// The entity ID of the entity this living entity last attacked.
@@ -1952,7 +1953,7 @@ impl LivingEntity {
     /// translation and fills in the victim and killer display names.
     pub fn get_death_message(
         dyn_self: &dyn EntityBase,
-        damage_type: DamageType,
+        damage_type: &ResolvedDamageType,
         source: Option<&dyn EntityBase>,
         cause: Option<&dyn EntityBase>,
     ) -> TextComponent {
@@ -1971,8 +1972,8 @@ impl LivingEntity {
             && source.is_some()
         {
             TextComponent::translate_cross(
-                format!("death.attack.{}", damage_type.message_id),
-                format!("death.attack.{}", damage_type.message_id),
+                format!("death.attack.{}", damage_type.message_id()),
+                format!("death.attack.{}", damage_type.message_id()),
                 [dyn_self.get_display_name(), cause.get_display_name()],
             )
         } else if let Some(killer) = cause
@@ -1981,14 +1982,14 @@ impl LivingEntity {
             .or(kill_credit_name)
         {
             TextComponent::translate_cross(
-                format!("death.attack.{}.player", damage_type.message_id),
-                format!("death.attack.{}.player", damage_type.message_id),
+                format!("death.attack.{}.player", damage_type.message_id()),
+                format!("death.attack.{}.player", damage_type.message_id()),
                 [dyn_self.get_display_name(), killer],
             )
         } else {
             TextComponent::translate_cross(
-                format!("death.attack.{}", damage_type.message_id),
-                format!("death.attack.{}", damage_type.message_id),
+                format!("death.attack.{}", damage_type.message_id()),
+                format!("death.attack.{}", damage_type.message_id()),
                 [dyn_self.get_display_name()],
             )
         }
@@ -2001,7 +2002,7 @@ impl LivingEntity {
     #[allow(clippy::too_many_lines)]
     pub fn on_death(
         &self,
-        damage_type: DamageType,
+        damage_type: &ResolvedDamageType,
         source: Option<&dyn EntityBase>,
         cause: Option<&dyn EntityBase>,
     ) {
@@ -2072,7 +2073,9 @@ impl LivingEntity {
                 direct_killer_entity: source.map(|s| s.get_entity().entity_type),
                 position: Some(self.entity.pos.load()),
                 world_time: world.level_info.load().day_time as u64,
-                damage_type: Some(damage_type),
+                // Loot conditions only know vanilla damage types; custom types
+                // match no damage-type-dependent predicate.
+                damage_type: damage_type.vanilla(),
                 tool,
                 is_raining: Some(is_raining),
                 is_thundering: Some(is_thundering),
@@ -2115,9 +2118,12 @@ impl LivingEntity {
                     .map(|e| (e.effect_type, e.amplifier))
                     .collect()
             };
+            // The effect hook takes a static damage type but no current
+            // implementation reads it; custom types degrade to GENERIC.
+            let effect_damage_type = damage_type.vanilla_or(DamageType::GENERIC);
             for (effect_type, amplifier) in active_effects_vec {
                 if let Some(mob_effect) = crate::entity::effect::get_mob_effect(effect_type) {
-                    mob_effect.on_mob_death(self, amplifier, &damage_type);
+                    mob_effect.on_mob_death(self, amplifier, &effect_damage_type);
                 }
             }
 
@@ -2180,7 +2186,7 @@ impl LivingEntity {
     fn broadcast_death_message(
         &self,
         dyn_self: &dyn EntityBase,
-        damage_type: DamageType,
+        damage_type: &ResolvedDamageType,
         source: Option<&dyn EntityBase>,
         cause: Option<&dyn EntityBase>,
     ) {
@@ -2605,8 +2611,16 @@ impl LivingEntity {
             .unwrap_or_else(|| ItemStack::EMPTY.clone())
     }
 
-    /// Forgotten after 40 ticks.
+    /// Forgotten after 40 ticks. Custom damage types are not visible through
+    /// this accessor; use [`Self::get_last_resolved_damage_type`] for those.
     pub fn get_last_damage_type(&self) -> Option<DamageType> {
+        self.get_last_resolved_damage_type()
+            .and_then(|damage_type| damage_type.vanilla())
+    }
+
+    /// The damage type of the last confirmed hit, vanilla or custom.
+    /// Forgotten after 40 ticks.
+    pub fn get_last_resolved_damage_type(&self) -> Option<ResolvedDamageType> {
         let stamp = self.last_damage_stamp.load(Ordering::Relaxed);
         let mut last = self
             .last_damage_type
@@ -2615,7 +2629,7 @@ impl LivingEntity {
         if self.entity.world.load().get_world_age() - stamp > 40 {
             *last = None;
         }
-        *last
+        last.clone()
     }
 
     pub fn can_take_damage(&self) -> bool {
@@ -2841,7 +2855,7 @@ impl LivingEntity {
     pub fn get_damage_after_armor_absorb(
         &self,
         damage: f32,
-        damage_type: &DamageType,
+        damage_type: &ResolvedDamageType,
         attacker: Option<&dyn EntityBase>,
     ) -> f32 {
         if damage_type.has_tag(&tag::DamageType::MINECRAFT_BYPASSES_ARMOR) {
@@ -2894,7 +2908,7 @@ impl LivingEntity {
     pub fn get_damage_after_magic_absorb(
         &self,
         mut damage: f32,
-        damage_type: &DamageType,
+        damage_type: &ResolvedDamageType,
         caller: &dyn EntityBase,
         cause: Option<&dyn EntityBase>,
     ) -> f32 {
@@ -2961,9 +2975,9 @@ impl LivingEntity {
                         if enc == &Enchantment::PROTECTION {
                             if !damage_type
                                 .has_tag(&tag::DamageType::MINECRAFT_BYPASSES_INVULNERABILITY)
-                                && damage_type != &DamageType::STARVE
-                                && damage_type != &DamageType::GENERIC_KILL
-                                && damage_type != &DamageType::OUT_OF_WORLD
+                                && !damage_type.is(DamageType::STARVE)
+                                && !damage_type.is(DamageType::GENERIC_KILL)
+                                && !damage_type.is(DamageType::OUT_OF_WORLD)
                             {
                                 epf += lvl;
                             }
@@ -2997,11 +3011,11 @@ impl LivingEntity {
     }
 
     #[allow(clippy::too_many_lines)]
-    pub fn damage_with_context(
+    pub fn damage_with_resolved_context(
         &self,
         caller: &dyn EntityBase,
         amount: f32,
-        damage_type: DamageType,
+        damage_type: &ResolvedDamageType,
         position: Option<Vector3<f64>>,
         source: Option<&dyn EntityBase>,
         cause: Option<&dyn EntityBase>,
@@ -3009,7 +3023,7 @@ impl LivingEntity {
         let mut amount = amount;
 
         // Check invulnerability before applying damage
-        if self.entity.is_invulnerable_to(&damage_type) {
+        if self.entity.is_invulnerable_to_resolved(damage_type) {
             return false;
         }
 
@@ -3022,7 +3036,7 @@ impl LivingEntity {
         }
 
         let mut damage_event =
-            crate::plugin::api::events::entity::entity_damage::EntityDamageEvent::new(
+            crate::plugin::api::events::entity::entity_damage::EntityDamageEvent::new_resolved(
                 self.entity.entity_id,
                 damage_type,
                 amount,
@@ -3043,7 +3057,7 @@ impl LivingEntity {
                     entity_id: self.entity.entity_id,
                     damager_id: damager.get_entity().entity_id,
                     damage: amount,
-                    cause: format!("{damage_type:?}"),
+                    cause: damage_type_debug_name(damage_type),
                     cancelled: false,
                 };
             if let Some(server) = self.entity.world.load().server.upgrade() {
@@ -3058,11 +3072,13 @@ impl LivingEntity {
         } else if position.is_some()
             || matches!(
                 damage_type,
-                DamageType::CACTUS
-                    | DamageType::SWEET_BERRY_BUSH
-                    | DamageType::CAMPFIRE
-                    | DamageType::HOT_FLOOR
-                    | DamageType::STALAGMITE
+                ResolvedDamageType::Vanilla(
+                    DamageType::CACTUS
+                        | DamageType::SWEET_BERRY_BUSH
+                        | DamageType::CAMPFIRE
+                        | DamageType::HOT_FLOOR
+                        | DamageType::STALAGMITE
+                )
             )
         {
             let damager_pos = position.map(|p| {
@@ -3077,7 +3093,7 @@ impl LivingEntity {
                     entity_id: self.entity.entity_id,
                     damager_pos,
                     damage: amount,
-                    cause: format!("{damage_type:?}"),
+                    cause: damage_type_debug_name(damage_type),
                     cancelled: false,
                 };
             if let Some(server) = self.entity.world.load().server.upgrade() {
@@ -3112,7 +3128,7 @@ impl LivingEntity {
         }
 
         // Vanilla parity: entities in FREEZE_HURTS_EXTRA_TYPES take 5x freezing damage.
-        if damage_type == DamageType::FREEZE
+        if damage_type.is(DamageType::FREEZE)
             && self
                 .entity
                 .entity_type
@@ -3219,18 +3235,18 @@ impl LivingEntity {
 
         // Vanilla parity: 1. Armor absorb
         let damage_after_armor =
-            self.get_damage_after_armor_absorb(amount, &damage_type, cause.or(source));
+            self.get_damage_after_armor_absorb(amount, damage_type, cause.or(source));
 
         let effective_amount = self.get_damage_after_magic_absorb(
             damage_after_armor,
-            &damage_type,
+            damage_type,
             caller,
             cause.or(source),
         );
 
         // These damage types bypass the hurt cooldown and death protection
         let bypasses_cooldown_protection =
-            damage_type == DamageType::GENERIC_KILL || damage_type == DamageType::OUT_OF_WORLD;
+            damage_type.is(DamageType::GENERIC_KILL) || damage_type.is(DamageType::OUT_OF_WORLD);
 
         // Apply hurt cooldown logic
         let last_damage = self.last_damage_taken.load();
@@ -3253,7 +3269,7 @@ impl LivingEntity {
         *self
             .last_damage_type
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(damage_type);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(damage_type.clone());
         self.last_damage_stamp.store(world.get_world_age(), Relaxed);
 
         let Some(server) = world.server.upgrade() else {
@@ -3284,7 +3300,7 @@ impl LivingEntity {
 
         world.broadcast_damage_event(
             &self.entity,
-            i32::from(damage_type.id),
+            i32::from(damage_type.network_id()),
             source.map(|e| e.get_entity().entity_id),
             cause.map(|e| e.get_entity().entity_id),
             position,
@@ -3372,8 +3388,8 @@ impl LivingEntity {
 
         if dmg_to_health > 0.0 {
             if let Some(player) = caller.get_player() {
-                if damage_type.exhaustion > 0.0 {
-                    player.add_exhaustion(damage_type.exhaustion);
+                if damage_type.exhaustion() > 0.0 {
+                    player.add_exhaustion(damage_type.exhaustion());
                 }
                 player.increment_stat(
                     StatisticCategory::Custom,
@@ -3424,7 +3440,7 @@ impl LivingEntity {
                     self.health.load() > 0.0 && !self.dead.load(Relaxed),
                     fall_distance,
                     fall_location,
-                    damage_type,
+                    damage_type.clone(),
                     effective_amount,
                     source,
                     cause,
@@ -3449,6 +3465,39 @@ impl LivingEntity {
         true
     }
 
+    /// Deals damage with a vanilla damage type. This is a thin wrapper around
+    /// [`Self::damage_with_resolved_context`]; the resolved entry point also
+    /// accepts plugin-registered custom damage types.
+    pub fn damage_with_context(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: DamageType,
+        position: Option<Vector3<f64>>,
+        source: Option<&dyn EntityBase>,
+        cause: Option<&dyn EntityBase>,
+    ) -> bool {
+        self.damage_with_resolved_context(
+            caller,
+            amount,
+            &ResolvedDamageType::Vanilla(damage_type),
+            position,
+            source,
+            cause,
+        )
+    }
+
+    /// Deals damage with a resolved (vanilla or plugin-registered custom)
+    /// damage type.
+    pub fn damage_resolved(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: &ResolvedDamageType,
+    ) -> bool {
+        self.damage_with_resolved_context(caller, amount, damage_type, None, None, None)
+    }
+
     pub fn damage(&self, caller: &dyn EntityBase, amount: f32, damage_type: DamageType) -> bool {
         self.damage_with_context(caller, amount, damage_type, None, None, None)
     }
@@ -3465,6 +3514,18 @@ impl EntityBase for LivingEntity {
         cause: Option<&dyn EntityBase>,
     ) -> bool {
         self.damage_with_context(caller, amount, damage_type, position, source, cause)
+    }
+
+    fn damage_with_resolved_context(
+        &self,
+        caller: &dyn EntityBase,
+        amount: f32,
+        damage_type: &ResolvedDamageType,
+        position: Option<Vector3<f64>>,
+        source: Option<&dyn EntityBase>,
+        cause: Option<&dyn EntityBase>,
+    ) -> bool {
+        self.damage_with_resolved_context(caller, amount, damage_type, position, source, cause)
     }
 
     fn tick_in_void(&self, dyn_self: &dyn EntityBase) {
@@ -3930,6 +3991,16 @@ impl LivingEntity {
         }
 
         None
+    }
+}
+
+/// Debug name of a damage type for the plugin event "cause" strings: the
+/// static struct debug for vanilla types (unchanged from before custom damage
+/// types existed), the namespaced id for custom ones.
+fn damage_type_debug_name(damage_type: &ResolvedDamageType) -> String {
+    match damage_type {
+        ResolvedDamageType::Vanilla(vanilla) => format!("{vanilla:?}"),
+        ResolvedDamageType::Custom(custom) => format!("Custom({})", custom.name),
     }
 }
 
