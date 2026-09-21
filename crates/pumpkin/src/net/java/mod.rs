@@ -55,6 +55,7 @@ use tracing::{debug, error, warn};
 
 pub mod chunk_data;
 pub mod config;
+pub mod cookie;
 pub mod handshake;
 pub mod login;
 pub mod pending;
@@ -65,6 +66,7 @@ pub mod status;
 pub use chunk_data::{CChunkData, ChunkLightExt};
 
 use arc_swap::ArcSwap;
+use cookie::CookieStore;
 use pending::PendingConnection;
 
 use crate::entity::player::Player;
@@ -132,6 +134,10 @@ pub struct JavaClient {
     pub packet_sequence: AtomicI32,
     /// Packet rate limiter for incoming client packets.
     pub packet_limiter: PacketRateLimiter,
+    /// Server-side cache of the cookies this client has reported (carried
+    /// over from the pending connection, so cookies sent during login or
+    /// configuration remain visible in play).
+    pub cookies: CookieStore,
 }
 
 pub enum OutgoingPacketType {
@@ -265,6 +271,7 @@ impl JavaClient {
             pending_keep_alives: std::sync::Mutex::new(Vec::new()),
             packet_sequence: AtomicI32::new(-1),
             packet_limiter: pending.packet_limiter,
+            cookies: pending.cookies,
         }
     }
 

@@ -1,0 +1,60 @@
+/// Client cookie storage, the equivalent of Paper's 1.20.5+ ClientCookie API.
+///
+/// Cookies are small blobs (at most 5120 bytes, the vanilla 5 KiB limit) the
+/// server stores on a Java Edition client; the client persists them across
+/// server transfers and hands them back when the server asks. Typical uses
+/// are session tokens and per-player preferences that must survive a proxy
+/// transfer.
+///
+/// Every function takes the player whose client is addressed. Cookies are a
+/// Java Edition protocol feature: for Bedrock players `store-cookie`,
+/// `request-cookie` and `clear-cookie` return an error and `get-cookie`
+/// returns `none`.
+///
+/// `store-cookie` and `request-cookie` send play-phase clientbound packets,
+/// so they only reach a fully connected (in-game) player. `get-cookie` never
+/// sends a packet: it reads the server-side cache of cookie responses the
+/// client has sent since connecting (responses can arrive during the login
+/// and configuration phases too and are carried over). A key therefore only
+/// appears in `get-cookie` once a `request-cookie` round trip has completed.
+interface cookie {
+    use player.{player};
+
+    /// Stores a cookie on the player's client.
+    ///
+    /// `key` must be a valid resource identifier: `namespace:path`, or a
+    /// plain path (which vanilla treats as the `minecraft` namespace), using
+    /// only lowercase letters, digits and `_ . -` (the path may also use
+    /// `/`). `payload` must not exceed 5120 bytes; the call fails instead of
+    /// truncating.
+    ///
+    /// # Errors
+    /// Returns an error when the key is not a valid identifier, the payload
+    /// exceeds the vanilla limit, or the player is a Bedrock client.
+    store-cookie: func(player: borrow<player>, key: string, payload: list<u8>) -> result<_, string>;
+
+    /// Asks the player's client for the cookie stored under `key`.
+    ///
+    /// The request is asynchronous on the wire: when the client's response
+    /// arrives it is placed in the server-side cache, readable with
+    /// `get-cookie`.
+    ///
+    /// # Errors
+    /// Returns an error when the key is not a valid identifier or the player
+    /// is a Bedrock client.
+    request-cookie: func(player: borrow<player>, key: string) -> result<_, string>;
+
+    /// Returns the cached value of the cookie `key` for this player, or
+    /// `none` when the client has not reported one (yet). Never sends a
+    /// packet. Bedrock players always yield `none`.
+    get-cookie: func(player: borrow<player>, key: string) -> option<list<u8>>;
+
+    /// Clears the cookie `key`: drops it from the server-side cache and
+    /// overwrites the client's copy with an empty payload (vanilla has no
+    /// dedicated delete packet, so an empty store is the clear signal).
+    ///
+    /// # Errors
+    /// Returns an error when the key is not a valid identifier or the player
+    /// is a Bedrock client.
+    clear-cookie: func(player: borrow<player>, key: string) -> result<_, string>;
+}

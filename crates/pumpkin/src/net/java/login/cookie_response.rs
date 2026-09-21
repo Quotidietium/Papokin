@@ -8,5 +8,6 @@ impl PendingConnection {
             packet.key,
             packet.payload.as_ref().map(|p| p.len())
         );
+        super::super::cookie::apply_cookie_response(&self.cookies, packet.key, packet.payload);
     }
 }

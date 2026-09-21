@@ -41,6 +41,7 @@ use crate::{
 };
 
 use super::JavaClient;
+use super::cookie::CookieStore;
 
 const BRAND_CHANNEL_PREFIX: &str = "minecraft:brand";
 
@@ -69,6 +70,10 @@ pub struct PendingConnection {
     pub packet_limiter: PacketRateLimiter,
     pub verify_token: Option<[u8; 4]>,
     pub vine_challenge: Option<[u8; 16]>,
+    /// Server-side cache of the cookies this client has reported during the
+    /// login and configuration phases. Moved onto the `JavaClient` when the
+    /// connection enters play.
+    pub cookies: CookieStore,
 }
 
 impl PendingConnection {
@@ -95,6 +100,7 @@ impl PendingConnection {
             packet_limiter,
             verify_token: None,
             vine_challenge: None,
+            cookies: super::cookie::new_cookie_store(),
         }
     }
 
@@ -581,5 +587,6 @@ impl PendingConnection {
             packet.key,
             packet.payload.as_ref().map(|p| p.len())
         );
+        super::cookie::apply_cookie_response(&self.cookies, packet.key, packet.payload);
     }
 }
