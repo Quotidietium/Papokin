@@ -2672,14 +2672,6 @@ const fn to_wasm_item_frame_action(action: ItemFrameAction) -> WasmItemFrameActi
     }
 }
 
-const fn from_wasm_item_frame_action(action: WasmItemFrameAction) -> ItemFrameAction {
-    match action {
-        WasmItemFrameAction::Place => ItemFrameAction::Place,
-        WasmItemFrameAction::Remove => ItemFrameAction::Remove,
-        WasmItemFrameAction::Rotate => ItemFrameAction::Rotate,
-    }
-}
-
 const fn to_wasm_handshake_intention(intention: HandshakeIntention) -> WasmHandshakeIntention {
     match intention {
         HandshakeIntention::Status => WasmHandshakeIntention::Status,
