@@ -148,23 +148,27 @@ impl RandomTickSectionCache {
 }
 
 impl ChunkSections {
-    #[cfg(test)]
+    /// Copies every block state ID of the chunk, section by section from the
+    /// bottom up. Within a section entries are ordered Y-major, then Z, then X.
+    /// Used for copy-on-read snapshots.
     #[must_use]
     pub fn dump_blocks(&self) -> Vec<BlockStateId> {
         self.block_sections
             .read()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .flat_map(|section| section.iter())
             .collect()
     }
 
-    #[cfg(test)]
+    /// Copies every biome ID of the chunk (4x4x4 quart resolution per section),
+    /// section by section from the bottom up. Within a section entries are
+    /// ordered Y-major, then Z, then X.
     #[must_use]
     pub fn dump_biomes(&self) -> Vec<u8> {
         self.biome_sections
             .read()
-            .unwrap()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
             .flat_map(|section| section.iter())
             .collect()
