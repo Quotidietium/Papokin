@@ -109,7 +109,14 @@ impl HostItemStack for PluginHostState {
     ) -> wasmtime::Result<String> {
         let stack = self.get_item_stack(&res)?;
         let stack = stack.lock().await;
-        Ok(stack.item.registry_key.to_string())
+        // pumpkin-data stores vanilla keys bare ("emerald"); the WIT contract
+        // documents the namespaced resource-location form ("minecraft:emerald").
+        let key = stack.item.registry_key;
+        Ok(if key.contains(':') {
+            key.to_string()
+        } else {
+            format!("minecraft:{key}")
+        })
     }
 
     async fn get_count(&mut self, res: Resource<ItemStackHandle>) -> wasmtime::Result<u8> {
