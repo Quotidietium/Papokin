@@ -118,3 +118,61 @@ E2E tick-event flowing (20 ticks observed)                  ← 事件分发链�
 ## 八、勘误（2026-09-20 复核补记）
 
 §四"⑫ EntityScheduler 的 e2e 边界"中"WIT 无世界级实体枚举/生成接口，`Entity` 资源只能从事件获得"的论断**有误**：`world.wit` 的 `spawn-entity`（:901）与 `get-entities`（:904）随 subtree 导入即存在，宿主实现为真（`wit/v0_1/world.rs:952,1289`）。实体绑定任务的触发/跳过路径**可以无头 e2e**：`world.spawn_entity` 生成实体 → 绑定 repeating 任务 → `entity.remove()` → 断言日志停止。覆盖复核全文见 [13-插件API覆盖复核](13-插件API覆盖复核-当前代码vs-Papo.md)。
+
+## 九、第三轮：机制级全覆盖收官（2026-09-21）
+
+目标：把 note/13 复核确认的最大剩余缺口（Registry/Tag 体系）与全部长尾机制一次推平，达成 Papo 插件 API 机制级全覆盖。验证标准不变：fmt/clippy 0 错误/test 全绿 **+ e2e wasm 实跑**；双版本（Java/Bedrock）完整；`PLUGIN_API_VERSION` 3→4；WIT v0.1 继续直接演进。
+
+### 9.1 交付总览
+
+| 批次 | 机制 | 关键实现 | 状态 |
+|---|---|---|---|
+| T1a | 运行时注册表（synced registry） | `server/registry.rs` `RegistryManager`：冻结窗口内 `register(domain,name,nbt)`，`custom_network_id = vanilla_count + index`（按版本缓存），known-packs 登录+配置双注入 | ✅ 7 单测 |
+| T1bc | 自定义魔咒 | intern 表（leaked `&'static Enchantment`，id=43+index 即网络 id）；codec 桥 `set_custom_ids/custom_id/custom_name`；生成代码零改动；`item_stack.rs` UB 修复 | ✅ 21 使用点零跟进 |
+| T1d | 自定义伤害类型 | `ResolvedDamageType::{Vanilla,Custom}` 双轨 + `DamageTypeManager`（51+index）；`damage_with_resolved_context` 新路径，50 处 vanilla 调用点零改动；`damage-by-name` 按名伤害 | ✅ 9 单测 |
+| T1e | 标签叠加 | `TagManager` 名称址叠加 + 静态表合并快照（按版本预计算）；自定义条目经 `custom_network_id` 原样入标签；**Bedrock 无标签推送机制（协议 N/A）** | ✅ 16 单测 |
+| T1f | 三管理器 API 面 | `server.get_{damage_type,tag,registry}_manager()`（同 enchantment-manager 模式），host 推 `Arc<Manager>` 入资源表 | ✅ |
+| T3 | 事件接线 92 臂 | context.rs 全限定路径注册（45 player + 26 entity + 8 block + 5 world + 8 server）+ witch 三事件 + 4 个跨域 fire 点（sign-command-preprocess、attempt-smash-attack 否决回退、connection-close 双版本、naturally-spawn-creatures 最近非旁观玩家） | ✅ cleanup.rs 同步扩臂 |
+| T4 | Merchant / Chunk / Entity 长尾 | 村民+流浪商人 offers CRUD（流浪商人补重发管线）；区块快照分页转储 + `set_chunk_forced` 唤醒沉睡 force-ticket 机制（修掉强加载区块被卸载的真 bug）；spawn-category / entity-snapshot（NBT 往返）/ brain-memory 只读 | ✅ |
+| T5 | Structure / MapView / LootTable | 运行时模板缓存注册 + `place_template_with_options` mirror 参数；MapView Java 全套（含 `locked` 地图不再被地形管线覆盖的 vanilla 缺口修复）；`loot.wit` 四函数（只映射生成管线真实消费的 4 个上下文字段） | ✅ |
+| T6 | CombatTracker / DragonBattle / cookie | living-entity 六只读查询；`dragon.wit` 龙战资源（Weak\<World\> 句柄 + Mutex\<DragonFight\> 调用内锁）；cookie 存储挂 PendingConnection 经 `from_pending` 移交 JavaClient，跨 login→config→play | ✅ |
+| Bedrock | 地图包考据与实现 | 见 §9.2 | ✅ 金标准字节测试 |
+
+### 9.2 Bedrock ClientboundMapItemData 考据（0x43）
+
+**结论先行**：Papokin Bedrock = 协议 2169/2193 ↔ MC 1.26.45（`status.rs` 实证）；1.26.40 起 UpdateFlags 位域废除，各节独立 optional。权威线序取 CloudburstMC Protocol 3.0 的 `ClientboundMapItemDataSerializer_v2168`（v2169/v2193 无更新序列化器直接继承），gophertunnel 与 prismarine-data proto.yml 交叉一致：
+
+```
+map_id VarLong · dimension u8 · locked bool · origin BlockPos(VarInt×3)
+tracked_entity_ids Opt<[VarLong]>   ← Geyser 恒发 [map_id]（1.19.50 必需）
+scale Opt<u8> · tracked_objects Opt<[type i32LE + 两 optional 成员]>
+decorations Opt<[image u8, rotation u8, x u8, y u8, label String, color i32LE]>
+width/height/x_offset/y_offset Opt<VarInt> · colors Opt<[i32LE]>
+```
+
+**像素线序定论**（曾三方矛盾）：colors 元素 = ABGR int（`0xAABBGGRR`）小端 → 线上字节 R,G,B,A——Geyser `MapColor.getABGR()` + Cloudburst `writeIntLE` 双实证；gophertunnel `BEARGB` 是另一内存约定殊途同归。装饰色用 ARGB（Geyser `toARGB`，与像素布局不同，照抄）。Java 色字节→ABGR：base=id>>2（0 全透明），shade=id&3，乘 vanilla 亮度表 [180,220,255,135]/255 地板除（对 Geyser 金色条目单测断言）。
+
+**图标映射**：Java `MapDecorationType` 0..41 → Bedrock image 0..24，照 Geyser `BedrockMapIcon`（frame→7、target_x→4 黑、banner×16→13+染料 RGB、red_x→4、trial_chambers→24，1.21.11 新增无图类型回落白标）。**Bedrock 客户端每个装饰必须配一个 tracked object**（伪 entity id=下标），否则不渲染图标。origin 发 (0,0,0)（1.19.20 必需）。装饰 x/y：Java i8 直接 `as u8`（补码重解释）。
+
+落点：`bedrock/client/map_item_data.rs`（手写 PacketWrite——derive 不给 `Option<Vec<T>>` 写计数；两则金标准字节测试锁线序）、`world/map.rs` `bedrock_map_packet + map_color_to_abgr + bedrock_icon`、`send_to_holders`/`tick_maps` 改 `try_enqueue_packet_editioned` 双版本发送。
+
+### 9.3 实跑暴露并修复的真 bug
+
+1. **`get-registry-key` 违反 WIT 契约**（e2e merchant 段暴露）：host 直出 pumpkin-data 裸键（`"emerald"`），契约文档与 SDK `IntoItemKey` 均为命名空间形式（`"minecraft:emerald"`）——任何插件按文档比对注册键必然失败。修为无冒号时补 `minecraft:` 前缀。
+2. **强加载区块被卸载**：force-ticket 机制早已存在但从未被调用；`World::set_chunk_forced` 接上票据同步，从源头阻止卸载。
+3. **locked 地图被地形管线覆盖**：vanilla 语义缺口，`MapData::update()` 对 locked 直接返回（插件画布不被冲刷）。
+4. **女巫三事件 fire 点**语义：throw 取消→无弹射物；consume 取消→效果不应用但仍消耗；ready 取消→不装备不饮用。
+
+### 9.4 门禁与 e2e 终版（2026-09-21）
+
+- `cargo fmt --all -- --check` 清洁；`cargo clippy --workspace --all-targets` **0 错误**；`cargo test --workspace` **1059 通过 0 失败**（39 ignored 为需真机 gametest）。
+- e2e 无头实跑（`target/e2e-run`，新编服务端 + 新编 wasm）：**40 个 E2E 标记、零失败类**。机制标记全绿：`registry-summary`（三管理器 true）、`loot-generate`（7 stacks/14 items + zombie context Ok(2)）、`combat-queries`（0→1 入队、`last_damage_type=Some("generic")`）、`map-view`（roundtrip=true）、`chunk-snapshot`（24 段 98304 状态）、`structure-registered-and-queryable`/`structure-placed`、`merchant-trade-offer-builder`、`dragon-fight`（三世界路径）、`cookie-api-ready`、`brain-memory-query`、`entity-snapshot-roundtrip`、`spawn-category-mapped`。
+- **e2e 无头化改造**：原 join 门控的 4 个实体/战斗标记改为 `on_enable` 内 `spawn_entity(Zombie)` 驱动（living-entity 资源挂 `damage-by-name` + 六查询）；join 路径保留玩家专属半边（player=MISC、玩家快照拒绝、evt-* 六事件、join 优先级、plugin-message）——这些仍需真实客户端，与 §四同口径。
+- WIT 规模：58 个 .wit、997 函数；事件 273→368 种。
+
+### 9.5 遗留（诚实清单）
+
+1. `LootGenerateEvent` 事实死代码：fire 点入口零调用者，10+ 真实生成路径（箱/掉落/钓鱼…）绕过统一入口；payload（仅表 key）与生成签名（seed/上下文）不匹配，汇聚需跨模块设计，另案处理。钓鱼未接战利品表（源码 TODO）。
+2. cookie：config 阶段发包路径未暴露（Player 资源 play 相位才存在）；请求-响应无事务关联（同 Paper）；无响应到达事件。
+3. 脑记忆只读（无 set 面）；结构放置不含实体；区块快照不含光照/高度图；强加载票据不落盘；`damage-by-name` 事件数据尚不回传自定义伤害类型名。
+4. `list-loot-tables` 需 pumpkin-data 先提供枚举 API；Bedrock 登录期 validate/whitelist 事件待协议面成熟。

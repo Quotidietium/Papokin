@@ -202,15 +202,17 @@ context.register_event_handler(
 
 ### 4.3 事件目录
 
-WIT `event.wit` 的 `event` variant 定义了 **273 种事件类型**，覆盖：
+WIT `event.wit` 的 `event` variant 定义了 **368 种事件类型**，覆盖：
 
 | 域 | 示例 |
 |---|---|
-| 玩家 | PlayerJoin/Leave/Login/PreLogin、AsyncPlayerChat（可改 format）、PlayerCommandPreprocess、PlayerMove/Teleport、PlayerPortal、PlayerExpCooldownChange、PlayerShow/HideEntity、PlayerTakeLecternBook |
-| 实体 | CreatureSpawn（含 BREEDING/NATURAL/CHUNK_GENERATION 原因）、EntityDamage/ByEntity/ByBlock、EntityDeath、EntityCombust*、EntityKnockback*、EntityPortalEnter/Exit、EntitySpellCast、SlimeSplit、SheepDyeWool |
-| 方块/世界 | BlockBreak/Place、BlockFade、BlockMultiPlace（多格）、BlockDispense*、BlockReceiveGameEvent、FluidLevelChange、CauldronLevelChange、ChunkLoad/Send、TNTPrime（5 种点火原因）、BellRing、MapInitialize |
+| 玩家 | PlayerJoin/Leave/Login/PreLogin、AsyncPlayerChat（可改 format）、PlayerCommandPreprocess、SignCommandPreprocess、PlayerMove/Teleport、PlayerPortal、PlayerExpCooldownChange、PlayerShow/HideEntity、PlayerTakeLecternBook、PlayerHandshake、PlayerJump、PlayerPurchase/Trade、AttemptSmashAttack、ConnectionClose |
+| 实体 | CreatureSpawn（含 BREEDING/NATURAL/CHUNK_GENERATION 原因）、NaturallySpawnCreatures、EntityDamage/ByEntity/ByBlock、EntityDeath、EntityCombust*、EntityKnockback*、EntityPortalEnter/Exit、EntitySpellCast、SlimeSplit、SheepDyeWool、WitchThrowPotion/ConsumePotion/ReadyPotion |
+| 方块/世界 | BlockBreak/Place、BlockFade、BlockMultiPlace（多格）、BlockDispense*、BlockReceiveGameEvent、FluidLevelChange、CauldronLevelChange、ChunkLoad/Send、TNTPrime（5 种点火原因）、BellRing、MapInitialize、LootGenerate* |
 | 交互 | HangingBreak/ByEntity、ItemMerge、PlayerInteract 系、Inventory* 系 |
 | 服务端 | ServerTickStart、GameEvent、Raid*、Vehicle* |
+
+（* LootGenerate 已注册分发但 vanilla 生成路径未汇聚，见 §16.4。）
 
 已知**不可接线**的 9 个事件（底层 vanilla 机制缺失，见 note/11 §三）：SculkBloom、BellResonate、VaultDisplayItem、EntityBlockForm、EntityTargetBlock、ExpBottle、HorseJump、ArrowBodyCountChange、PlayerArmorStandManipulate。
 
@@ -483,20 +485,24 @@ entity.has_custom_data("myplugin", "title");          // bool
 
 ## 十一、世界 / 实体 / 玩家操作
 
-WIT 侧最大的一块 API 面（函数数：`world` 252 · `block-entity` 172 · `player` 127 · `item-stack` 28 · `inventory` 28 · `server` 64）。
+WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 120 · `item-stack` 28 · `inventory` 28 · `server` 70）。
 
-### 11.1 Server（64 个方法）
+### 11.1 Server（70 个方法）
 
-- **玩家**：`get_all_players / get_player_by_name / get_player_by_uuid`、`get_player_count`、`get_players_in_world`
+- **玩家**：`get_all_players / get_player_by_name / get_player_by_uuid`、`get_player_count`、`get_players_in_world`、`get_offline_player_by_uuid`
 - **世界**：`get_all_worlds / get_world_by_name / has_world / create_world / unload_world / save_all`
-- **管理器**：`get_op_manager / get_ban_manager / get_whitelist_manager`（封禁/白名单/OP 全套 CRUD）、`get_recipe_manager / get_enchantment_manager / get_advancement / get_datapack_manager`
+- **管理器**：`get_op_manager / get_ban_manager / get_whitelist_manager`（封禁/白名单/OP 全套 CRUD）、`get_recipe_manager / get_enchantment_manager / get_advancement / get_datapack_manager`、**`get_registry_manager / get_tag_manager / get_damage_type_manager`**（§11.6）
 - **运行状态**：`get_mspt / get_tps / get_difficulty / get_max_players / get_motd / get_view_distance / get_simulation_distance / get_default_gamemode`
 - **操作**：`execute_command(cmd, sender)`、`broadcast(message)`、`set_server_links`、`delete_message_*`（聊天签名删除）
 
 ### 11.2 World
 
 - 方块：`get_block_state / set_block_state / set_block_by_name / get_block / set_block`（`BlockFlags` 控制更新）
-- 区块：`get_chunk(x, z)`；`get_top_block_y / get_motion_blocking_height` 高度查询
+- 区块：`get_chunk(x, z)`；`get_top_block_y / get_motion_blocking_height` 高度查询；**`chunk.rs` 区块机制**：`chunk_snapshot`（方块/生物群系分页转储）、`set_chunk_persistent / load_chunk_async / get_chunk_live / set_chunk_forced`（强加载票据防卸载）
+- 结构：`place_structure(name, pos, mirror, rotation)` + `structure.rs`：`register_structure / has_structure / list_structures`（运行时模板缓存，与 `/place template` 同源）
+- 地图：`create_map / get_map` → `MapView`（`map.rs`，§11.7）
+- 战利品：`loot.rs`：`generate_loot / generate_loot_with_context / fill_inventory / has_loot_table`（§11.8）
+- 龙战：`get_dragon_fight()` → `DragonFight`（`dragon.rs`，仅末地返回 `Some`，§11.9）
 - 环境：`get/set_time_of_day`、`is_raining / set_raining / is_thundering`、`get_spawn_location`、`get_border`（世界边界）
 - 表现：`broadcast_system_message`、`play_sound`、`get_scoreboard`
 - 尺寸：`get_dimension`
@@ -505,14 +511,15 @@ WIT 侧最大的一块 API 面（函数数：`world` 252 · `block-entity` 172 �
 
 ### 11.3 Entity / LivingEntity / Mob
 
-- 通用（entity 资源）：位置/朝向/速度、`teleport`、fire ticks、fall distance、custom name、invulnerable、pose、vehicle/passengers、`as_living` 向下转型、`get_nearby_entities(x,y,z)`、`get_target_entity(max_distance)` 射线选实体
-- LivingEntity：血量、装备、药水效果、伤害/击杀路径
-- Mob：AI 目标（§十二）、`set_target` 目标选择
+- 通用（entity 资源）：位置/朝向/速度、`teleport`、fire ticks、fall distance、custom name、invulnerable、pose、vehicle/passengers、`as_living` 向下转型、`get_nearby_entities(x,y,z)`、`get_target_entity(max_distance)` 射线选实体、`get_spawn_category`、`create_snapshot()` + `world.spawn_entity_from_snapshot`（NBT 序列化/重建，玩家类型按 vanilla 拒绝）
+- LivingEntity：血量、装备、药水效果、伤害/击杀路径；`damage(amount, type)` / `damage_by_name(amount, name)`（支持插件注册的自定义伤害类型）；**战斗追踪器六查询**（combat）：`get_combat_entries / get_killer / is_in_combat / get_combat_duration_ms / get_last_damage_type_name / has_player_attacker`
+- Mob：AI 目标（§十二）、`set_target` 目标选择；**脑记忆只读查询**（Bukkit MemoryKey 等价）：`list_brain_memories / get_brain_memory(key)`（`mobs::memory_keys` 常量）
+- 村民/流浪商人（`merchant.rs`）：`Entity::as_merchant` → `Merchant::{get,set,add,remove}_trade_offers`，`TradeOfferBuilder`（vanilla 默认值流式构造）
 - 类型特化数据（`mobs.rs`）：`CreeperData / SlimeData / VillagerData / WolfData / SheepData …`，配套 `MobCast` 下转型 + `get_data/set_data`
 
 ### 11.4 Player
 
-127 个方法：物品栏/末影箱（`PlayerEnderChestExt`）、冷却（`PlayerCooldownExt`）、计分板队伍（`PlayerTeamExt`）、属性（attributes）、药水/状态效果、表单/对话框（forms / java-dialogs）、声音/粒子、传送、权限检查等。
+120 个方法：物品栏/末影箱（`PlayerEnderChestExt`）、冷却（`PlayerCooldownExt`）、计分板队伍（`PlayerTeamExt`）、属性（attributes）、药水/状态效果、表单/对话框（forms / java-dialogs）、声音/粒子、传送、权限检查、**客户端 cookie**（`cookie.rs`：`store_cookie / request_cookie / get_cookie / clear_cookie`，Bedrock 安全降级）等。
 
 ### 11.5 方块与物品
 
@@ -521,6 +528,25 @@ WIT 侧最大的一块 API 面（函数数：`world` 252 · `block-entity` 172 �
 - `block-entity`（172 函数）：箱子/熔炉/讲台等容器方块实体的读写
 - `data-components`：1.21 数据组件面
 - `enchantments / potions / status-effect / damage-types / entity-statuses / statistics / recipe / advancement`：对应 vanilla 系统的查询与操作
+
+### 11.6 注册表 / 标签 / 伤害类型（运行时扩展面）
+
+- **`RegistryManager`**（`registry.rs`）：`register(domain, name, nbt)` 在冻结窗口（世界加载完成前）向 vanilla 同步注册表注入自定义条目，登录/配置阶段随 known-packs 同步给客户端；`custom_network_id = vanilla_count + index`
+- **`TagManager`**（`tag.rs`）：名称址标签叠加层（与静态表合并快照）；`add_to_tag / get_values / is_in_tag`；自定义注册表条目经 `custom_network_id` 直接入标签。Bedrock 无标签推送机制（协议层 N/A，非缺口）
+- **`DamageTypeManager`**（`damage_type.rs`）：`DamageTypeBuilder` 注册自定义伤害类型（network_id=51+index），`LivingEntity::damage_by_name` 直接消费；50 处 vanilla 伤害调用点零改动
+- **`EnchantmentManager`**（`enchantment.rs`）：自定义魔咒经 intern 表获得网络 id（43+index），物品堆 codec 桥 `set_custom_ids / custom_id / custom_name`
+
+### 11.7 MapView 地图渲染（`map.rs`）
+
+`world.create_map(x, z, scale)` 或 `get_map(id)` 取得 `MapView`：`set_pixel / get_pixel`（`0xAARRGGBB`，宿主量化到地图调色板）、`set_colors_data / get_colors_data`（原始索引面）、`render_terrain`（无玩家上下文全幅地形渲染）、`lock / unlock`（锁定后地形管线不再覆盖插件绘制）、游标（`MapCursor` + `cursor_types` 35 常量）。**双版本**：Java 收 `CMapItemData`；Bedrock 收镜像的 `ClientboundMapItemData`（画布转 ABGR 像素、游标映射 Bedrock 装饰图，无 Bedrock 图的新类型回落白标）。
+
+### 11.8 战利品（`loot.rs`）
+
+`generate_loot(key, seed)` 纯数据生成（无头安全）；`generate_loot_with_context` 接受 `LootContext`（`luck / killed_by_player / explosion_radius / tool`——只暴露生成管线真实消费的字段）；`fill_inventory(key, seed, inventory)` 填 Generic 容器（箱/桶/运输矿车）；`has_loot_table(key)`。`LootGenerateEvent` 存在但 vanilla 生成路径未汇聚（见 §16.4）。
+
+### 11.9 龙战（`dragon.rs`）
+
+`world.get_dragon_fight()`（仅末地 `Some`）→ `DragonFight`：龙 uuid/存活、重生阶段查询与设置、曾击杀标记、存活水晶数、出口折跃门位置、`initiate_respawn / abort_respawn / reset_crystals / spawn_gateway / spawn_exit_portal(active) / spawn_crystals`。Boss 血条走既有 `boss-bar` 接口（不重包装）。
 
 ---
 
@@ -598,7 +624,16 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | `datapack.rs` | `DatapackInfo / DatapackManager / EnablePosition` |
 | `i18n` | 服务端翻译键（**按客户端版本翻译**） |
 | `text.rs` | `TextComponent` 构建器（chainable methods） |
-| `mobs.rs` | 生物特化数据 + `MobCast` 下转型 |
+| `mobs.rs` | 生物特化数据 + `MobCast` 下转型 + `memory_keys` 脑记忆常量 |
+| `map.rs`（17 函数） | MapView 地图渲染（§11.7，双版本） |
+| `structure.rs` | 运行时结构模板注册/查询/放置（§11.2） |
+| `loot.rs` | 战利品表查询/生成/填容器（§11.8） |
+| `dragon.rs`（14 函数） | 龙战状态与重生控制（§11.9） |
+| `merchant.rs` | 交易项 CRUD + `TradeOfferBuilder`（§11.3） |
+| `combat.rs` | 战斗追踪器查询 re-export + `PlayerCombatExt`（§11.3） |
+| `cookie.rs` | 客户端 cookie 存取（§11.4） |
+| `registry.rs` / `tag.rs` / `damage_type.rs` | 运行时注册表/标签/伤害类型管理器（§11.6） |
+| `chunk.rs` | 区块快照/持久化/异步加载/强加载（§11.2） |
 | `bedrock-packets` / `java-packets` | 底层包访问（高级用法） |
 | `game-rules` / `game-events` / `biomes` / `entity-types` / `attributes` | 各 vanilla 查询面 |
 
@@ -629,37 +664,51 @@ INFO E2E on_load ok  plugin.target=pumpkin_e2e_plugin  plugin.module=pumpkin_e2e
 ### 16.1 WIT 接口函数数（当前 0.1.0）
 
 ```
-world 252 · block-entity 172 · player 119 · server 64 · display 62
+world 282 · block-entity 172 · player 120 · server 70 · display 62
 text 28 · scoreboard 28 · item-stack 28 · inventory 28 · command 25
-plugin(exports) 17 · boss-bar 14 · gui 11 · datapack 9 · scheduler 7
-context 6 · services 4 · messaging 4 · enchantments 4 · recipe 3 · uuid 3
-log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余 23 个为类型/枚举定义接口
+plugin(exports) 17 · map 17 · dragon 14 · boss-bar 14 · gui 11
+datapack 9 · scheduler 7 · recipe 7 · context 6 · registry 5
+tag 4 · structure 4 · services 4 · messaging 4 · merchant 4 · loot 4
+enchantments 4 · damage-types 4 · cookie 4 · uuid 3
+log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余为类型/枚举定义接口
 ```
 
-（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-20 复核修正，见 note/13 §二。）
+（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-21 复核，共 58 个 .wit 文件、997 个函数。战斗六查询为 world 接口 living-entity 资源方法，计入 world。）
 
 ### 16.2 版本与兼容策略
 
-- `PLUGIN_API_VERSION = 3`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。
+- `PLUGIN_API_VERSION = 4`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：本轮 WIT 大扩面 + 事件布局变更。）
 - WIT 采用 **v0.1 直接演进**：允许破坏性变更（用户决策记录于 note/11）；新增函数对旧组件向后兼容（组件只导入其所需子集）。
 - 服务端版本：`0.1.0+1.21.11-26.51`；i18n 翻译按客户端版本执行。
 
 ### 16.3 端到端验证基线
 
-`examples/e2e-plugin` 实跑，7 个日志标记全绿即 API 链路健康：
+`examples/e2e-plugin` 实跑，无头起跑日志 40 个 `E2E` 标记、零失败类（`*-broken/-failed/-mismatch` 等）即 API 链路健康。机制标记（新增于本轮）：
 
 ```
-E2E on_load ok
-E2E service-registered-and-discovered provider=e2e-plugin
-E2E channel-registered channels=["pumpkin:e2e"]
-E2E config-loaded-and-merged len=56
-E2E on_enable ok
-E2E async-task-fired
-E2E tick-event flowing (20 ticks observed)
+E2E registry-summary damage-type=true tag=true entry=true   ← 三管理器
+E2E loot-generate stacks=7 items=14 zombie-stacks=Ok(2)     ← 战利品纯数据生成
+E2E combat-queries entries=0->1 ... last_damage_type=Some("generic")
+E2E map-view id=0 cursor_index=0 cursors=1 roundtrip=true
+E2E chunk-snapshot ... sections=24 ... all=98304            ← 区块分页转储
+E2E structure-registered-and-queryable / structure-placed
+E2E merchant-trade-offer-builder max_uses=16 xp=5 cost_b=true
+E2E spawn-category-mapped zombie=monster                    ← 无头 spawn 驱动
+E2E entity-snapshot-roundtrip bytes=.. fresh-uuid=true
+E2E brain-memory-query registered=.. unknown_is_none=true
+E2E dragon-fight-none / dragon-fight-api-ready world=world  ← 三世界路径
+E2E cookie-api-ready max_payload=5120
+E2E paper-events-registered / recipe-*-registered ×4 / registry-* ×5
 ```
+
+另有启动期基线 7 标记（on_load/services/channel/config/on_enable/async-task/tick-event）。
+需真实客户端的标记（join 优先级、`evt-*` 六事件、plugin-message、玩家快照拒绝）保持 join 门控，接入玩家后验证（见 §16.4）。
 
 ### 16.4 已知边界（诚实清单）
 
 - **9 个事件无 fire 点**（vanilla 机制缺失）：见 §4.3 与 note/11 §三；当前代码业务引用仍为 0（note/13 §三逐事件复核）。
+- **`LootGenerateEvent` 事实死代码**：fire 点挂在 `World::generate_loot`，但该入口全 workspace 零调用者；箱子/掉落/钓鱼等 10+ 真实生成路径全部绕过（payload 与生成签名不匹配，汇聚需跨模块设计，另案处理）。钓鱼本身未接战利品表（源码 TODO）。
+- **cookie**：config 阶段发包路径未暴露（Player 资源 play 相位才存在）；请求-响应无事务关联（同 Paper）；无响应到达事件（可后补）。
 - EntityScheduler 可经 `World::spawn_entity` 无头验证（2026-09-20 复核修正，见 note/13 §七.2）；join/chat 优先级实机排序仍需真实玩家。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
+- **脑记忆为只读**：`set` 路径未暴露（Bukkit MemoryKey 写面需 brain 机制写侧设计）。结构放置不放置实体（仅方块）。区块快照不含光照/高度图。强加载票据不落盘（重启失效）。
 - ChunkSave 事件低于插件边界（保存决策在 `pumpkin-world` 内部）。
