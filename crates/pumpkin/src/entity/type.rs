@@ -347,6 +347,38 @@ pub fn from_type(
     mob
 }
 
+/// Rebuilds an entity from its serialized NBT snapshot without spawning it.
+///
+/// This is the runtime entry point for plugin-driven snapshot spawning; until
+/// now only the chunk-loading path reconstructed entities from NBT. The
+/// compound must carry the entity type's namespaced `id` (as written by
+/// `EntityBase::write_nbt`) naming a known, saveable entity type; anything
+/// else (unknown id, players, other non-saveable types) yields `None`.
+///
+/// The rebuilt entity always receives a fresh UUID, so one snapshot can be
+/// materialized any number of times, and `position` wins over the `Pos`
+/// stored in the snapshot. The caller decides whether and where to spawn the
+/// result (see `World::spawn_entity`).
+#[must_use]
+pub fn from_nbt(
+    nbt: &pumpkin_nbt::compound::NbtCompound,
+    position: Vector3<f64>,
+    world: &Arc<World>,
+) -> Option<Arc<dyn EntityBase>> {
+    let id = nbt.get_string("id")?;
+    let entity_type = EntityType::from_name(id.strip_prefix("minecraft:").unwrap_or(id))?;
+    if !entity_type.saveable {
+        return None;
+    }
+    let entity = from_type(entity_type, position, world, Uuid::new_v4());
+    // Mirror the chunk-load reconstruction path (world/mod.rs
+    // `spawn_structure_entities`): base state first, then the full entity.
+    entity.get_entity().read_nbt_non_mut(nbt);
+    entity.read_nbt_non_mut(nbt);
+    entity.get_entity().set_pos(position);
+    Some(entity)
+}
+
 #[expect(clippy::too_many_lines)]
 pub fn check_spawn_rules(
     entity_type: &'static EntityType,

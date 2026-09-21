@@ -17,7 +17,7 @@ use crate::plugin::loader::wasm::wasm_host::{
             LivingEntity as WitLivingEntity, Mob as WitMob,
             RayTraceBlockResult as WitRayTraceBlockResult,
             RayTraceEntityResult as WitRayTraceEntityResult, RaycastResult as WitRaycastResult,
-            TeleportFlags, World,
+            SpawnCategory as WitSpawnCategory, TeleportFlags, World,
         },
     },
     wit::v0_1::uuid::UuidExt,
@@ -90,6 +90,24 @@ impl HostEntity for PluginHostState {
         let entity = entity_from_resource(self, &entity)?;
         let original_name = entity.get_entity().entity_type.resource_name;
         to_wit_entity_type(original_name)
+    }
+
+    async fn get_spawn_category(
+        &mut self,
+        entity: Resource<Entity>,
+    ) -> wasmtime::Result<WitSpawnCategory> {
+        let entity = entity_from_resource(self, &entity)?;
+        let category = match entity.get_entity().entity_type.category.id {
+            0 => WitSpawnCategory::Monster,
+            1 => WitSpawnCategory::Creature,
+            2 => WitSpawnCategory::Ambient,
+            3 => WitSpawnCategory::Axolotls,
+            4 => WitSpawnCategory::UndergroundWaterCreature,
+            5 => WitSpawnCategory::WaterCreature,
+            6 => WitSpawnCategory::WaterAmbient,
+            _ => WitSpawnCategory::Misc,
+        };
+        Ok(category)
     }
 
     async fn get_position(&mut self, entity: Resource<Entity>) -> wasmtime::Result<Position> {
@@ -773,6 +791,13 @@ impl HostEntity for PluginHostState {
         let entity = entity_from_resource(self, &this)?;
         let base_entity = entity.get_entity();
         Ok(base_entity.has_custom_data(&namespace, &key))
+    }
+
+    async fn create_snapshot(&mut self, this: Resource<Entity>) -> wasmtime::Result<Vec<u8>> {
+        let entity = entity_from_resource(self, &this)?;
+        let mut nbt = pumpkin_nbt::NbtCompound::new();
+        entity.write_nbt(&mut nbt);
+        Ok(pumpkin_nbt::Nbt::from(nbt).write_unnamed().to_vec())
     }
 
     async fn as_living(

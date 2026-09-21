@@ -343,10 +343,54 @@ impl MemoryStore {
         lines.sort();
         lines
     }
+
+    /// Read-only, untyped view of one slot.
+    ///
+    /// Returns `None` when the memory type is not registered in this store.
+    /// The description uses the vanilla debug-dump format (truncated to 255
+    /// chars); the ttl is `Some` only when a value is present and expires.
+    #[must_use]
+    pub fn describe_slot(&self, id: MemoryModuleId) -> Option<DescribedMemory> {
+        let slot = self.slots.get(id.index())?.as_ref()?;
+        let has_value = slot.has_value();
+        let description = has_value.then(|| truncate_description(slot.describe()));
+        let ttl = (has_value && slot.can_expire()).then(|| slot.time_to_live());
+        Some(DescribedMemory {
+            has_value,
+            description,
+            ttl,
+        })
+    }
+
+    /// Vanilla names of every memory type registered in this store, sorted.
+    #[must_use]
+    pub fn registered_names(&self) -> Vec<&'static str> {
+        let mut names: Vec<&'static str> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.is_some())
+            .map(|(index, _)| MemoryModuleId::new(index as u8).name())
+            .collect();
+        names.sort_unstable();
+        names
+    }
+}
+
+/// Read-only, untyped view of one memory slot, as produced by
+/// [`MemoryStore::describe_slot`].
+pub struct DescribedMemory {
+    /// Whether the slot currently holds a value.
+    pub has_value: bool,
+    /// Stringified value in the vanilla debug-dump format (already truncated
+    /// to 255 chars); `None` when the slot holds no value.
+    pub description: Option<String>,
+    /// Ticks until the value expires; `None` when the value never expires or
+    /// the slot holds no value.
+    pub ttl: Option<i64>,
 }
 
 pub struct PackedMemories(Vec<(MemoryModuleId, NbtTag, Option<i64>)>);
-
 impl PackedMemories {
     #[must_use]
     pub const fn empty() -> Self {

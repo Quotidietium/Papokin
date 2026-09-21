@@ -15,9 +15,10 @@ use crate::plugin::loader::wasm::wasm_host::{
         uuid::Uuid,
         world::{
             AgeableData as WitAgeableData, BlockDirection as WitBlockDirection,
-            CatData as WitCatData, CreeperData as WitCreeperData, DyeColor as WitDyeColor,
-            EndermanData as WitEndermanData, Entity, FoxData as WitFoxData, HostMob,
-            IronGolemData as WitIronGolemData, LivingEntity as WitLivingEntity, Mob as WitMob,
+            BrainMemory as WitBrainMemory, CatData as WitCatData, CreeperData as WitCreeperData,
+            DyeColor as WitDyeColor, EndermanData as WitEndermanData, Entity,
+            FoxData as WitFoxData, HostMob, IronGolemData as WitIronGolemData,
+            LivingEntity as WitLivingEntity, MemoryStatus as WitMemoryStatus, Mob as WitMob,
             MobData as WitMobData, PathNodeType as WitPathNodeType, SheepData as WitSheepData,
             ShulkerData as WitShulkerData, SlimeData as WitSlimeData,
             VillagerData as WitVillagerData, VillagerProfession as WitVillagerProfession,
@@ -967,6 +968,61 @@ impl HostMob for PluginHostState {
     async fn get_freeze_ticks(&mut self, this: Resource<WitMob>) -> wasmtime::Result<i32> {
         let entity = mob_from_resource(self, &this)?;
         Ok(entity.get_entity().get_frozen_ticks())
+    }
+
+    async fn get_brain_memory(
+        &mut self,
+        this: Resource<WitMob>,
+        name: String,
+    ) -> wasmtime::Result<Option<WitBrainMemory>> {
+        use crate::entity::ai::brain::memory::types;
+
+        let entity = mob_from_resource(self, &this)?;
+        let Some(id) =
+            types::from_name(&name).or_else(|| types::from_name(&format!("minecraft:{name}")))
+        else {
+            return Ok(None);
+        };
+        let Some(mob) = entity.get_mob() else {
+            return Ok(None);
+        };
+        let brain = mob
+            .get_mob_entity()
+            .brain
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(described) = brain.describe_memory(id) else {
+            return Ok(None);
+        };
+        Ok(Some(WitBrainMemory {
+            status: if described.has_value {
+                WitMemoryStatus::ValuePresent
+            } else {
+                WitMemoryStatus::Registered
+            },
+            value: described.description,
+            ttl: described.ttl,
+        }))
+    }
+
+    async fn list_brain_memories(
+        &mut self,
+        this: Resource<WitMob>,
+    ) -> wasmtime::Result<Vec<String>> {
+        let entity = mob_from_resource(self, &this)?;
+        let Some(mob) = entity.get_mob() else {
+            return Ok(Vec::new());
+        };
+        let brain = mob
+            .get_mob_entity()
+            .brain
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(brain
+            .registered_memory_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect())
     }
 
     async fn drop(&mut self, rep: Resource<WitMob>) -> wasmtime::Result<()> {

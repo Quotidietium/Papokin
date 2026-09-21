@@ -162,6 +162,20 @@ impl Brain {
         self.memories.time_until_expiry(id)
     }
 
+    /// Read-only, untyped view of one memory slot. `None` when the memory
+    /// type is not registered in this brain. Used by the plugin host to expose
+    /// Bukkit-style `MemoryKey` queries without knowing the value type.
+    #[must_use]
+    pub fn describe_memory(&self, id: MemoryModuleId) -> Option<memory::DescribedMemory> {
+        self.memories.describe_slot(id)
+    }
+
+    /// Vanilla names of every memory type registered in this brain, sorted.
+    #[must_use]
+    pub fn registered_memory_names(&self) -> Vec<&'static str> {
+        self.memories.registered_names()
+    }
+
     pub const fn set_core_activities(&mut self, activities: ActivitySet) {
         self.core_activities = activities;
     }

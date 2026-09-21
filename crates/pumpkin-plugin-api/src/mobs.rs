@@ -7,10 +7,66 @@ use std::ops::Deref;
 
 pub use crate::wit::pumpkin::plugin::uuid::Uuid;
 pub use crate::wit::pumpkin::plugin::world::{
-    AgeableData, BlockDirection, BuiltinAiGoal, CatData, CreeperData, DyeColor, EndermanData,
-    Entity, FoxData, IronGolemData, LivingEntity, Mob, MobData, SheepData, ShulkerData, SlimeData,
-    VillagerData, VillagerProfession, WolfData, ZombieData,
+    AgeableData, BlockDirection, BrainMemory, BuiltinAiGoal, CatData, CreeperData, DyeColor,
+    EndermanData, Entity, FoxData, IronGolemData, LivingEntity, MemoryStatus, Mob, MobData,
+    SheepData, ShulkerData, SlimeData, VillagerData, VillagerProfession, WolfData, ZombieData,
 };
+
+/// Well-known vanilla brain memory type names accepted by [`Mob::get_brain_memory`].
+///
+/// These are the Bukkit `MemoryKey` equivalents. `get_brain_memory` also accepts
+/// the bare path without the `minecraft:` namespace (e.g. `"walk_target"`) and
+/// any other vanilla memory name not listed here.
+pub mod memory_keys {
+    /// Where the mob is currently walking to.
+    pub const WALK_TARGET: &str = "minecraft:walk_target";
+    /// What the mob is currently looking at.
+    pub const LOOK_TARGET: &str = "minecraft:look_target";
+    /// The mob's current attack target.
+    pub const ATTACK_TARGET: &str = "minecraft:attack_target";
+    /// Whether the mob's attack is cooling down.
+    pub const ATTACK_COOLING_DOWN: &str = "minecraft:attack_cooling_down";
+    /// The entity this mob is interacting with.
+    pub const INTERACTION_TARGET: &str = "minecraft:interaction_target";
+    /// The entity this mob wants to breed with.
+    pub const BREED_TARGET: &str = "minecraft:breed_target";
+    /// The mob's home position (e.g. villagers).
+    pub const HOME: &str = "minecraft:home";
+    /// The mob's job site position (villagers).
+    pub const JOB_SITE: &str = "minecraft:job_site";
+    /// The villager meeting point.
+    pub const MEETING_POINT: &str = "minecraft:meeting_point";
+    /// Living entities currently visible to the mob.
+    pub const NEAREST_VISIBLE_LIVING_ENTITIES: &str = "minecraft:visible_mobs";
+    /// Players near the mob.
+    pub const NEAREST_PLAYERS: &str = "minecraft:nearest_players";
+    /// The nearest player visible to the mob.
+    pub const NEAREST_VISIBLE_PLAYER: &str = "minecraft:nearest_visible_player";
+    /// The nearest hostile entity visible to the mob.
+    pub const NEAREST_HOSTILE: &str = "minecraft:nearest_hostile";
+    /// The damage source that last hurt the mob.
+    pub const HURT_BY: &str = "minecraft:hurt_by";
+    /// The entity that last hurt the mob.
+    pub const HURT_BY_ENTITY: &str = "minecraft:hurt_by_entity";
+    /// The entity this mob is avoiding.
+    pub const AVOID_TARGET: &str = "minecraft:avoid_target";
+    /// The nearest bed the mob knows of.
+    pub const NEAREST_BED: &str = "minecraft:nearest_bed";
+    /// The mob's current pathfinding path.
+    pub const PATH: &str = "minecraft:path";
+    /// Ticks since the mob could no longer reach its walk target.
+    pub const CANT_REACH_WALK_TARGET_SINCE: &str = "minecraft:cant_reach_walk_target_since";
+    /// The player this mob is tempted by.
+    pub const TEMPTING_PLAYER: &str = "minecraft:tempting_player";
+    /// Whether the mob is currently tempted.
+    pub const IS_TEMPTED: &str = "minecraft:is_tempted";
+    /// Whether the mob is currently panicking.
+    pub const IS_PANICKING: &str = "minecraft:is_panicking";
+    /// UUID of the entity this mob is angry at (e.g. zombified piglins).
+    pub const ANGRY_AT: &str = "minecraft:angry_at";
+    /// The last time the mob heard a bell.
+    pub const HEARD_BELL_TIME: &str = "minecraft:heard_bell_time";
+}
 
 /// Trait implemented by all specialized mob wrappers to allow generic downcasting via `.cast::<T>()`.
 pub trait MobCast<'a>: Sized {
