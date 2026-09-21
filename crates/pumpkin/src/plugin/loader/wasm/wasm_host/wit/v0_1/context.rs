@@ -425,6 +425,187 @@ fn register_player_event(
             >(resource, handler, priority, blocking)
             ;
         }
+        EventType::AsyncPlayerSendSuggestionsEvent => {
+            register_typed_event::<crate::plugin::api::events::player::async_player_send_suggestions::AsyncPlayerSendSuggestionsEvent>(resource, handler, priority, blocking);
+        }
+        EventType::AsyncTabCompleteEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::async_tab_complete::AsyncTabCompleteEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::ClientTickEndEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::client_tick_end::ClientTickEndEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::FillProfileEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::fill_profile::FillProfileEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::Gs4QueryEvent => {
+            register_typed_event::<crate::plugin::api::events::player::gs4_query::Gs4QueryEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::LookupProfileEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::lookup_profile::LookupProfileEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerArmorChangeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_armor_change::PlayerArmorChangeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerAttackEntityCooldownResetEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_attack_entity_cooldown_reset::PlayerAttackEntityCooldownResetEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerBedFailEnterEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_bed_fail_enter::PlayerBedFailEnterEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerChunkUnloadEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerClientOptionsChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_client_options_change::PlayerClientOptionsChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerConnectionCloseEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_connection_close::PlayerConnectionCloseEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerDeepSleepEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_deep_sleep::PlayerDeepSleepEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerFlowerPotManipulateEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerHandshakeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_handshake::PlayerHandshakeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerInsertLecternBookEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_insert_lectern_book::PlayerInsertLecternBookEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerInventorySlotChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_inventory_slot_change::PlayerInventorySlotChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerItemCooldownEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_item_cooldown::PlayerItemCooldownEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerItemFrameChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerItemGroupCooldownEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_item_group_cooldown::PlayerItemGroupCooldownEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerJumpEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_jump::PlayerJumpEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::PlayerLecternPageChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_lectern_page_change::PlayerLecternPageChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerLoomPatternSelectEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_loom_pattern_select::PlayerLoomPatternSelectEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerNaturallySpawnCreaturesEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_naturally_spawn_creatures::PlayerNaturallySpawnCreaturesEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerPickBlockEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_pick_block::PlayerPickBlockEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerPickEntityEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_pick_entity::PlayerPickEntityEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerPickupExperienceEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerPostRespawnEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_post_respawn::PlayerPostRespawnEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerPurchaseEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_purchase::PlayerPurchaseEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerReadyArrowEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_ready_arrow::PlayerReadyArrowEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerServerFullCheckEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_server_full_check::PlayerServerFullCheckEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerSignCommandPreprocessEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_sign_command_preprocess::PlayerSignCommandPreprocessEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerStartSpectatingEntityEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_start_spectating_entity::PlayerStartSpectatingEntityEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerStonecutterRecipeSelectEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_stonecutter_recipe_select::PlayerStonecutterRecipeSelectEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerStopSpectatingEntityEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_stop_spectating_entity::PlayerStopSpectatingEntityEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerStopUsingItemEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_stop_using_item::PlayerStopUsingItemEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerSwapWithEquipmentSlotEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_swap_with_equipment_slot::PlayerSwapWithEquipmentSlotEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerTeleportEndGatewayEvent => {
+            register_typed_event::<crate::plugin::api::events::player::player_teleport_end_gateway::PlayerTeleportEndGatewayEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerTrackEntityEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerTradeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_trade::PlayerTradeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerUntrackEntityEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PreFillProfileEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::pre_fill_profile::PreFillProfileEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PreLookupProfileEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::pre_lookup_profile::PreLookupProfileEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PrePlayerAttackEntityEvent => {
+            register_typed_event::<crate::plugin::api::events::player::pre_player_attack_entity::PrePlayerAttackEntityEvent>(resource, handler, priority, blocking);
+        }
+        EventType::UncheckedSignChangeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::player::unchecked_sign_change::UncheckedSignChangeEvent,
+            >(resource, handler, priority, blocking);
+        }
         _ => {
             tracing::error!("non-player event should not be routed to register_player_event");
         }
@@ -793,6 +974,124 @@ fn register_entity_event(
                 resource, handler, priority, blocking,
             );
         }
+        EventType::EntityInsideBlockEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_inside_block::EntityInsideBlockEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::WitchConsumePotionEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::witch_consume_potion::WitchConsumePotionEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::WitchReadyPotionEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::witch_ready_potion::WitchReadyPotionEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::WitchThrowPotionEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::witch_throw_potion::WitchThrowPotionEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityAttemptSmashAttackEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_attempt_smash_attack::EntityAttemptSmashAttackEvent>(resource, handler, priority, blocking);
+        }
+        EventType::EntityDamageItemEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityEffectTickEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_effect_tick::EntityEffectTickEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityEquipmentChangedEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_equipment_changed::EntityEquipmentChangedEvent>(resource, handler, priority, blocking);
+        }
+        EventType::EntityFertilizeEggEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_fertilize_egg::EntityFertilizeEggEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityLoadCrossbowEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_load_crossbow::EntityLoadCrossbowEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityMoveEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_move::EntityMoveEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::EntityToggleSitEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_toggle_sit::EntityToggleSitEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::ItemTransportingEntityValidateTargetEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::item_transporting_entity_validate_target::ItemTransportingEntityValidateTargetEvent>(resource, handler, priority, blocking);
+        }
+        EventType::TameableDeathMessageEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::tameable_death_message::TameableDeathMessageEvent>(resource, handler, priority, blocking);
+        }
+        EventType::WaterBottleSplashEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::water_bottle_splash::WaterBottleSplashEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::CreeperIgniteEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::creeper_ignite::CreeperIgniteEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EnderDragonFlameEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::ender_dragon_flame::EnderDragonFlameEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EndermanAttackPlayerEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::enderman_attack_player::EndermanAttackPlayerEvent>(resource, handler, priority, blocking);
+        }
+        EventType::EndermanEscapeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::enderman_escape::EndermanEscapeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityJumpEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_jump::EntityJumpEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::EntityPathfindEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::entity_pathfind::EntityPathfindEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::EntityTeleportEndGatewayEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_teleport_end_gateway::EntityTeleportEndGatewayEvent>(resource, handler, priority, blocking);
+        }
+        EventType::EntityZapEvent => {
+            register_typed_event::<crate::plugin::api::events::entity::entity_zap::EntityZapEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::PreCreatureSpawnEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PreSpawnerSpawnEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::pre_spawner_spawn::PreSpawnerSpawnEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::ThrownEggHatchEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::entity::thrown_egg_hatch::ThrownEggHatchEvent,
+            >(resource, handler, priority, blocking);
+        }
         _ => {
             tracing::error!("non-entity event should not be routed to register_entity_event");
         }
@@ -1094,6 +1393,25 @@ fn register_world_event(
                 crate::plugin::api::events::world::lightning_strike::LightningStrikeEvent,
             >(resource, handler, priority, blocking);
         }
+        EventType::StructuresLocateEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::world::structures_locate::StructuresLocateEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::WorldDifficultyChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::world::world_difficulty_change::WorldDifficultyChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::WorldGameRuleChangeEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::WorldBorderBoundsChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::world::world_border_change::WorldBorderBoundsChangeEvent>(resource, handler, priority, blocking);
+        }
+        EventType::WorldBorderCenterChangeEvent => {
+            register_typed_event::<crate::plugin::api::events::world::world_border_change::WorldBorderCenterChangeEvent>(resource, handler, priority, blocking);
+        }
         _ => {
             tracing::error!("non-world event should not be routed to register_world_event");
         }
@@ -1329,6 +1647,44 @@ fn register_block_event(
             >(resource, handler, priority, blocking);
         }
 
+        EventType::BeaconActivatedEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::block::beacon_activated::BeaconActivatedEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::BeaconDeactivatedEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::block::beacon_deactivated::BeaconDeactivatedEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::BeaconEffectEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::block::beacon_effect::BeaconEffectEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::BlockBreakProgressUpdateEvent => {
+            register_typed_event::<crate::plugin::api::events::block::block_break_progress_update::BlockBreakProgressUpdateEvent>(resource, handler, priority, blocking);
+        }
+        EventType::BlockFailedDispenseEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::block::block_failed_dispense::BlockFailedDispenseEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::CompostItemEvent => {
+            register_typed_event::<crate::plugin::api::events::block::compost_item::CompostItemEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::TargetHitEvent => {
+            register_typed_event::<crate::plugin::api::events::block::target_hit::TargetHitEvent>(
+                resource, handler, priority, blocking,
+            );
+        }
+        EventType::VaultChangeStateEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent,
+            >(resource, handler, priority, blocking);
+        }
         _ => {
             tracing::error!("non-block event should not be routed to register_block_event");
         }
@@ -1438,6 +1794,34 @@ fn register_server_event(
         EventType::MapInitializeEvent => {
             register_typed_event::<
                 crate::plugin::api::events::server::map_initialize::MapInitializeEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::PlayerConnectionValidateLoginEvent => {
+            register_typed_event::<crate::plugin::api::events::server::player_connection_validate_login::PlayerConnectionValidateLoginEvent>(resource, handler, priority, blocking);
+        }
+        EventType::AsyncPlayerConnectionConfigureEvent => {
+            register_typed_event::<crate::plugin::api::events::server::async_player_connection_configure::AsyncPlayerConnectionConfigureEvent>(resource, handler, priority, blocking);
+        }
+        EventType::PlayerConnectionInitialConfigureEvent => {
+            register_typed_event::<crate::plugin::api::events::server::player_connection_initial_configure::PlayerConnectionInitialConfigureEvent>(resource, handler, priority, blocking);
+        }
+        EventType::ProfileWhitelistVerifyEvent => {
+            register_typed_event::<crate::plugin::api::events::server::profile_whitelist_verify::ProfileWhitelistVerifyEvent>(resource, handler, priority, blocking);
+        }
+        EventType::ServerResourcesReloadedEvent => {
+            register_typed_event::<crate::plugin::api::events::server::server_resources_reloaded::ServerResourcesReloadedEvent>(resource, handler, priority, blocking);
+        }
+        EventType::WhitelistStateUpdateEvent => {
+            register_typed_event::<crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent>(resource, handler, priority, blocking);
+        }
+        EventType::WhitelistToggleEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent,
+            >(resource, handler, priority, blocking);
+        }
+        EventType::CommandRegisteredEvent => {
+            register_typed_event::<
+                crate::plugin::api::events::server::command_registered::CommandRegisteredEvent,
             >(resource, handler, priority, blocking);
         }
         _ => {
