@@ -998,7 +998,9 @@ impl VillagerEntity {
             .store(game_time, Ordering::Relaxed);
     }
 
-    fn notify_trading_player_offers_updated(&self) {
+    /// Re-sends the current trade offers to the player currently trading with
+    /// this villager, if any (Java `CMerchantOffers` + Bedrock `CUpdateTrade`).
+    pub fn notify_trading_player_offers_updated(&self) {
         if self
             .trading_player
             .lock()
@@ -1013,6 +1015,53 @@ impl VillagerEntity {
         {
             villager.resend_offers_to_trading_player();
         }
+    }
+
+    /// Returns a snapshot of this villager's current trade offers.
+    pub fn trade_offers(&self) -> Vec<pumpkin_protocol::java::client::play::MerchantOffer> {
+        self.offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces this villager's trade offers and re-sends them to the trading
+    /// player, if any.
+    pub fn set_trade_offers(
+        &self,
+        new_offers: Vec<pumpkin_protocol::java::client::play::MerchantOffer>,
+    ) {
+        *self
+            .offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = new_offers;
+        self.notify_trading_player_offers_updated();
+    }
+
+    /// Appends one trade offer and re-sends the offer list to the trading
+    /// player, if any.
+    pub fn add_trade_offer(&self, offer: pumpkin_protocol::java::client::play::MerchantOffer) {
+        self.offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(offer);
+        self.notify_trading_player_offers_updated();
+    }
+
+    /// Removes the trade offer at `index` and re-sends the offer list to the
+    /// trading player. Returns `false` when `index` is out of bounds.
+    pub fn remove_trade_offer(&self, index: usize) -> bool {
+        let mut offers = self
+            .offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if index >= offers.len() {
+            return false;
+        }
+        offers.remove(index);
+        drop(offers);
+        self.notify_trading_player_offers_updated();
+        true
     }
 
     fn work_at_job_site(&self, game_time: i64, day_time: i64, day: i64) {

@@ -426,6 +426,112 @@ impl WanderingTraderEntity {
         player.client.try_enqueue_packet_editioned(&java, &bedrock);
     }
 
+    fn resend_offers_to_trading_player(&self) {
+        let trading_player = *self
+            .trading_player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some((player_uuid, sync_id)) = trading_player else {
+            return;
+        };
+        let world = self.get_entity().world.load();
+        let Some(player) = world.get_player_by_uuid(player_uuid) else {
+            return;
+        };
+        let offers = self
+            .offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+
+        let ok = {
+            let screen = player
+                .current_screen_handler
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let mut screen = screen
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if screen.sync_id() != sync_id {
+                false
+            } else if let Some(handler) =
+                screen.as_any_mut().downcast_mut::<MerchantScreenHandler>()
+            {
+                handler.offers.clone_from(&offers);
+                handler.update_result_slot();
+                true
+            } else {
+                false
+            }
+        };
+        if !ok {
+            return;
+        }
+        self.send_trade_offers(&player, sync_id, &offers);
+    }
+
+    /// Re-sends the current trade offers to the player currently trading with
+    /// this wandering trader, if any (Java `CMerchantOffers` + Bedrock
+    /// `CUpdateTrade`).
+    pub fn notify_trading_player_offers_updated(&self) {
+        if self
+            .trading_player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            self.resend_offers_to_trading_player();
+        }
+    }
+
+    /// Returns a snapshot of this wandering trader's current trade offers.
+    pub fn trade_offers(&self) -> Vec<pumpkin_protocol::java::client::play::MerchantOffer> {
+        self.offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces this wandering trader's trade offers and re-sends them to the
+    /// trading player, if any.
+    pub fn set_trade_offers(
+        &self,
+        new_offers: Vec<pumpkin_protocol::java::client::play::MerchantOffer>,
+    ) {
+        *self
+            .offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = new_offers;
+        self.notify_trading_player_offers_updated();
+    }
+
+    /// Appends one trade offer and re-sends the offer list to the trading
+    /// player, if any.
+    pub fn add_trade_offer(&self, offer: pumpkin_protocol::java::client::play::MerchantOffer) {
+        self.offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(offer);
+        self.notify_trading_player_offers_updated();
+    }
+
+    /// Removes the trade offer at `index` and re-sends the offer list to the
+    /// trading player. Returns `false` when `index` is out of bounds.
+    pub fn remove_trade_offer(&self, index: usize) -> bool {
+        let mut offers = self
+            .offers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if index >= offers.len() {
+            return false;
+        }
+        offers.remove(index);
+        drop(offers);
+        self.notify_trading_player_offers_updated();
+        true
+    }
+
     fn can_continue_trading(
         &self,
         inventory_player: &dyn InventoryPlayer,
