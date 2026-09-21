@@ -1418,7 +1418,25 @@ impl Player {
             damage *= 1.5;
         }
 
-        let is_mace_smash = matches!(attack_type, AttackType::MaceSmash);
+        let mut is_mace_smash = matches!(attack_type, AttackType::MaceSmash);
+        if is_mace_smash {
+            // Let plugins veto the smash attack (its bonus damage and the
+            // MACE_SMASH damage type); a denied smash falls back to a plain
+            // attack. `server` is in scope from the pre-attack event above.
+            let mut smash_event = crate::plugin::api::events::entity::entity_attempt_smash_attack::EntityAttemptSmashAttackEvent::new(
+                self.entity_id(),
+                victim_entity.entity_id,
+                crate::plugin::api::events::entity::entity_attempt_smash_attack::SmashAttackResult::Allowed,
+            );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut smash_event);
+            if smash_event.result
+                == crate::plugin::api::events::entity::entity_attempt_smash_attack::SmashAttackResult::Denied
+            {
+                is_mace_smash = false;
+            }
+        }
         if is_mace_smash {
             let fall_distance = self.living_entity.fall_distance.load();
             damage += 1.5 * f64::from(fall_distance);
