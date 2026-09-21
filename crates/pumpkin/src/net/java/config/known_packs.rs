@@ -33,6 +33,7 @@ impl JavaClient {
             let test_instance_entries =
                 server.datapack_manager.get_test_instance_registry_entries();
             let registry_manager = Arc::clone(&server.registry_manager);
+            let tag_manager = Arc::clone(&server.tag_manager);
 
             let packets = tokio::task::spawn_blocking(move || {
                 let mut registry = Registry::get_synced(version);
@@ -102,17 +103,11 @@ impl JavaClient {
                     }
                 }
 
-                let mut tags = Vec::new();
-
-                for &key in pumpkin_data::tag::RegistryKey::NETWORK_KEYS {
-                    if pumpkin_data::tag::get_registry_key_tags(version, key)
-                        .is_some_and(|map| !map.is_empty())
-                    {
-                        tags.push(key);
-                    }
-                }
-
-                let packet = CUpdateTags::new(&tags);
+                let tags = tag_manager.network_tag_keys(version);
+                // Merge the plugin tag overlay into the static tables (None
+                // when no plugin touched the tags).
+                let merged_tags = tag_manager.snapshot(version);
+                let packet = CUpdateTags::with_merged(&tags, merged_tags.as_ref());
 
                 if let Ok(data) = Self::serialize_packet_for_version(&packet, version) {
                     packets.push(data);

@@ -19,15 +19,12 @@ impl PendingConnection {
                     .await;
             }
         }
-        let mut tags = Vec::new();
-        for &key in pumpkin_data::tag::RegistryKey::NETWORK_KEYS {
-            if pumpkin_data::tag::get_registry_key_tags(version, key)
-                .is_some_and(|map| !map.is_empty())
-            {
-                tags.push(key);
-            }
-        }
-        self.send_packet_now(&CUpdateTags::new(&tags)).await;
+        let tags = server.tag_manager.network_tag_keys(version);
+        // Merge the plugin tag overlay into the static tables (None when no
+        // plugin touched the tags, keeping the static-table serialization).
+        let merged_tags = server.tag_manager.snapshot(version);
+        self.send_packet_now(&CUpdateTags::with_merged(&tags, merged_tags.as_ref()))
+            .await;
         self.send_packet_now(&CFinishConfig).await;
     }
 }

@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use crate::packet::MultiVersionJavaPacket;
-use crate::{ClientPacket, WritingError, ser::NetworkWriteExt};
+use crate::{ClientPacket, WritingError, ser::NetworkWriteExt, tag_overlay::MergedTags};
 
 use crate::codec::var_int::VarInt;
 use pumpkin_data::{
@@ -12,6 +12,11 @@ use pumpkin_util::version::JavaMinecraftVersion;
 
 pub struct CUpdateTagsPlay<'a> {
     pub tags: &'a [pumpkin_data::tag::RegistryKey],
+    /// Server-merged tag maps (static table + plugin overlay). Registry keys
+    /// present here are written verbatim; their ids are already
+    /// version-resolved, so the static-table lookup and remapping are skipped
+    /// for them.
+    pub merged: Option<&'a MergedTags>,
 }
 
 impl MultiVersionJavaPacket for CUpdateTagsPlay<'_> {
@@ -55,7 +60,12 @@ impl MultiVersionJavaPacket for CUpdateTagsPlay<'_> {
 impl<'a> CUpdateTagsPlay<'a> {
     #[must_use]
     pub const fn new(tags: &'a [RegistryKey]) -> Self {
-        Self { tags }
+        Self { tags, merged: None }
+    }
+
+    #[must_use]
+    pub const fn with_merged(tags: &'a [RegistryKey], merged: Option<&'a MergedTags>) -> Self {
+        Self { tags, merged }
     }
 }
 
@@ -67,6 +77,22 @@ fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) 
         }
         _ => id,
     }
+}
+
+/// Writes one registry key's tag map as `(tag name, id list)` entries whose
+/// ids are already resolved for the client version.
+fn write_merged_tags(
+    p: &mut impl Write,
+    entries: &[(String, Vec<u16>)],
+) -> Result<(), WritingError> {
+    p.write_var_int(&VarInt::from(i32::try_from(entries.len()).map_err(
+        |_| WritingError::Message(format!("{} isn't representable as a VarInt", entries.len())),
+    )?))?;
+    for (tag_name, ids) in entries {
+        p.write_string_bounded(tag_name, u16::MAX as usize)?;
+        p.write_list(ids, |p, id| p.write_var_int(&VarInt::from(*id)))?;
+    }
+    Ok(())
 }
 
 impl ClientPacket for CUpdateTagsPlay<'_> {
@@ -95,6 +121,11 @@ impl ClientPacket for CUpdateTagsPlay<'_> {
             };
 
             for &key in categories {
+                if let Some(entries) = self.merged.and_then(|merged| merged.get(key)) {
+                    // Overlay-touched registry: ids are already resolved.
+                    write_merged_tags(&mut write, entries)?;
+                    continue;
+                }
                 let Some(values) = get_registry_key_tags(*version, key) else {
                     write.write_var_int(&VarInt::from(0))?;
                     continue;
@@ -122,6 +153,12 @@ impl ClientPacket for CUpdateTagsPlay<'_> {
 
         write.write_list(&valid_keys, |p, &registry_key| {
             p.write_string(&format!("minecraft:{}", registry_key.identifier_string()))?;
+
+            if let Some(entries) = self.merged.and_then(|merged| merged.get(registry_key)) {
+                // Overlay-touched registry: the server already merged the
+                // static table with the plugin overlay and resolved every id.
+                return write_merged_tags(p, entries);
+            }
 
             let Some(values) = get_registry_key_tags(*version, registry_key) else {
                 // no tags defined for that registry key in this version

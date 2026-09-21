@@ -51,6 +51,7 @@ use tokio::task::JoinHandle;
 use tokio_util::task::TaskTracker;
 
 pub mod connection_cache;
+pub mod damage_type;
 pub(crate) mod debug_profiler;
 pub mod enchantment;
 mod key_store;
@@ -60,6 +61,7 @@ pub mod registry;
 pub mod scheduler;
 pub mod seasonal_events;
 pub mod server_test_manager;
+pub mod tag;
 pub mod tick_rate_manager;
 pub mod ticker;
 
@@ -106,8 +108,12 @@ pub struct Server {
     pub recipe_manager: Arc<recipe::RecipeManager>,
     pub datapack_manager: Arc<crate::data::datapack::DatapackManager>,
     pub enchantment_manager: Arc<enchantment::EnchantmentManager>,
+    /// Plugin-registered custom damage types and damage type name resolution.
+    pub damage_type_manager: Arc<damage_type::DamageTypeManager>,
     /// Plugin-registered custom entries for synced registries.
     pub registry_manager: Arc<registry::RegistryManager>,
+    /// Plugin modifications to the static tag tables.
+    pub tag_manager: Arc<tag::TagManager>,
     /// Assigns unique IDs to maps.
     map_id: AtomicI32,
     /// Mojang's public keys, used for chat session signing
@@ -280,6 +286,9 @@ impl Server {
             );
         }
 
+        let registry_manager = Arc::new(registry::RegistryManager::new());
+        let tag_manager = Arc::new(tag::TagManager::new(Arc::clone(&registry_manager)));
+
         let server = Self {
             basic_config,
             advanced_config,
@@ -291,7 +300,9 @@ impl Server {
             recipe_manager: Arc::new(recipe::RecipeManager::new()),
             datapack_manager: Arc::new(crate::data::datapack::DatapackManager::new()),
             enchantment_manager: Arc::new(enchantment::EnchantmentManager::new()),
-            registry_manager: Arc::new(registry::RegistryManager::new()),
+            damage_type_manager: Arc::new(damage_type::DamageTypeManager::new()),
+            registry_manager,
+            tag_manager,
             map_id: level_info.load().map_id.into(),
             worlds: ArcSwap::from_pointee(vec![]),
             dimensions,

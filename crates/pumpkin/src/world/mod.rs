@@ -3352,15 +3352,14 @@ impl World {
             && client.version.load() >= JavaMinecraftVersion::V_1_13
         {
             let version = client.version.load();
-            let mut tags = Vec::new();
-            for &key in pumpkin_data::tag::RegistryKey::NETWORK_KEYS {
-                if pumpkin_data::tag::get_registry_key_tags(version, key)
-                    .is_some_and(|map| !map.is_empty())
-                {
-                    tags.push(key);
-                }
-            }
-            let packet = pumpkin_protocol::java::client::play::CUpdateTagsPlay::new(&tags);
+            let tags = server.tag_manager.network_tag_keys(version);
+            // Merge the plugin tag overlay into the static tables (None when
+            // no plugin touched the tags).
+            let merged_tags = server.tag_manager.snapshot(version);
+            let packet = pumpkin_protocol::java::client::play::CUpdateTagsPlay::with_merged(
+                &tags,
+                merged_tags.as_ref(),
+            );
             if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version) {
                 client.send_packet_now(packet_data).await;
             }
