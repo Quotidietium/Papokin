@@ -851,6 +851,97 @@ impl Plugin for E2ePlugin {
             }
         }
 
+        // Entity long-tail + combat APIs, headless edition of the join-gated
+        // checks: a spawned zombie carries the same entity/living/mob handles
+        // a player would, so spawn categories, snapshots, brain memory and
+        // the combat tracker all flow through the host boundary without a
+        // client. The join handler keeps the player-specific halves
+        // (player=MISC category, player snapshot rejection).
+        {
+            use pumpkin_plugin_api::mobs::memory_keys;
+            use pumpkin_plugin_api::{EntityType, SpawnCategory};
+
+            let worlds = context.get_server().get_all_worlds();
+            if let Some(world) = worlds.first() {
+                let pos = (8.0, 200.0, 8.0);
+
+                let zombie = world.spawn_entity(EntityType::Zombie, pos);
+                let zombie_category = zombie.get_spawn_category();
+                if zombie_category == SpawnCategory::Monster {
+                    tracing::info!("E2E spawn-category-mapped zombie=monster");
+                } else {
+                    tracing::info!("E2E spawn-category-broken zombie={zombie_category:?}");
+                }
+
+                // EntitySnapshot: NBT round trip through
+                // spawn-entity-from-snapshot.
+                let snapshot = zombie.create_snapshot();
+                match world.spawn_entity_from_snapshot(&snapshot, pos) {
+                    Some(clone) => {
+                        let same_type = clone.get_type() == EntityType::Zombie;
+                        let clone_uuid = clone.get_uuid();
+                        let zombie_uuid = zombie.get_uuid();
+                        let fresh_uuid = (clone_uuid.high, clone_uuid.low)
+                            != (zombie_uuid.high, zombie_uuid.low);
+                        if same_type && fresh_uuid {
+                            tracing::info!(
+                                "E2E entity-snapshot-roundtrip bytes={} fresh-uuid=true",
+                                snapshot.len()
+                            );
+                        } else {
+                            tracing::info!(
+                                "E2E entity-snapshot-mismatch same_type={same_type} fresh_uuid={fresh_uuid}"
+                            );
+                        }
+                    }
+                    None => tracing::info!(
+                        "E2E entity-snapshot-rebuild-failed bytes={}",
+                        snapshot.len()
+                    ),
+                }
+
+                // Brain memory read-only mapping (Bukkit MemoryKey
+                // equivalent): the query path is exercised end to end.
+                if let Some(mob) = zombie.as_mob() {
+                    let registered = mob.list_brain_memories();
+                    let walk_target = mob.get_brain_memory(memory_keys::WALK_TARGET);
+                    let unknown = mob.get_brain_memory("e2e:not_a_memory");
+                    tracing::info!(
+                        "E2E brain-memory-query registered={} walk_target_present={} unknown_is_none={}",
+                        registered.len(),
+                        walk_target.is_some(),
+                        unknown.is_none()
+                    );
+                }
+
+                // Combat tracker (new mechanism): deal one hit through
+                // damage-by-name, then run all six read-only queries across
+                // the host boundary.
+                if let Some(living) = zombie.as_living() {
+                    let before = living.get_combat_entries().len();
+                    living.damage_by_name(1.0, "minecraft:generic");
+                    let entries = living.get_combat_entries();
+                    let killer = living.get_killer();
+                    let in_combat = living.is_in_combat();
+                    let duration_ms = living.get_combat_duration_ms();
+                    let last_damage_type = living.get_last_damage_type_name();
+                    let player_attacker = living.has_player_attacker();
+                    tracing::info!(
+                        "E2E combat-queries entries={}->{} killer={} in_combat={} duration_ms={} last_damage_type={:?} player_attacker={}",
+                        before,
+                        entries.len(),
+                        killer.is_some(),
+                        in_combat,
+                        duration_ms,
+                        last_damage_type,
+                        player_attacker
+                    );
+                }
+            } else {
+                tracing::info!("E2E entity-headless-skipped no-world");
+            }
+        }
+
         tracing::info!("E2E on_enable ok");
         Ok(())
     }
