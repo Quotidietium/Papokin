@@ -1,0 +1,66 @@
+interface loot {
+    use item-stack.{item-stack};
+    use inventory.{inventory};
+
+    /// Context parameters influencing loot generation, mirroring the vanilla
+    /// loot-context subset the server's generator actually consumes (plus
+    /// `luck`, which vanilla fishing uses).
+    ///
+    /// Fields the vanilla pipeline does not consult during generation
+    /// (position, world time, weather, entity references, ...) are
+    /// deliberately not exposed; they have no effect on the result.
+    record loot-context {
+        /// Player luck (vanilla `generic.luck` attribute value).
+        ///
+        /// Note: the server's loot generator does not currently read `luck`
+        /// (no condition consumes it yet); it is exposed so tables that gain
+        /// luck-aware conditions need no API change.
+        luck: f32,
+        /// Whether the drop results from a player kill; drives the
+        /// `killed-by-player` condition used by entity loot tables.
+        killed-by-player: bool,
+        /// Radius of the explosion causing the drop; drives the
+        /// `survives-explosion` condition. `none` means no explosion, so the
+        /// condition always passes.
+        explosion-radius: option<f32>,
+        /// The tool used for the break/kill; its enchantments drive the
+        /// silk-touch, shears, fortune, and looting checks.
+        ///
+        /// The handle is consumed by this record: construct the tool stack
+        /// right before the call (e.g. `ItemStack::new`), or pass a snapshot
+        /// you no longer need.
+        tool: option<item-stack>,
+    }
+
+    /// Returns whether a loot table with the given key exists.
+    ///
+    /// The `minecraft:` namespace prefix is optional; both
+    /// `"chests/simple_dungeon"` and `"minecraft:chests/simple_dungeon"`
+    /// resolve to the same vanilla table.
+    has-loot-table: func(key: string) -> bool;
+
+    /// Generates loot from the named table with the default context
+    /// (no tool, not player-killed, no explosion) and a caller-chosen seed.
+    ///
+    /// The same `(key, seed)` pair always yields the same stacks. Returns
+    /// `err` when no table with `key` exists.
+    ///
+    /// This is a pure data operation: nothing is spawned into a world, so it
+    /// is safe to call from any context, including headless startup.
+    generate-loot: func(key: string, seed: s64) -> result<list<item-stack>, string>;
+
+    /// Generates loot from the named table with explicit context parameters.
+    ///
+    /// Behaves like `generate-loot`; see `loot-context` for what each field
+    /// drives.
+    generate-loot-with-context: func(key: string, seed: s64, context: loot-context) -> result<list<item-stack>, string>;
+
+    /// Generates loot and scatters it across the empty slots of an inventory,
+    /// the same shuffle-and-split algorithm vanilla uses when a loot chest is
+    /// first opened.
+    ///
+    /// Only generic container inventories (chests, barrels, chest minecarts,
+    /// ...) are supported; passing a player inventory returns `err`. Returns
+    /// `err` when no table with `key` exists.
+    fill-inventory: func(key: string, seed: s64, target: borrow<inventory>) -> result<_, string>;
+}
