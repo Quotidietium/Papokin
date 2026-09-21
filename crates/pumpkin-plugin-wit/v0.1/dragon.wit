@@ -1,0 +1,103 @@
+package pumpkin:plugin@0.1.0;
+
+/// End dragon battle (DragonBattle) inspection and control.
+///
+/// Mirrors the Paper `DragonBattle` API surface over the server's
+/// `DragonFight` manager: query the tracked dragon, observe and drive the
+/// respawn sequence, and spawn the fight's structures (exit portal, end
+/// crystals, gateways). The fight's boss bar is intentionally not
+/// re-exposed here; use the `boss-bar` interface instead.
+///
+/// A dragon fight exists only for The End; `get-dragon-fight` returns
+/// `none` for every other dimension.
+interface dragon {
+    use common.{block-pos};
+    use uuid.{uuid};
+    use %world.{%world as end-world};
+
+    /// Phase of the dragon respawn animation, mirroring vanilla
+    /// `net.minecraft.world.level.dimension.end.DragonRespawnStage`.
+    enum dragon-respawn-stage {
+        /// Crystals start beaming towards the dragon spawn point.
+        start,
+        /// Preparing to summon the pillars (roar animations).
+        preparing-to-summon-pillars,
+        /// Pillars and their crystals are being regenerated one by one.
+        summoning-pillars,
+        /// The dragon itself is about to be summoned.
+        summoning-dragon,
+        /// Finishes the sequence and spawns the new dragon.
+        end,
+    }
+
+    /// A handle over a world's dragon fight.
+    ///
+    /// The handle stays valid while its world is loaded; calls made after
+    /// the world was unloaded fail rather than keeping the world alive.
+    resource dragon-fight {
+        /// Returns the UUID of the dragon tracked by this fight, or `none`
+        /// when no dragon is currently tracked (e.g. after it was killed).
+        get-dragon-uuid: func() -> option<uuid>;
+
+        /// Returns whether the fight considers the dragon alive
+        /// (`false` once the dragon has been killed and no new one has
+        /// been summoned yet).
+        is-dragon-alive: func() -> bool;
+
+        /// Returns whether the dragon has ever been killed in this world
+        /// (Paper `hasBeenKilledPreviously`). Drives first-kill rewards
+        /// such as the dragon egg.
+        has-been-killed-previously: func() -> bool;
+
+        /// Returns the current respawn animation phase, or `none` when no
+        /// respawn sequence is in progress.
+        get-respawn-stage: func() -> option<dragon-respawn-stage>;
+
+        /// Skips ahead in the respawn animation (Paper
+        /// `setRespawnPhase`). Passing `end` finishes the sequence and
+        /// spawns the new dragon. Returns `false` when no respawn sequence
+        /// is in progress and nothing changed.
+        set-respawn-stage: func(stage: dragon-respawn-stage) -> bool;
+
+        /// Returns the number of end crystals on the spikes that are still
+        /// alive, as of the last crystal scan (vanilla scans every 100
+        /// ticks while the fight is active).
+        get-alive-crystals: func() -> s32;
+
+        /// Returns the tracked exit portal location, or `none` when the
+        /// fight has not located or placed one yet.
+        get-exit-portal-location: func() -> option<block-pos>;
+
+        /// Starts the respawn sequence if the dragon is dead and the four
+        /// crystals are placed around the exit portal (vanilla
+        /// `tryRespawn`, Paper `initiateRespawn`). Returns `true` when a
+        /// respawn sequence is running after the call.
+        initiate-respawn: func() -> bool;
+
+        /// Aborts a running respawn sequence: resets the spike crystals
+        /// and re-activates the exit portal. Returns `false` when no
+        /// respawn sequence was in progress and nothing changed.
+        abort-respawn: func() -> bool;
+
+        /// Resets all spike crystals: clears their beam targets and makes
+        /// them vulnerable again (Paper `resetCrystals`).
+        reset-crystals: func();
+
+        /// Spawns a new end gateway at one of the 20 vanilla gateway
+        /// positions (the same one the fight picks after a kill).
+        spawn-gateway: func();
+
+        /// Places the bedrock exit portal structure at the tracked (or
+        /// discovered) portal location. When `active` is true the portal
+        /// blocks are filled in, otherwise the podium is empty.
+        spawn-exit-portal: func(active: bool);
+
+        /// Spawns an end crystal on top of every spike that does not have
+        /// one yet (vanilla `spawnCrystals`).
+        spawn-crystals: func();
+    }
+
+    /// Returns the dragon fight of `in-world`, or `none` when the world is
+    /// not The End (only The End has a dragon fight).
+    get-dragon-fight: func(in-world: borrow<end-world>) -> option<dragon-fight>;
+}
