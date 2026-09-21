@@ -1,0 +1,104 @@
+interface %map {
+    use %world.{%world as map-world};
+
+    /// A cursor (a.k.a. decoration) icon drawn on top of a map canvas.
+    ///
+    /// `icon-type` is the vanilla map decoration type id
+    /// (`pumpkin_data::map_decoration::MapDecorationType`; 0 is the white
+    /// player marker). `x`/`z` are the position on the canvas in the
+    /// range -128..=127, `direction` is the rotation in 16 steps of 22.5
+    /// degrees (0..=15).
+    record map-cursor {
+        /// Vanilla map decoration type id.
+        icon-type: s32,
+        /// X position on the map canvas (-128..=127).
+        x: s8,
+        /// Z position on the map canvas (-128..=127).
+        z: s8,
+        /// Rotation in 16 steps of 22.5 degrees (0..=15).
+        direction: s8,
+        /// Optional hover text shown for this cursor.
+        display-name: option<string>,
+    }
+
+    /// A plugin-drawable view over a server-side map.
+    ///
+    /// The canvas is always 128x128 pixels. Pixels written through
+    /// `set-pixel` / `set-colors-data` are quantized to the vanilla map
+    /// palette via a nearest-color lookup, so the map renders on both
+    /// Java and (once the protocol packet lands) Bedrock clients without
+    /// the plugin needing to know the palette.
+    ///
+    /// Every mutating call marks the map dirty: players holding the map
+    /// receive a fresh `CMapItemData` packet immediately, and the regular
+    /// per-tick map sync re-sends it (with the live player cursor) on the
+    /// next tick.
+    resource map-view {
+        /// Returns the numeric id of this map.
+        get-id: func() -> s32;
+
+        /// Returns the scale of this map (0..=4); every step doubles the
+        /// blocks covered per pixel.
+        get-scale: func() -> u8;
+
+        /// Sets the scale of this map (values above 4 are clamped).
+        set-scale: func(scale: u8);
+
+        /// Returns whether this map is locked (canvas frozen for players).
+        is-locked: func() -> bool;
+
+        /// Locks this map: vanilla terrain updates stop changing it.
+        lock: func();
+
+        /// Unlocks this map again.
+        unlock: func();
+
+        /// Sets one pixel from a 0xAARRGGBB color. A fully transparent
+        /// color (alpha 0) maps to palette color 0 (unexplored); otherwise
+        /// the RGB channels are quantized to the nearest map palette color.
+        /// Out-of-range coordinates are ignored.
+        set-pixel: func(x: u32, y: u32, color: u32);
+
+        /// Returns the raw palette byte currently stored at (x, y)
+        /// (0 when out of range).
+        get-pixel: func(x: u32, y: u32) -> u32;
+
+        /// Replaces the whole canvas. Accepted lengths:
+        /// - 128*128: raw palette bytes, copied as-is;
+        /// - 128*128*3: RGB triplets, quantized to the palette;
+        /// - 128*128*4: RGBA quads, quantized (alpha ignored).
+        /// Other lengths fail.
+        set-colors-data: func(colors: list<u8>);
+
+        /// Returns a copy of the raw 128*128 palette bytes.
+        get-colors-data: func() -> list<u8>;
+
+        /// Re-renders the full canvas from the terrain of the map's world
+        /// (the same pipeline the vanilla per-tick map update uses).
+        render-terrain: func();
+
+        /// Appends a cursor and returns its index, usable with
+        /// `remove-cursor`.
+        add-cursor: func(cursor: map-cursor) -> u32;
+
+        /// Removes the cursor at `index`; returns false when the index is
+        /// out of range.
+        remove-cursor: func(index: u32) -> bool;
+
+        /// Returns all plugin-added cursors, in insertion order.
+        get-cursors: func() -> list<map-cursor>;
+
+        /// Removes all plugin-added cursors.
+        clear-cursors: func();
+    }
+
+    /// Creates a new map centered at (`center-x`, `center-z`) in `world`
+    /// and returns a drawable view over it. The map id is allocated by the
+    /// server; to hand the map to a player, put a `filled_map` item with
+    /// the returned id in their inventory.
+    create-map: func(in-world: borrow<map-world>, center-x: s32, center-z: s32, scale: u8) -> map-view;
+
+    /// Returns a drawable view over an existing map id, or `none` when no
+    /// map with that id exists.
+    get-map: func(map-id: s32) -> option<map-view>;
+}

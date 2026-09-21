@@ -81,6 +81,11 @@ impl MapData {
     }
 
     pub fn update(&mut self, player: &Player) {
+        // Vanilla semantic: a locked map's canvas is frozen; only cursors
+        // (added by the caller) keep updating.
+        if self.locked {
+            return;
+        }
         let world = player.world();
         let scale = 1 << self.scale;
         let center_x = self.center_x;
@@ -103,6 +108,29 @@ impl MapData {
             self.fully_updated = true;
             (0..128, 0..128)
         };
+
+        self.render_range(&world, range_x, range_z);
+    }
+
+    /// Re-renders the full 128x128 canvas from the terrain of `world`, using
+    /// the same height-shading pipeline as the player-driven [`Self::update`].
+    ///
+    /// This is the entry point for plugin-triggered terrain renders, where no
+    /// holding player context is available.
+    pub fn render_full(&mut self, world: &crate::world::World) {
+        self.fully_updated = true;
+        self.render_range(world, 0..128, 0..128);
+    }
+
+    fn render_range(
+        &mut self,
+        world: &crate::world::World,
+        range_x: std::ops::Range<usize>,
+        range_z: std::ops::Range<usize>,
+    ) {
+        let scale = 1 << self.scale;
+        let center_x = self.center_x;
+        let center_z = self.center_z;
 
         for img_x in range_x {
             let mut prev_y = -1;
@@ -127,6 +155,61 @@ impl MapData {
 
                 let color = color_base * 4 + brightness;
                 self.set_color(img_x, img_z, color);
+            }
+        }
+    }
+
+    /// Immediately sends this map's canvas and plugin-added decorations to
+    /// every online player currently holding a filled map with `map_id`.
+    ///
+    /// The live player cursor is (re)added by the per-tick map sync; this
+    /// flush exists so plugin-driven edits show up without waiting for it.
+    pub fn send_to_holders(&self, server: &crate::server::Server, map_id: i32) {
+        use pumpkin_data::data_component_impl::MapIdImpl;
+        use pumpkin_data::item::Item;
+        use pumpkin_protocol::codec::var_int::VarInt;
+        use pumpkin_protocol::java::client::play::{CMapItemData, MapIcon, MapPatch};
+        use pumpkin_util::Hand;
+        use pumpkin_util::text::TextComponent;
+
+        let icons: Vec<MapIcon> = self
+            .decorations
+            .iter()
+            .map(|decoration| MapIcon {
+                icon_type: VarInt(decoration.icon_type),
+                x: decoration.x,
+                z: decoration.z,
+                direction: decoration.direction,
+                display_name: decoration
+                    .display_name
+                    .as_ref()
+                    .map(|name| TextComponent::text(name.clone())),
+            })
+            .collect();
+
+        for player in server.get_all_players() {
+            let holds_map = Hand::all().into_iter().any(|hand| {
+                let stack = player.inventory().get_stack_in_hand(hand);
+                stack.item.id == Item::FILLED_MAP.id
+                    && stack
+                        .get_data_component::<MapIdImpl>()
+                        .is_some_and(|component| component.id == map_id)
+            });
+            if holds_map {
+                player.try_send_client_packet(&CMapItemData {
+                    map_id: VarInt(map_id),
+                    scale: self.scale,
+                    tracking_position: true,
+                    locked: self.locked,
+                    icons: Some(&icons),
+                    data: Some(MapPatch {
+                        columns: 128,
+                        rows: 128,
+                        x: 0,
+                        z: 0,
+                        data: &*self.colors,
+                    }),
+                });
             }
         }
     }

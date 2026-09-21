@@ -184,7 +184,8 @@ impl BlockEntity for MapBlockEntity {
 }
 
 /// Helper function to convert an RGB value to the closest Minecraft map color index.
-fn rgb_to_map_color(r: u8, g: u8, b: u8) -> u8 {
+#[must_use]
+pub fn rgb_to_map_color(r: u8, g: u8, b: u8) -> u8 {
     use pumpkin_data::map_color::MapColor;
 
     // Brightness multipliers: 180 (low), 220 (normal), 255 (high), 135 (lowest)
