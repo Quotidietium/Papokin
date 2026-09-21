@@ -447,6 +447,12 @@ impl DataComponentImpl for BaseColorImpl {
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct InstrumentImpl;
 impl InstrumentImpl {
+    /// The instrument written for goat horns on the wire. The component stays
+    /// a unit struct because generated item tables construct `&InstrumentImpl`
+    /// (a value expression only a unit struct supports); per-item instrument
+    /// names require regenerating those tables first.
+    pub const DEFAULT_NAME: &'static str = "minecraft:ponder_goat_horn";
+
     pub const fn read_data(_data: &NbtTag) -> Option<Self> {
         Some(Self)
     }

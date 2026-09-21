@@ -1,6 +1,8 @@
 #![allow(clippy::wildcard_imports)]
 
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::sync::{LazyLock, Mutex, RwLock};
 
 use crate::codec::var_int::VarInt;
 use crate::ser::{NetworkReadExt, NetworkWriteExt, ReadingError, WritingError};
@@ -15,6 +17,142 @@ use pumpkin_nbt::{serializer::NbtWriteHelperJava, tag::NbtTag};
 use pumpkin_util::version::JavaMinecraftVersion;
 
 const MAX_STATUS_EFFECTS: usize = 128;
+
+// ── Synced-registry id resolution ───────────────────────────────────────────
+//
+// Vanilla name ↔ id tables are derived lazily from the newest bundled static
+// registry (`REGISTRY_V_26_3`, the native data version); cross-version id
+// remapping for older clients is future work, matching the pre-existing
+// version-agnostic id writes in this file. On top of the vanilla tables sits
+// a per-domain list of plugin-registered custom entries, fed by the server at
+// registration time with a full replacement (`set_custom_ids`). A custom
+// entry's network id is the domain's vanilla entry count plus its
+// registration index — the same position the registry sync assigns it.
+
+/// Vanilla registry entry names (path only, e.g. `"creeper"`) per domain
+/// (e.g. `"banner_pattern"`), in registry id order.
+static VANILLA_REGISTRY_NAMES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
+    LazyLock::new(|| {
+        pumpkin_data::registry::REGISTRY_V_26_3
+            .iter()
+            .map(|registry| {
+                let names = registry.entries.iter().map(|entry| entry.name).collect();
+                (registry.registry_id, names)
+            })
+            .collect()
+    });
+
+/// Custom entry names per domain, in registration order. Custom entries are
+/// namespaced ids (e.g. `"myplugin:frost"`), never bare paths.
+static CUSTOM_REGISTRY_IDS: LazyLock<RwLock<HashMap<String, Vec<String>>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Replaces the whole custom-entry name list of a registry domain (e.g.
+/// `"enchantment"`).
+///
+/// Called by the server whenever a custom entry is registered, with the names
+/// in registration order.
+pub fn set_custom_ids(domain: &str, names: impl IntoIterator<Item = String>) {
+    CUSTOM_REGISTRY_IDS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(domain.to_string(), names.into_iter().collect());
+}
+
+/// Network id of a custom registry entry: the domain's vanilla entry count
+/// plus the entry's registration index. `name` is the full namespaced id.
+#[must_use]
+pub fn custom_id(domain: &str, name: &str) -> Option<u16> {
+    let vanilla_count = vanilla_entry_count(domain)?;
+    let index = CUSTOM_REGISTRY_IDS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(domain)?
+        .iter()
+        .position(|entry| entry == name)?;
+    Some(vanilla_count + u16::try_from(index).ok()?)
+}
+
+/// Full namespaced name of the custom registry entry with network id `id`
+/// (ids below the vanilla count are vanilla entries and return `None`).
+#[must_use]
+pub fn custom_name(domain: &str, id: u16) -> Option<String> {
+    let vanilla_count = vanilla_entry_count(domain)?;
+    let index = usize::from(id.checked_sub(vanilla_count)?);
+    CUSTOM_REGISTRY_IDS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(domain)?
+        .get(index)
+        .cloned()
+}
+
+/// Vanilla entry count of a synced registry domain, from the static tables.
+#[must_use]
+pub fn vanilla_entry_count(domain: &str) -> Option<u16> {
+    VANILLA_REGISTRY_NAMES
+        .get(domain)
+        .and_then(|names| u16::try_from(names.len()).ok())
+}
+
+/// Registry id of a vanilla entry; accepts `"path"` and `"minecraft:path"`.
+fn vanilla_id(domain: &str, name: &str) -> Option<u16> {
+    let path = name.strip_prefix("minecraft:").unwrap_or(name);
+    VANILLA_REGISTRY_NAMES
+        .get(domain)?
+        .iter()
+        .position(|entry| *entry == path)
+        .and_then(|index| u16::try_from(index).ok())
+}
+
+/// Full namespaced name (`"minecraft:path"`) of a vanilla registry id.
+fn vanilla_name(domain: &str, id: u16) -> Option<String> {
+    let path = VANILLA_REGISTRY_NAMES.get(domain)?.get(usize::from(id))?;
+    Some(format!("minecraft:{path}"))
+}
+
+static WARN_ONCE_KEYS: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Logs a warning the first time it is called with a given key.
+fn warn_once(key: String, message: impl FnOnce() -> String) {
+    let first = WARN_ONCE_KEYS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key);
+    if first {
+        tracing::warn!("{}", message());
+    }
+}
+
+/// Resolves an entry name (vanilla `"minecraft:path"`/bare path, or a custom
+/// namespaced id) to its network id, falling back to id 0 with a warn-once.
+fn resolve_name_to_id(domain: &str, name: &str) -> i32 {
+    vanilla_id(domain, name)
+        .or_else(|| custom_id(domain, name))
+        .map_or_else(
+            || {
+                warn_once(format!("{domain}:{name}"), || {
+                    format!("Unknown {domain} registry entry '{name}'; writing id 0")
+                });
+                0
+            },
+            i32::from,
+        )
+}
+
+/// Resolves a network id to a full namespaced entry name, vanilla first, then
+/// custom entries registered through the bridge.
+fn resolve_id_to_name(domain: &str, id: i32) -> Option<String> {
+    u16::try_from(id).ok().and_then(|id| {
+        let vanilla_count = vanilla_entry_count(domain)?;
+        if id < vanilla_count {
+            vanilla_name(domain, id)
+        } else {
+            custom_name(domain, id)
+        }
+    })
+}
 
 #[must_use]
 pub fn data_to_proto_sound(id_or: &IdOr<SoundEvent>) -> crate::IdOr<crate::SoundEvent> {
@@ -262,35 +400,57 @@ impl DataComponentCodec<Self> for RepairCostImpl {
     }
 }
 
+/// Shared reader for the `enchantments`/`stored_enchantments` entry list:
+/// `(id: VarInt, level: VarInt)*`. Vanilla ids resolve through
+/// [`Enchantment::from_id`]; ids past the vanilla range resolve through the
+/// intern table of plugin-registered custom enchantments. Unknown ids are
+/// skipped with a warn-once instead of failing the whole component (the level
+/// is always consumed so the stream stays aligned).
+fn deserialize_enchantment_entries(
+    seq: &mut impl NetworkReadExt,
+) -> Result<Vec<(&'static Enchantment, i32)>, ReadingError> {
+    const MAX_ENCHANTMENTS: usize = 256;
+
+    let len = seq.get_var_int()?.0 as usize;
+    if len > MAX_ENCHANTMENTS {
+        return Err(ReadingError::Message("Too many enchantments".into()));
+    }
+    let mut enc = Vec::with_capacity(len);
+    for _ in 0..len {
+        let raw_id = seq.get_var_int()?.0;
+        let level = seq.get_var_int()?.0;
+        let enchantment = u16::try_from(raw_id).ok().and_then(|id| {
+            if usize::from(id) < Enchantment::ALL.len() {
+                Enchantment::from_id(id as u8)
+            } else {
+                custom_enchantment_by_network_id(id)
+            }
+        });
+        match enchantment {
+            Some(enchantment) => enc.push((enchantment, level)),
+            None => warn_once(format!("enchantment:{raw_id}"), || {
+                format!("Unknown enchantment id {raw_id}; skipping the entry")
+            }),
+        }
+    }
+    Ok(enc)
+}
+
 impl DataComponentCodec<Self> for EnchantmentsImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
         seq.write_var_int(&VarInt::from(self.enchantment.len() as i32))?;
         for (enc, level) in self.enchantment.iter() {
+            // Vanilla entries carry their registry id; interned custom
+            // entries carry the network id assigned at registration time
+            // (vanilla count + registration index).
             seq.write_var_int(&VarInt::from(enc.id))?;
             seq.write_var_int(&VarInt::from(*level))?;
         }
         Ok(())
     }
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        const MAX_ENCHANTMENTS: usize = 256;
-
-        let len = seq.get_var_int()?.0 as usize;
-        if len > MAX_ENCHANTMENTS {
-            return Err(ReadingError::Message("Too many enchantments".into()));
-        }
-        let mut enc = Vec::with_capacity(len);
-        for _ in 0..len {
-            let id = seq.get_var_int()?.0 as u8;
-            let level = seq.get_var_int()?.0;
-            enc.push((
-                Enchantment::from_id(id).ok_or(ReadingError::Message(
-                    "EnchantmentsImpl Enchantment VarInt Incorrect!".into(),
-                ))?,
-                level,
-            ));
-        }
         Ok(Self {
-            enchantment: Cow::from(enc),
+            enchantment: Cow::from(deserialize_enchantment_entries(seq)?),
         })
     }
 }
@@ -862,27 +1022,8 @@ impl DataComponentCodec<Self> for StoredEnchantmentsImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        const MAX_ENCHANTMENTS: usize = 256;
-
-        let len = seq.get_var_int()?.0 as usize;
-
-        if len > MAX_ENCHANTMENTS {
-            return Err(ReadingError::Message("Too many enchantments".into()));
-        }
-
-        let mut stored_enchantments = Vec::with_capacity(len);
-        for _ in 0..len {
-            let id = seq.get_var_int()?.0 as u8;
-            let level = seq.get_var_int()?.0;
-            stored_enchantments.push((
-                Enchantment::from_id(id).ok_or(ReadingError::Message(
-                    "StoredEnchantmentsImpl Enchantment VarInt Incorrect!".into(),
-                ))?,
-                level,
-            ));
-        }
         Ok(Self {
-            enchantment: Cow::from(stored_enchantments),
+            enchantment: Cow::from(deserialize_enchantment_entries(seq)?),
         })
     }
 }
@@ -2317,16 +2458,39 @@ impl DataComponentCodec<Self> for WrittenBookContentImpl {
 
 impl DataComponentCodec<Self> for TrimImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        seq.write_var_int(&VarInt(0))?;
-        seq.write_var_int(&VarInt(0))
+        // The wire format is the two synced-registry ids. `material`/`pattern`
+        // are stored as name strings (inline compound definitions cannot be
+        // resolved to an id and fall back to 0 with a warn-once).
+        let material_id = self
+            .material
+            .extract_string()
+            .map_or(0, |name| resolve_name_to_id("trim_material", name));
+        let pattern_id = self
+            .pattern
+            .extract_string()
+            .map_or(0, |name| resolve_name_to_id("trim_pattern", name));
+        seq.write_var_int(&VarInt(material_id))?;
+        seq.write_var_int(&VarInt(pattern_id))
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let _material = seq.get_var_int()?;
-        let _pattern = seq.get_var_int()?;
+        let material_id = seq.get_var_int()?.0;
+        let pattern_id = seq.get_var_int()?.0;
+        let material = resolve_id_to_name("trim_material", material_id).unwrap_or_else(|| {
+            warn_once(format!("trim_material:{material_id}"), || {
+                format!("Unknown trim material id {material_id}; assuming minecraft:quartz")
+            });
+            "minecraft:quartz".to_string()
+        });
+        let pattern = resolve_id_to_name("trim_pattern", pattern_id).unwrap_or_else(|| {
+            warn_once(format!("trim_pattern:{pattern_id}"), || {
+                format!("Unknown trim pattern id {pattern_id}; assuming minecraft:coast")
+            });
+            "minecraft:coast".to_string()
+        });
         Ok(Self {
-            material: NbtTag::String("minecraft:quartz".into()),
-            pattern: NbtTag::String("minecraft:coast".into()),
+            material: NbtTag::String(material.into()),
+            pattern: NbtTag::String(pattern.into()),
         })
     }
 }
@@ -2385,11 +2549,24 @@ impl DataComponentCodec<Self> for BlockEntityDataImpl {
 
 impl DataComponentCodec<Self> for InstrumentImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
-        seq.write_var_int(&VarInt(0))
+        // `InstrumentImpl` is a unit struct (generated item tables construct
+        // `&InstrumentImpl`), so the vanilla goat horn default is written for
+        // every stack. Per-item instruments need a storage change first.
+        seq.write_var_int(&VarInt(resolve_name_to_id(
+            "instrument",
+            Self::DEFAULT_NAME,
+        )))
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let _ = seq.get_var_int()?;
+        let id = seq.get_var_int()?.0;
+        // The name cannot be stored in the unit struct yet; resolve it only
+        // to surface unknown ids once.
+        if resolve_id_to_name("instrument", id).is_none() {
+            warn_once(format!("instrument:{id}"), || {
+                format!("Unknown instrument id {id}; dropping the component value")
+            });
+        }
         Ok(Self)
     }
 }
@@ -2639,7 +2816,10 @@ impl DataComponentCodec<Self> for BannerPatternsImpl {
     fn serialize(&self, seq: &mut impl NetworkWriteExt) -> Result<(), WritingError> {
         seq.write_var_int(&VarInt::from(self.layers.len() as i32))?;
         for layer in &self.layers {
-            seq.write_var_int(&VarInt(0))?;
+            seq.write_var_int(&VarInt(resolve_name_to_id(
+                "banner_pattern",
+                &layer.pattern,
+            )))?;
             seq.write_var_int(&VarInt::from(layer.color.id() as i32))?;
         }
         Ok(())
@@ -2649,13 +2829,17 @@ impl DataComponentCodec<Self> for BannerPatternsImpl {
         let len = seq.get_var_int()?.0 as usize;
         let mut layers = Vec::with_capacity(len);
         for _ in 0..len {
-            let _pattern = seq.get_var_int()?.0;
+            let pattern_id = seq.get_var_int()?.0;
             let color_id = seq.get_var_int()?.0 as u8;
             let color = pumpkin_data::dye_color::DyeColor::by_id(color_id).unwrap_or_default();
-            layers.push(pumpkin_data::data_component_impl::BannerPatternLayer {
-                pattern: String::new(),
-                color,
+            // Unknown ids degrade to an empty pattern name (conservative).
+            let pattern = resolve_id_to_name("banner_pattern", pattern_id).unwrap_or_else(|| {
+                warn_once(format!("banner_pattern:{pattern_id}"), || {
+                    format!("Unknown banner pattern id {pattern_id}; dropping the layer name")
+                });
+                String::new()
             });
+            layers.push(pumpkin_data::data_component_impl::BannerPatternLayer { pattern, color });
         }
         Ok(Self { layers })
     }
@@ -2802,5 +2986,167 @@ impl DataComponentCodec<Self> for BreakSoundImpl {
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
         let _ = seq.get_var_int()?;
         Ok(Self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vanilla_registry_tables_match_native_data() {
+        assert_eq!(vanilla_entry_count("enchantment"), Some(43));
+        assert_eq!(Enchantment::ALL.len(), 43);
+        assert_eq!(vanilla_entry_count("banner_pattern"), Some(43));
+        assert_eq!(vanilla_entry_count("trim_pattern"), Some(18));
+        assert_eq!(vanilla_entry_count("trim_material"), Some(11));
+        assert_eq!(vanilla_entry_count("instrument"), Some(8));
+        assert_eq!(vanilla_entry_count("dialog"), Some(3));
+        assert_eq!(vanilla_entry_count("nonexistent_domain"), None);
+    }
+
+    #[test]
+    fn vanilla_name_id_resolution() {
+        assert_eq!(
+            vanilla_id("instrument", "minecraft:ponder_goat_horn"),
+            Some(4)
+        );
+        assert_eq!(vanilla_id("instrument", "ponder_goat_horn"), Some(4));
+        assert_eq!(vanilla_id("trim_material", "minecraft:quartz"), Some(8));
+        assert_eq!(vanilla_id("banner_pattern", "creeper"), Some(4));
+        assert_eq!(
+            vanilla_name("instrument", 4).as_deref(),
+            Some("minecraft:ponder_goat_horn")
+        );
+        assert_eq!(vanilla_id("instrument", "minecraft:not_a_horn"), None);
+        assert_eq!(vanilla_name("instrument", 8), None);
+    }
+
+    #[test]
+    fn custom_id_bridge_round_trip() {
+        set_custom_ids(
+            "bridge_test_domain",
+            ["myplugin:alpha".to_string(), "myplugin:beta".to_string()],
+        );
+        // Unknown domain to the vanilla tables: vanilla count is absent, so
+        // lookups fail cleanly.
+        assert_eq!(custom_id("bridge_test_domain", "myplugin:alpha"), None);
+
+        set_custom_ids("trim_material", ["myplugin:unobtanium".to_string()]);
+        let id = custom_id("trim_material", "myplugin:unobtanium").unwrap();
+        assert_eq!(id, 11);
+        assert_eq!(
+            custom_name("trim_material", 11).as_deref(),
+            Some("myplugin:unobtanium")
+        );
+        assert_eq!(custom_name("trim_material", 10), None);
+        assert_eq!(custom_id("trim_material", "myplugin:missing"), None);
+        // Restore the real-domain custom list to empty for other tests.
+        set_custom_ids("trim_material", Vec::<String>::new());
+    }
+
+    #[test]
+    fn enchantments_codec_round_trip_with_custom() {
+        static EMPTY_TAG: pumpkin_data::tag::Tag = (&[], &[]);
+        let interned = pumpkin_data::data_component_impl::intern_custom_enchantment(
+            pumpkin_data::data_component_impl::CustomEnchantmentDefinition {
+                name: "testplugin:frost".to_string(),
+                description: "enchantment.testplugin.frost".to_string(),
+                max_level: 3,
+                anvil_cost: 2,
+                supported_items: &EMPTY_TAG,
+                weight: 5,
+                slots: Vec::new(),
+                exclusive_set: None,
+                min_cost: pumpkin_data::enchantment::Cost {
+                    base: 1,
+                    per_level_above_first: 10,
+                },
+                max_cost: pumpkin_data::enchantment::Cost {
+                    base: 41,
+                    per_level_above_first: 10,
+                },
+            },
+        )
+        .expect("interning succeeds");
+        assert!(pumpkin_data::data_component_impl::is_custom_enchantment(
+            interned
+        ));
+        let looked_up =
+            pumpkin_data::data_component_impl::custom_enchantment_by_name("testplugin:frost")
+                .expect("interned enchantment resolves by name");
+        assert!(std::ptr::eq(looked_up, interned));
+
+        let component = EnchantmentsImpl {
+            enchantment: Cow::Owned(vec![(interned, 2), (&Enchantment::SHARPNESS, 5)]),
+        };
+        let mut bytes = Vec::new();
+        component.serialize(&mut bytes).unwrap();
+        let mut reader = &bytes[..];
+        let decoded = EnchantmentsImpl::deserialize(&mut reader).unwrap();
+        assert_eq!(decoded.enchantment.len(), 2);
+        assert_eq!(decoded.enchantment[0].0.name, "testplugin:frost");
+        assert_eq!(decoded.enchantment[0].1, 2);
+        assert_eq!(decoded.enchantment[1].0.id, Enchantment::SHARPNESS.id);
+        assert_eq!(decoded.enchantment[1].1, 5);
+    }
+
+    #[test]
+    fn enchantments_deserialize_skips_unknown_ids() {
+        // vanilla id 0 (aqua_affinity), then a far-out id that resolves
+        // nowhere, then vanilla id 5 (channeling).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[3]); // len
+        bytes.extend_from_slice(&[0, 1]); // id 0, level 1
+        bytes.extend_from_slice(&[0xC0, 0x01]); // id 192 (VarInt), level...
+        // VarInt 192 encodes as two bytes 0xC0 0x01; level 2 follows.
+        bytes.extend_from_slice(&[2]);
+        bytes.extend_from_slice(&[5, 3]); // id 5, level 3
+        let mut reader = &bytes[..];
+        let decoded = EnchantmentsImpl::deserialize(&mut reader).unwrap();
+        assert_eq!(decoded.enchantment.len(), 2);
+        assert_eq!(decoded.enchantment[0].0.id, 0);
+        assert_eq!(decoded.enchantment[1].0.id, 5);
+    }
+
+    #[test]
+    fn trim_codec_round_trip() {
+        let component = TrimImpl {
+            material: NbtTag::String("minecraft:quartz".into()),
+            pattern: NbtTag::String("minecraft:coast".into()),
+        };
+        let mut bytes = Vec::new();
+        component.serialize(&mut bytes).unwrap();
+        let mut reader = &bytes[..];
+        let decoded = TrimImpl::deserialize(&mut reader).unwrap();
+        assert_eq!(decoded.material.extract_string(), Some("minecraft:quartz"));
+        assert_eq!(decoded.pattern.extract_string(), Some("minecraft:coast"));
+    }
+
+    #[test]
+    fn banner_patterns_codec_round_trip() {
+        let component = BannerPatternsImpl {
+            layers: vec![BannerPatternLayer {
+                pattern: "minecraft:creeper".to_string(),
+                color: pumpkin_data::dye_color::DyeColor::by_id(2).unwrap_or_default(),
+            }],
+        };
+        let mut bytes = Vec::new();
+        component.serialize(&mut bytes).unwrap();
+        let mut reader = &bytes[..];
+        let decoded = BannerPatternsImpl::deserialize(&mut reader).unwrap();
+        assert_eq!(decoded.layers.len(), 1);
+        assert_eq!(decoded.layers[0].pattern, "minecraft:creeper");
+        assert_eq!(decoded.layers[0].color.id(), 2);
+    }
+
+    #[test]
+    fn instrument_codec_writes_vanilla_default() {
+        let mut bytes = Vec::new();
+        InstrumentImpl.serialize(&mut bytes).unwrap();
+        // "minecraft:ponder_goat_horn" is instrument registry id 4.
+        assert_eq!(bytes, [4]);
+        let mut reader = &bytes[..];
+        let _ = InstrumentImpl::deserialize(&mut reader).unwrap();
     }
 }

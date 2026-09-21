@@ -31,7 +31,7 @@ impl HostEnchantmentManager for PluginHostState {
             .server
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("Server not available"))?;
-        Ok(server.enchantment_manager.register(entry).await)
+        Ok(server.enchantment_manager.register(server, entry).await)
     }
 
     async fn get_enchantment(

@@ -7,11 +7,12 @@ use crate::data_component_impl::{
     DataComponentImpl, EquipmentSlot, IDSet, IdOr, get_f32_hash, get_i32_hash, get_idor,
     get_idor_hash, get_idset_hash, get_str_hash, put_idor,
 };
+use crate::enchantment::{Cost, EnchantmentEffects};
 use crate::entity_type::EntityType;
 use crate::item::Item;
 use crate::item_stack::ItemStack;
 use crate::sound::Sound;
-use crate::tag::Taggable;
+use crate::tag::{Tag, Taggable};
 use crc_fast::CrcAlgorithm::Crc32Iscsi;
 use crc_fast::Digest;
 use pumpkin_nbt::compound::NbtCompound;
@@ -59,26 +60,195 @@ impl DataComponentImpl for AttributeModifiersImpl {
     default_impl!(AttributeModifiers);
 }
 
+// ── Custom enchantment interning ────────────────────────────────────────────
+
+/// An empty effects table shared by every interned custom enchantment; custom
+/// effects are not modelled yet.
+const EMPTY_ENCHANTMENT_EFFECTS: EnchantmentEffects = EnchantmentEffects {
+    projectile_spawned: &[],
+    post_attack: &[],
+    projectile_count: &[],
+    projectile_spread: &[],
+    projectile_piercing: &[],
+    ammo_use: &[],
+    damage: &[],
+    knockback: &[],
+    armor_effectiveness: &[],
+    damage_protection: &[],
+    hit_block: &[],
+    item_damage: &[],
+    equipment_drops: &[],
+    fishing_time_reduction: &[],
+    fishing_luck_bonus: &[],
+    block_experience: &[],
+    mob_experience: &[],
+    repair_with_xp: &[],
+    smash_damage_per_fallen_block: &[],
+    trident_return_acceleration: &[],
+    trident_spin_attack_strength: None,
+    crossbow_charge_time: None,
+    location_changed: &[],
+    prevent_armor_change: false,
+    prevent_equipment_drop: false,
+};
+
+/// Definition of a plugin-registered custom enchantment, used to intern a
+/// process-lifetime [`&'static Enchantment`](Enchantment) so that custom
+/// entries can share the vanilla component storage
+/// (`Cow<'static, [(&'static Enchantment, i32)]>`) without changing its type.
+pub struct CustomEnchantmentDefinition {
+    /// Full namespaced id, e.g. `"myplugin:frost"`.
+    pub name: String,
+    /// Translation key used in tooltips (vanilla convention:
+    /// `"enchantment.<namespace>.<path>"`).
+    pub description: String,
+    pub max_level: i32,
+    pub anvil_cost: u32,
+    pub supported_items: &'static Tag,
+    pub weight: i32,
+    pub slots: Vec<crate::AttributeModifierSlot>,
+    pub exclusive_set: Option<&'static Tag>,
+    pub min_cost: Cost,
+    pub max_cost: Cost,
+}
+
+/// Runtime registry of plugin-registered custom enchantments, in registration
+/// order.
+///
+/// Interned enchantments receive ids continuing the vanilla sequence
+/// (`Enchantment::ALL.len()`), which is exactly the network id a client
+/// assigns them when the registry sync appends custom entries after the
+/// vanilla ones. Keeping the storage element type `&'static Enchantment`
+/// unchanged lets every existing reader (anvil, grindstone, enchanting table,
+/// entity equipment, generated item tables, ...) handle custom entries
+/// unmodified, and keeps NBT persistence name-based (`Enchantment::name`).
+static CUSTOM_ENCHANTMENTS: std::sync::RwLock<Vec<&'static Enchantment>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Interns a custom enchantment and returns its process-lifetime handle.
+///
+/// Errors when the name collides with a vanilla or already-registered custom
+/// enchantment, or when the id space (a `u8` shared with vanilla) is full.
+pub fn intern_custom_enchantment(
+    def: CustomEnchantmentDefinition,
+) -> Result<&'static Enchantment, String> {
+    let mut table = CUSTOM_ENCHANTMENTS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if Enchantment::from_name(&def.name).is_some() {
+        return Err(format!("'{}' is a vanilla enchantment name", def.name));
+    }
+    if table.iter().any(|enc| enc.name == def.name) {
+        return Err(format!(
+            "custom enchantment '{}' is already registered",
+            def.name
+        ));
+    }
+    let id = u8::try_from(Enchantment::ALL.len() + table.len())
+        .map_err(|_| "custom enchantment id space (u8) is exhausted".to_string())?;
+    let name: &'static str = Box::leak(def.name.into_boxed_str());
+    let registry_key: &'static str = name.rsplit(':').next().unwrap_or(name);
+    let enchantment: &'static Enchantment = Box::leak(Box::new(Enchantment {
+        id,
+        name,
+        registry_key,
+        description: Box::leak(def.description.into_boxed_str()),
+        anvil_cost: def.anvil_cost,
+        supported_items: def.supported_items,
+        exclusive_set: def.exclusive_set,
+        max_level: def.max_level,
+        slots: Box::leak(def.slots.into_boxed_slice()),
+        weight: def.weight,
+        min_cost: def.min_cost,
+        max_cost: def.max_cost,
+        effects: EMPTY_ENCHANTMENT_EFFECTS,
+    }));
+    table.push(enchantment);
+    Ok(enchantment)
+}
+
+/// Looks up an interned custom enchantment by its full namespaced name
+/// (e.g. `"myplugin:frost"`).
+#[must_use]
+pub fn custom_enchantment_by_name(name: &str) -> Option<&'static Enchantment> {
+    CUSTOM_ENCHANTMENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|enc| enc.name == name)
+        .copied()
+}
+
+/// Resolves a network id to an interned custom enchantment. Ids below
+/// `Enchantment::ALL.len()` are vanilla and return `None` here.
+#[must_use]
+pub fn custom_enchantment_by_network_id(id: u16) -> Option<&'static Enchantment> {
+    let index = usize::from(id.checked_sub(Enchantment::ALL.len() as u16)?);
+    CUSTOM_ENCHANTMENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(index)
+        .copied()
+}
+
+/// The full namespaced names of every interned custom enchantment, in
+/// registration order (i.e. network id order after the vanilla entries).
+#[must_use]
+pub fn custom_enchantment_names() -> Vec<String> {
+    CUSTOM_ENCHANTMENTS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|enc| enc.name.to_string())
+        .collect()
+}
+
+/// Whether this enchantment is an interned custom (plugin-registered) entry
+/// rather than a vanilla one. Custom ids continue the vanilla sequence.
+#[must_use]
+pub fn is_custom_enchantment(enchantment: &Enchantment) -> bool {
+    usize::from(enchantment.id) >= Enchantment::ALL.len()
+}
+
+/// Shared NBT reader for [`EnchantmentsImpl`] and [`StoredEnchantmentsImpl`].
+///
+/// Accepts both the flat `{name: level}` form and the `{levels: {name:
+/// level}}` wrapper. Vanilla entries resolve by name; custom entries resolve
+/// through the intern table under their full namespaced id. Unknown names or
+/// malformed levels are skipped rather than failing the whole component, so a
+/// custom enchantment whose plugin was removed does not corrupt the item.
+fn read_enchantment_entries(data: &NbtTag) -> Option<Vec<(&'static Enchantment, i32)>> {
+    let compound = data.extract_compound()?;
+    let data = if let Some(NbtTag::Compound(levels)) = compound.child_tags.get("levels") {
+        &levels.child_tags
+    } else {
+        &compound.child_tags
+    };
+    let mut enc = Vec::with_capacity(data.len());
+    for (name, level) in data {
+        let name_str: &str = name.as_ref();
+        let Some(enchantment) = Enchantment::from_name(name_str)
+            .or_else(|| Enchantment::from_name(&format!("minecraft:{name_str}")))
+            .or_else(|| custom_enchantment_by_name(name_str))
+        else {
+            continue;
+        };
+        let Some(level) = level.extract_int() else {
+            continue;
+        };
+        enc.push((enchantment, level));
+    }
+    Some(enc)
+}
+
 #[derive(Clone, Hash, PartialEq, Eq, Default)]
 pub struct EnchantmentsImpl {
     pub enchantment: Cow<'static, [(&'static Enchantment, i32)]>,
 }
 impl EnchantmentsImpl {
     pub fn read_data(data: &NbtTag) -> Option<Self> {
-        let compound = data.extract_compound()?;
-        let data = if let Some(NbtTag::Compound(levels)) = compound.child_tags.get("levels") {
-            &levels.child_tags
-        } else {
-            &compound.child_tags
-        };
-        let mut enc = Vec::with_capacity(data.len());
-        for (name, level) in data {
-            let enchantment = Enchantment::from_name(name.as_ref())
-                .or_else(|| Enchantment::from_name(&format!("minecraft:{name}")))?;
-            enc.push((enchantment, level.extract_int()?));
-        }
         Some(Self {
-            enchantment: Cow::from(enc),
+            enchantment: Cow::from(read_enchantment_entries(data)?),
         })
     }
 }
@@ -1069,20 +1239,8 @@ pub struct StoredEnchantmentsImpl {
 }
 impl StoredEnchantmentsImpl {
     pub fn read_data(data: &NbtTag) -> Option<Self> {
-        let compound = data.extract_compound()?;
-        let data = if let Some(NbtTag::Compound(levels)) = compound.child_tags.get("levels") {
-            &levels.child_tags
-        } else {
-            &compound.child_tags
-        };
-        let mut enc = Vec::with_capacity(data.len());
-        for (name, level) in data {
-            let enchantment = Enchantment::from_name(name.as_ref())
-                .or_else(|| Enchantment::from_name(&format!("minecraft:{name}")))?;
-            enc.push((enchantment, level.extract_int()?));
-        }
         Some(Self {
-            enchantment: Cow::from(enc),
+            enchantment: Cow::from(read_enchantment_entries(data)?),
         })
     }
 }

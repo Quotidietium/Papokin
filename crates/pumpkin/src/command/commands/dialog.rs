@@ -44,9 +44,26 @@ impl CommandExecutor for DialogClearExecutor {
     }
 }
 
-static REGISTRY_ERROR: LiteralCommandErrorType = LiteralCommandErrorType::new(
-    "Registry-defined dialogs are not yet supported. Please specify the dialog inline using SNBT.",
+static UNKNOWN_DIALOG_ERROR: LiteralCommandErrorType = LiteralCommandErrorType::new(
+    "Unknown dialog. Use a registered dialog id or specify the dialog inline using SNBT.",
 );
+
+/// Resolves a dialog id (e.g. `"minecraft:server_links"` or a plugin-registered
+/// namespaced id) to its network id: vanilla entries come from the static
+/// `dialog` registry table, custom entries from the server's registry manager
+/// (id = vanilla entry count + registration index, matching the registry
+/// sync).
+fn dialog_network_id(name: &str, server: &crate::server::Server) -> Option<u16> {
+    let vanilla = pumpkin_data::registry::REGISTRY_V_26_3
+        .iter()
+        .find(|registry| registry.registry_id == "dialog")?;
+    let path = name.strip_prefix("minecraft:").unwrap_or(name);
+    if let Some(index) = vanilla.entries.iter().position(|entry| entry.name == path) {
+        return u16::try_from(index).ok();
+    }
+    let custom_index = server.registry_manager.index_of("dialog", name)?;
+    u16::try_from(vanilla.entries.len() + usize::from(custom_index)).ok()
+}
 
 struct DialogShowExecutor;
 
@@ -55,27 +72,29 @@ impl CommandExecutor for DialogShowExecutor {
         let targets = EntityArgumentType::get_players(context, ARG_TARGETS)?;
         let dialog_arg = DialogArgumentType::get(context, ARG_DIALOG)?;
 
-        match dialog_arg {
-            DialogArg::Nbt(compound) => {
-                let count = targets.len();
-                let dialog_nbt = DialogNBT::from_nbt(compound);
-                let packet = CPlayShowDialog::new(IdOr::Value(dialog_nbt));
-
-                for player in &targets {
-                    player.try_send_client_packet(&packet);
-                }
-
-                let msg = if count == 1 {
-                    TextComponent::text(format!("Showed dialog to {}", targets[0].gameprofile.name))
-                } else {
-                    TextComponent::text(format!("Showed dialog to {count} players"))
-                };
-                context.source.send_feedback(msg, true);
-
-                Ok(count as i32)
+        let dialog = match dialog_arg {
+            DialogArg::Nbt(compound) => IdOr::Value(DialogNBT::from_nbt(compound)),
+            DialogArg::Id(id) => {
+                let network_id = dialog_network_id(&id.to_string(), context.source.server())
+                    .ok_or_else(|| UNKNOWN_DIALOG_ERROR.create_without_context())?;
+                IdOr::Id(network_id)
             }
-            DialogArg::Id(_id) => Err(REGISTRY_ERROR.create_without_context()),
+        };
+
+        let count = targets.len();
+        let packet = CPlayShowDialog::new(dialog);
+        for player in &targets {
+            player.try_send_client_packet(&packet);
         }
+
+        let msg = if count == 1 {
+            TextComponent::text(format!("Showed dialog to {}", targets[0].gameprofile.name))
+        } else {
+            TextComponent::text(format!("Showed dialog to {count} players"))
+        };
+        context.source.send_feedback(msg, true);
+
+        Ok(count as i32)
     }
 }
 

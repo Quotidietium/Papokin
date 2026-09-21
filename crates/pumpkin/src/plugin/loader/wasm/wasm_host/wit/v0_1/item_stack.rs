@@ -161,6 +161,12 @@ impl HostItemStack for PluginHostState {
             && let Some(enc_impl) = data.as_any().downcast_ref::<EnchantmentsImpl>()
         {
             for (enc, level) in enc_impl.enchantment.iter() {
+                // The WIT enchantment enum only covers vanilla entries;
+                // transmuting an interned custom id (>= the vanilla count)
+                // would be an invalid discriminant, so customs are skipped.
+                if pumpkin_data::data_component_impl::is_custom_enchantment(enc) {
+                    continue;
+                }
                 enchantments.push(WitEnchantmentValue {
                     enchantment: to_wit_enchantment(enc),
                     level: *level as u32,
