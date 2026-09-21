@@ -1,0 +1,56 @@
+package pumpkin:plugin@0.1.0;
+
+/// Structure template registration and placement.
+///
+/// Templates use the vanilla `.nbt` structure format (gzipped NBT). The host
+/// keeps them in the same template cache the `/place template` command
+/// resolves against, so a template registered here is immediately placeable
+/// both by this interface and by the command.
+interface structure {
+    use common.{block-pos};
+    use %world.{%world};
+
+    /// Rotation applied when placing a structure template.
+    enum rotation {
+        /// No rotation (0 degrees).
+        none,
+        /// 90 degrees clockwise.
+        clockwise-90,
+        /// 180 degrees.
+        clockwise-180,
+        /// 90 degrees counter-clockwise.
+        counterclockwise-90,
+    }
+
+    /// Mirroring applied when placing a structure template.
+    enum mirror {
+        /// No mirroring.
+        none,
+        /// Mirror along the Z axis (north <-> south).
+        left-right,
+        /// Mirror along the X axis (east <-> west).
+        front-back,
+    }
+
+    /// Registers a structure template at runtime from gzipped NBT bytes (the
+    /// vanilla `.nbt` structure format).
+    ///
+    /// The name is canonicalized the vanilla way: a bare `foo` becomes
+    /// `minecraft:foo`. Registering under a name that already exists —
+    /// embedded or previously registered — replaces it for future lookups.
+    /// Returns an error when the bytes fail to decompress or parse.
+    register-structure: func(name: string, nbt: list<u8>) -> result<_, string>;
+
+    /// Places a registered or embedded structure template into the world with
+    /// its origin at `pos`. `rotation` and `mirror` default to `none` when
+    /// omitted. Returns an error when no template with `name` exists.
+    place-structure: func(world-ref: borrow<%world>, name: string, pos: block-pos, rotation: option<rotation>, mirror: option<mirror>) -> result<bool, string>;
+
+    /// Returns whether a template with the given name can be resolved,
+    /// covering runtime-registered and embedded templates.
+    has-structure: func(name: string) -> bool;
+
+    /// Lists all known template names: every embedded template plus every
+    /// runtime-registered one, deduplicated and sorted.
+    list-structures: func() -> list<string>;
+}

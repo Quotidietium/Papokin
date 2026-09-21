@@ -747,6 +747,7 @@ pub fn place_pool_element_templates(
                 placement_origin,
                 (0, 0),
                 piece.rotation,
+                pumpkin_data::Mirror::None,
                 legacy,
                 piece.liquid_settings == LiquidSettings::ApplyWaterlog,
                 processors.as_ref(),

@@ -43,13 +43,14 @@ pub use block_state_resolver::BlockStateResolver;
 pub use cache::{
     TemplateCache, all_embedded_datapack_names, all_pool_names, all_structure_names,
     all_template_names, get_pool_elements, get_processor_list_json, get_template,
-    get_template_pool_json, global_cache, template_bytes,
+    get_template_pool_json, global_cache, has_template, list_template_names, register_template,
+    template_bytes,
 };
 pub use processor::StructureProcessor;
 pub use pumpkin_data::{BlockState, Mirror as BlockMirror, Rotation as BlockRotation};
 pub use structure_template::{
     JigsawBlockInfo, Palette, PaletteEntry, SimplePalette, StructureBlockInfo, StructureEntityInfo,
-    StructurePlaceSettings, StructureTemplate, TemplateBlock, TemplateEntity,
+    StructurePlaceSettings, StructureTemplate, TemplateBlock, TemplateEntity, TemplateError,
 };
 pub use template_piece::TemplatePiece;
 
@@ -89,12 +90,29 @@ pub fn place_template(
         origin,
         offset,
         rotation,
+        Mirror::None,
         skip_air,
         apply_waterlogging,
         processors,
         chunk_box,
         false,
     );
+}
+
+/// Transforms a template-local block position by `mirror` (around the template
+/// center, keeping the footprint) and then by `rotation`.
+const fn transform_local_pos(
+    pos: Vector3<i32>,
+    size: Vector3<i32>,
+    mirror: Mirror,
+    rotation: Rotation,
+) -> Vector3<i32> {
+    let mirrored = match mirror {
+        Mirror::None => pos,
+        Mirror::LeftRight => Vector3::new(pos.x, pos.y, size.z - 1 - pos.z),
+        Mirror::FrontBack => Vector3::new(size.x - 1 - pos.x, pos.y, pos.z),
+    };
+    rotation.transform_pos(mirrored, size)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -104,6 +122,7 @@ pub fn place_template_with_options(
     origin: Vector3<i32>,
     offset: (i32, i32),
     rotation: Rotation,
+    mirror: Mirror,
     skip_air: bool,
     apply_waterlogging: bool,
     processors: &[StructureProcessor],
@@ -145,15 +164,13 @@ pub fn place_template_with_options(
             continue;
         }
 
-        // Resolve block state with rotation applied to directional properties
-        let Some(mut state) =
-            BlockStateResolver::resolve(&placed_entry, rotation, Mirror::default())
-        else {
+        // Resolve block state with rotation and mirror applied to directional properties
+        let Some(mut state) = BlockStateResolver::resolve(&placed_entry, rotation, mirror) else {
             continue;
         };
 
-        // Rotate block position within template bounds
-        let local_pos = rotation.transform_pos(block.pos, template.size);
+        // Transform block position within template bounds (mirror, then rotation)
+        let local_pos = transform_local_pos(block.pos, template.size, mirror, rotation);
 
         let wx = world_x + local_pos.x;
         let wy = origin.y + local_pos.y;
@@ -181,7 +198,7 @@ pub fn place_template_with_options(
         {
             *waterlogged = "true".to_string();
             if let Some(waterlogged_state) =
-                BlockStateResolver::resolve(&placed_entry, rotation, Mirror::default())
+                BlockStateResolver::resolve(&placed_entry, rotation, mirror)
             {
                 state = waterlogged_state;
             }
@@ -430,5 +447,103 @@ mod tests {
         }
 
         assert!(placed_templates > 0);
+    }
+
+    struct PositionPlacer(Vec<(Vector3<i32>, BlockStateId)>);
+
+    impl BlockPlacer for PositionPlacer {
+        fn get_block_state(&self, _pos: &Vector3<i32>) -> BlockStateId {
+            Block::AIR.default_state.id
+        }
+
+        fn set_block_state(&mut self, pos: &Vector3<i32>, state: &BlockState) {
+            self.0.push((*pos, state.id));
+        }
+
+        fn add_block_entity(&mut self, _nbt: NbtCompound) {}
+    }
+
+    /// A 2x1x1 template: `minecraft:stone` at local (0,0,0),
+    /// `minecraft:gold_block` at local (1,0,0).
+    fn two_block_template() -> StructureTemplate {
+        let mut root = NbtCompound::new();
+        root.put_list("size", vec![NbtTag::Int(2), NbtTag::Int(1), NbtTag::Int(1)]);
+
+        let mut stone = NbtCompound::new();
+        stone.put_string("Name", "minecraft:stone".to_string());
+        let mut gold = NbtCompound::new();
+        gold.put_string("Name", "minecraft:gold_block".to_string());
+        root.put_list("palette", vec![stone.into(), gold.into()]);
+
+        let mut first = NbtCompound::new();
+        first.put_list("pos", vec![NbtTag::Int(0), NbtTag::Int(0), NbtTag::Int(0)]);
+        first.put_int("state", 0);
+        let mut second = NbtCompound::new();
+        second.put_list("pos", vec![NbtTag::Int(1), NbtTag::Int(0), NbtTag::Int(0)]);
+        second.put_int("state", 1);
+        root.put_list("blocks", vec![first.into(), second.into()]);
+
+        StructureTemplate::from_nbt_compound(&root).expect("failed to build template")
+    }
+
+    fn place_two_block_template(
+        mirror: Mirror,
+        rotation: Rotation,
+    ) -> Vec<(Vector3<i32>, BlockStateId)> {
+        let template = two_block_template();
+        let mut placer = PositionPlacer(Vec::new());
+        place_template_with_options(
+            &mut placer,
+            &template,
+            Vector3::new(0, 0, 0),
+            (0, 0),
+            rotation,
+            mirror,
+            false,
+            false,
+            &[],
+            None,
+            false,
+        );
+        placer.0.sort_by_key(|(pos, _)| (pos.x, pos.y, pos.z));
+        placer.0
+    }
+
+    #[test]
+    fn mirror_front_back_swaps_positions_within_footprint() {
+        let stone = Block::STONE.default_state.id;
+        let gold = Block::GOLD_BLOCK.default_state.id;
+
+        // Baseline: no mirror keeps template-local positions.
+        let placed = place_two_block_template(Mirror::None, Rotation::None);
+        assert_eq!(
+            placed,
+            vec![
+                (Vector3::new(0, 0, 0), stone),
+                (Vector3::new(1, 0, 0), gold),
+            ]
+        );
+
+        // FrontBack mirrors along the X axis around the template center: the
+        // blocks swap positions but stay inside the original footprint.
+        let placed = place_two_block_template(Mirror::FrontBack, Rotation::None);
+        assert_eq!(
+            placed,
+            vec![
+                (Vector3::new(0, 0, 0), gold),
+                (Vector3::new(1, 0, 0), stone),
+            ]
+        );
+
+        // Mirror + 180 rotation cancels out on this template, matching the
+        // unmirrored placement exactly.
+        let placed = place_two_block_template(Mirror::FrontBack, Rotation::Rotate180);
+        assert_eq!(
+            placed,
+            vec![
+                (Vector3::new(0, 0, 0), stone),
+                (Vector3::new(1, 0, 0), gold),
+            ]
+        );
     }
 }
