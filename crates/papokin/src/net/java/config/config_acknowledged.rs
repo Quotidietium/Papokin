@@ -1,0 +1,67 @@
+#[allow(clippy::wildcard_imports)]
+use super::*;
+
+impl JavaClient {
+    pub async fn handle_config_acknowledged(&self, server: &Server) -> PacketHandlerResult {
+        debug!("正在处理配置确认");
+        self.connection_state.store(ConnectionState::Play);
+
+        let profile = self.gameprofile.clone();
+        let address = self.address;
+
+        // 初始配置到此完成；要在后续阶段之前通知插件。
+        // 玩家进入世界时。
+        if let Some(server_arc) = crate::net::server_arc(server) {
+            let mut event = crate::plugin::api::events::server::player_connection_initial_configure::PlayerConnectionInitialConfigureEvent::new(
+                profile.name.clone(),
+                profile.id,
+                crate::net::is_first_join(server, &profile.id),
+            );
+            server_arc
+                .plugin_manager
+                .fire(&server_arc, &mut event)
+                .await;
+        }
+
+        if let Some(reason) = can_not_join(&profile, &address, server).await {
+            self.kick(reason).await;
+            return PacketHandlerResult::Stop;
+        }
+
+        let config = self.config.load();
+        PacketHandlerResult::ReadyToPlay(profile, (**config).clone())
+    }
+}
+
+pub(crate) fn build_dimension_nbt(dim: &papokin_data::dimension::Dimension) -> Vec<u8> {
+    let mut compound = papokin_nbt::compound::NbtCompound::new();
+    compound.put_float("ambient_light", dim.ambient_light);
+    compound.put_int("height", dim.height);
+    compound.put_int("logical_height", dim.logical_height);
+    compound.put_int("min_y", dim.min_y);
+    compound.put_string("infiniburn", dim.infiniburn.to_string());
+    compound.put_int(
+        "monster_spawn_block_light_limit",
+        dim.monster_spawn_block_light_limit as i32,
+    );
+    compound.put_double("coordinate_scale", dim.coordinate_scale);
+    compound.put_byte("has_skylight", i8::from(dim.has_skylight));
+    compound.put_byte("has_ceiling", i8::from(dim.has_ceiling));
+    compound.put_byte("ultrawarm", i8::from(dim.id == 3));
+    compound.put_byte("natural", i8::from(dim.id == 0 || dim.id == 1));
+    compound.put_byte("piglin_safe", i8::from(dim.id == 3));
+    compound.put_byte("respawn_anchor_works", i8::from(dim.id == 3));
+    compound.put_byte("bed_works", i8::from(dim.id == 0 || dim.id == 1));
+    compound.put_byte("has_raids", i8::from(dim.id == 0 || dim.id == 1));
+    compound.put_string("effects", dim.minecraft_name.to_string());
+
+    let mut monster_spawn = papokin_nbt::compound::NbtCompound::new();
+    monster_spawn.put_string("type", "minecraft:uniform".to_string());
+    let mut value = papokin_nbt::compound::NbtCompound::new();
+    value.put_int("min_inclusive", 0);
+    value.put_int("max_inclusive", 7);
+    monster_spawn.put_compound("value", value);
+    compound.put_compound("monster_spawn_light_level", monster_spawn);
+
+    papokin_nbt::Nbt::from(compound).write().to_vec()
+}

@@ -1,0 +1,268 @@
+use papokin_util::{Hand, PermissionLvl};
+use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey};
+use rsa::signature::Verifier;
+use sha1::Sha1;
+use std::num::NonZero;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+use tracing::{Level, debug, error, info, trace, warn};
+
+use crate::block::BlockHitResult;
+use crate::block::registry::BlockActionResult;
+use crate::block::{self};
+use crate::entity::EntityBase;
+use crate::entity::equipment_break_status;
+use crate::entity::player::statistics::{CustomStatistic, StatisticCategory};
+use crate::entity::player::{ChatMode, ChatSession, MINE_BLOCK_EXHAUSTION, Player};
+use crate::error::PapokinError;
+use crate::log_at_level;
+use crate::net::PlayerConfig;
+use crate::net::java::JavaClient;
+use crate::plugin::player::async_player_chat::AsyncPlayerChatEvent;
+use crate::plugin::player::changed_main_hand::PlayerChangedMainHandEvent;
+use crate::plugin::player::fish::{PlayerFishEvent, PlayerFishState};
+use crate::plugin::player::item_held::PlayerItemHeldEvent;
+use crate::plugin::player::player_chat::PlayerChatEvent;
+use crate::plugin::player::player_command_preprocess::PlayerCommandPreprocessEvent;
+use crate::plugin::player::player_command_send::PlayerCommandSendEvent;
+use crate::plugin::player::player_interact_entity_event::PlayerInteractEntityEvent;
+use crate::plugin::player::player_interact_event::{InteractAction, PlayerInteractEvent};
+use crate::plugin::player::player_interact_unknown_entity_event::PlayerInteractUnknownEntityEvent;
+use crate::plugin::player::player_move::PlayerMoveEvent;
+use crate::plugin::player::player_toggle_flight_event::PlayerToggleFlightEvent;
+use crate::plugin::player::player_toggle_sneak_event::PlayerToggleSneakEvent;
+
+use crate::block::entities::command_block::CommandBlockEntity;
+use crate::block::entities::jigsaw_block::JigsawBlockEntity;
+use crate::plugin::player::player_toggle_sprint_event::PlayerToggleSprintEvent;
+use crate::server::{Server, seasonal_events};
+use crate::world::{BlockBreakingProgress, World, chunker};
+use papokin_data::block_properties::CommandBlockLikeProperties;
+use papokin_data::data_component::DataComponent;
+use papokin_data::data_component_impl::{
+    BlocksAttacksImpl, ConsumableImpl, DataComponentImpl, EquipmentSlot, EquippableImpl, FoodImpl,
+    WritableBookContentImpl, WrittenBookContentImpl,
+};
+use papokin_data::item::Item;
+use papokin_data::item_stack::ItemStack;
+use papokin_data::sound::{Sound, SoundCategory};
+use papokin_data::{Advancement, Block, BlockDirection, translation};
+use papokin_inventory::InventoryError;
+use papokin_inventory::merchant::merchant_screen_handler::MerchantScreenHandler;
+use papokin_inventory::player::player_inventory::PlayerInventory;
+use papokin_inventory::screen_handler::{InventoryPlayer, ScreenHandler};
+use papokin_protocol::codec::var_int::VarInt;
+use papokin_protocol::java::client::play::{
+    CBlockUpdate, CCommandSuggestions, CEntityPositionSync, CHeadRot, CPingResponse,
+    CPlayerInfoUpdate, CPlayerPosition, CSetCamera, CSetSelectedSlot, CUpdateEntityPos,
+    CUpdateEntityPosRot, CUpdateEntityRot, InitChat, PlayerAction, PlayerInfoFlags,
+};
+use papokin_protocol::java::server::play::{
+    Action, ActionType, CommandBlockMode, FLAG_ON_GROUND, SAttack, SBundleItemSelected,
+    SChangeGameMode, SChatCommand, SChatMessage, SChunkBatch, SClientCommand,
+    SClientInformationPlay, SCommandSuggestion, SConfirmTeleport,
+    SCookieResponse as SPCookieResponse, SEditBook, SInteract, SJigsawGenerate, SKeepAlive,
+    SMoveVehicle, SPaddleBoat, SPickItemFromBlock, SPickItemFromEntity, SPlaceRecipe,
+    SPlayPingRequest, SPlayerAbilities, SPlayerAction, SPlayerCommand, SPlayerInput,
+    SPlayerPosition, SPlayerPositionRotation, SPlayerRotation, SPlayerSession,
+    SRecipeBookChangeSettings, SRecipeBookSeenRecipe, SSeenAdvancement, SSelectTrade,
+    SSetCommandBlock, SSetCreativeSlot, SSetHeldItem, SSetJigsawBlock, SSetPlayerGround,
+    SSetTestBlock, SSwingArm, STeleportToEntity, STestInstanceBlockAction, SUpdateSign, SUseItem,
+    SUseItemOn, Status,
+};
+use papokin_util::math::vector3::Vector3;
+use papokin_util::math::{polynomial_rolling_hash, position::BlockPos, wrap_degrees};
+use papokin_util::{GameMode, text::TextComponent};
+use papokin_world::generation::structure::structures::jigsaw::JigsawJointType;
+use papokin_world::world::BlockFlags;
+
+/// 在安全聊天模式下，玩家发送的聊天消息时间戳早于此值（毫秒）时将被踢出
+/// 原版：2 分钟
+const CHAT_MESSAGE_MAX_AGE: i64 = 1000 * 60 * 2;
+
+#[derive(Debug, Error)]
+pub enum BlockPlacingError {
+    BlockOutOfReach,
+    InvalidHand,
+    InvalidBlockFace,
+    BlockOutOfWorld,
+    InvalidGamemode,
+}
+
+impl std::fmt::Display for BlockPlacingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl PapokinError for BlockPlacingError {
+    fn is_kick(&self) -> bool {
+        match self {
+            Self::BlockOutOfReach | Self::BlockOutOfWorld | Self::InvalidGamemode => false,
+            Self::InvalidBlockFace | Self::InvalidHand => true,
+        }
+    }
+
+    fn severity(&self) -> Level {
+        match self {
+            Self::BlockOutOfWorld | Self::InvalidGamemode => Level::TRACE,
+            Self::BlockOutOfReach | Self::InvalidBlockFace | Self::InvalidHand => Level::WARN,
+        }
+    }
+
+    fn client_kick_reason(&self) -> Option<String> {
+        match self {
+            Self::BlockOutOfReach | Self::BlockOutOfWorld | Self::InvalidGamemode => None,
+            Self::InvalidBlockFace => Some("Invalid block face".into()),
+            Self::InvalidHand => Some("Invalid hand".into()),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ChatError {
+    #[error("sent an oversized message")]
+    OversizedMessage,
+    #[error("sent a message with illegal characters")]
+    IllegalCharacters,
+    #[error("sent a chat with invalid/no signature")]
+    UnsignedChat,
+    #[error("has too many unacknowledged chats queued")]
+    TooManyPendingChats,
+    #[error("sent a chat that couldn't be validated")]
+    ChatValidationFailed,
+    #[error("sent a chat with an out of order timestamp")]
+    OutOfOrderChat,
+    #[error("has an expired public key")]
+    ExpiredPublicKey,
+    #[error("attempted to initialize a session with an invalid public key")]
+    InvalidPublicKey,
+}
+
+impl PapokinError for ChatError {
+    fn is_kick(&self) -> bool {
+        true
+    }
+
+    fn severity(&self) -> Level {
+        Level::WARN
+    }
+
+    fn client_kick_reason(&self) -> Option<String> {
+        match self {
+            Self::OversizedMessage => Some("Chat message too long".into()),
+            Self::IllegalCharacters => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_ILLEGAL_CHARACTERS,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::UnsignedChat => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_UNSIGNED_CHAT,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::TooManyPendingChats => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_TOO_MANY_PENDING_CHATS,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::ChatValidationFailed => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_CHAT_VALIDATION_FAILED,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::OutOfOrderChat => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_OUT_OF_ORDER_CHAT,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::ExpiredPublicKey => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_EXPIRED_PUBLIC_KEY,
+                    [],
+                )
+                .get_text(),
+            ),
+            Self::InvalidPublicKey => Some(
+                TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_INVALID_PUBLIC_KEY_SIGNATURE,
+                    [],
+                )
+                .get_text(),
+            ),
+        }
+    }
+}
+
+pub mod attack;
+pub mod bundle_item_selected;
+pub mod change_difficulty;
+pub mod change_game_mode;
+pub mod chat_ack;
+pub mod chat_command;
+pub mod chat_message;
+pub mod chunk_batch;
+pub mod client_command;
+pub mod client_information;
+pub mod client_tick_end;
+pub mod close_container;
+pub mod command_suggestion;
+pub mod configuration_acknowledged;
+pub mod confirm_teleport;
+pub mod container_slot_state_changed;
+pub mod cookie_response;
+pub mod debug_sample_subscription;
+pub mod debug_subscription_request;
+pub mod edit_book;
+pub mod interact;
+pub mod jigsaw_generate;
+pub mod keep_alive;
+pub mod lock_difficulty;
+pub mod move_vehicle;
+pub mod paddle_boat;
+pub mod pick_item;
+pub mod ping_request;
+pub mod place_recipe;
+pub mod player_abilities;
+pub mod player_action;
+pub mod player_command;
+pub mod player_ground;
+pub mod player_input;
+pub mod player_loaded;
+pub mod player_position;
+pub mod player_rotation;
+pub mod pong;
+pub mod recipe_book_change_settings;
+pub mod recipe_book_seen_recipe;
+pub mod resource_pack_response;
+pub mod seen_advancement;
+pub mod select_trade;
+pub mod set_beacon;
+pub mod set_command_block;
+pub mod set_command_minecart;
+pub mod set_creative_slot;
+pub mod set_game_rule;
+pub mod set_held_item;
+pub mod set_jigsaw_block;
+pub mod set_structure_block;
+pub mod set_test_block;
+pub mod spectate_entity;
+pub mod swing_arm;
+pub mod tag_query;
+pub mod teleport_to_entity;
+pub mod test_instance_block_action;
+pub mod update_sign;
+pub mod use_item;
+pub mod use_item_on;
