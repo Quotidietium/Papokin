@@ -1,0 +1,166 @@
+use crate::inventory::Inventory;
+use crate::{
+    player::player_inventory::PlayerInventory,
+    screen_handler::{InventoryPlayer, ScreenHandler, ScreenHandlerBehaviour},
+    slot::NormalSlot,
+};
+use papokin_data::{item_stack::ItemStack, screen::WindowType};
+use std::{any::Any, sync::Arc};
+
+/// 自定义 GUI 的构建器。
+pub struct GUIBuilder {
+    screen_type: WindowType,
+    rows: u8,
+    columns: u8,
+    inventory: Arc<dyn Inventory>,
+    allow_grab_items: bool,
+    allow_put_items: bool,
+}
+
+impl GUIBuilder {
+    /// 创建采用基础 9x3 布局的新 `GUIBuilder`。
+    pub fn new(screen_type: WindowType, inventory: Arc<dyn Inventory>) -> Self {
+        let (rows, columns) = match screen_type {
+            WindowType::Generic9x1 => (1, 9),
+            WindowType::Generic9x2 => (2, 9),
+            WindowType::Generic9x4 => (4, 9),
+            WindowType::Generic9x5 => (5, 9),
+            WindowType::Generic9x6 => (6, 9),
+            WindowType::Generic3x3 | WindowType::Crafter3x3 => (3, 3),
+            WindowType::Hopper => (1, 5),
+            _ => (3, 9), // 默认为 9x3
+        };
+
+        Self {
+            screen_type,
+            rows,
+            columns,
+            inventory,
+            allow_grab_items: true,
+            allow_put_items: true,
+        }
+    }
+
+    /// 设置玩家能否从物品栏中取出物品。
+    #[must_use]
+    pub const fn allow_grab_items(mut self, allow: bool) -> Self {
+        self.allow_grab_items = allow;
+        self
+    }
+
+    /// 设置玩家能否将自己物品栏中的物品放入该物品栏。
+    #[must_use]
+    pub const fn allow_put_items(mut self, allow: bool) -> Self {
+        self.allow_put_items = allow;
+        self
+    }
+
+    /// 构建 `GUIScreenHandler`。
+    pub fn build(self, sync_id: u8, player_inventory: &Arc<PlayerInventory>) -> GUIScreenHandler {
+        let mut behaviour = ScreenHandlerBehaviour::new(sync_id, Some(self.screen_type));
+        behaviour.allow_grab_items = self.allow_grab_items;
+        behaviour.allow_put_items = self.allow_put_items;
+        behaviour.container_slots = (self.rows * self.columns) as usize;
+
+        let mut handler = GUIScreenHandler {
+            inventory: self.inventory.clone(),
+            rows: self.rows,
+            columns: self.columns,
+            behaviour,
+        };
+
+        self.inventory.on_open();
+
+        handler.add_inventory_slots();
+        let player_inventory_trait: Arc<dyn Inventory> = player_inventory.clone();
+        handler.add_player_slots(&player_inventory_trait);
+
+        handler
+    }
+}
+
+pub struct GUIScreenHandler {
+    pub inventory: Arc<dyn Inventory>,
+    pub rows: u8,
+    pub columns: u8,
+    behaviour: ScreenHandlerBehaviour,
+}
+
+impl GUIScreenHandler {
+    fn add_inventory_slots(&mut self) {
+        for i in 0..self.rows {
+            for j in 0..self.columns {
+                self.add_slot(Arc::new(NormalSlot::new(
+                    self.inventory.clone(),
+                    (j + i * self.columns) as usize,
+                )));
+            }
+        }
+    }
+}
+
+impl ScreenHandler for GUIScreenHandler {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn get_behaviour(&self) -> &ScreenHandlerBehaviour {
+        &self.behaviour
+    }
+
+    fn get_behaviour_mut(&mut self) -> &mut ScreenHandlerBehaviour {
+        &mut self.behaviour
+    }
+
+    fn on_closed(&mut self, player: &dyn InventoryPlayer) {
+        self.default_on_closed(player);
+        self.inventory.on_close();
+    }
+
+    fn quick_move(&mut self, _player: &dyn InventoryPlayer, slot_index: i32) -> ItemStack {
+        let mut stack_left = ItemStack::EMPTY.clone();
+        let slot = self.get_behaviour().slots[slot_index as usize].clone();
+
+        if slot.has_stack() {
+            let mut slot_stack = slot.get_stack();
+            stack_left = slot_stack.clone();
+            let container_slots = i32::from(self.rows * self.columns);
+
+            if slot_index < container_slots {
+                // 从容器到玩家
+                if !self.get_behaviour().allow_grab_items {
+                    return ItemStack::EMPTY.clone();
+                }
+                if !self.insert_item(
+                    &mut slot_stack,
+                    container_slots,
+                    self.get_behaviour().slots.len() as i32,
+                    true,
+                ) {
+                    return ItemStack::EMPTY.clone();
+                }
+            } else {
+                // 从玩家到容器
+                if !self.get_behaviour().allow_put_items {
+                    return ItemStack::EMPTY.clone();
+                }
+                if !self.insert_item(&mut slot_stack, 0, container_slots, false) {
+                    // 从玩家区域移到物品栏（开始）
+                    return ItemStack::EMPTY.clone();
+                }
+            }
+
+            if slot_stack.is_empty() {
+                slot.set_stack(ItemStack::EMPTY.clone());
+            } else {
+                slot.set_stack(slot_stack);
+            }
+        }
+
+        stack_left
+    }
+}
