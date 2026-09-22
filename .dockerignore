@@ -9,6 +9,7 @@
 !/tools/
 !/assets/
 !/pumpkin.toml
+papokin.toml
 
 # Allow build.rs to read git commit sha
 !/.git

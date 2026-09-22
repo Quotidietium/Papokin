@@ -110,8 +110,10 @@ data/*
 
 # project's configurations
 pumpkin.toml
+papokin.toml
 nethernet-key.der
 .pumpkin-server-id
+.papokin-server-id
 
 
 *.local.nbt

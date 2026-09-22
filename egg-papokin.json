@@ -1,0 +1,73 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-02-10T08:07:42+00:00",
+    "name": "Papokin",
+    "author": "lilalexmed@proton.me",
+    "description": "Papokin 是一款完全用 Rust 编写的 Minecraft 服务器（Pumpkin 的分支），提供快速、高效、可定制的体验。它优先保障性能与玩家体验，同时遵循游戏核心机制。",
+    "features": null,
+    "docker_images": {
+        "Alpine": "ghcr.io/pterodactyl/yolks:alpine",
+        "Debian": "ghcr.io/pterodactyl/yolks:debian"
+    },
+    "file_denylist": [],
+    "startup": "./papokin",
+    "config": {
+        "files": "{\r\n    \"papokin.toml\": {\r\n        \"parser\": \"file\",\r\n        \"find\": {\r\n            \"address = \\\"0.0.0.0:25565\\\"\": \"address = \\\"0.0.0.0:{{server.build.default.port}}\\\"\"\r\n        }\r\n    }\r\n}",
+        "startup": "{\r\n    \"done\": \"Server is now running.\"\r\n}",
+        "logs": "{}",
+        "stop": "stop"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/ash\r\nset -eux\r\n\r\napk add --no-cache curl jq\r\nmkdir -p /mnt/server\r\ncd /mnt/server\r\n\r\nARCH=$(uname -m)\r\ncase \"$ARCH\" in\r\n    x86_64|amd64)\r\n        PAPOKIN_ARCH=\"X64\"\r\n        ;;\r\n    aarch64|arm64)\r\n        PAPOKIN_ARCH=\"ARM64\"\r\n        ;;\r\n    *)\r\n        echo \"Unsupported architecture: $ARCH\"\r\n        exit 1\r\n        ;;\r\nesac\r\n\r\nBINARY_NAME=\"papokin-${PAPOKIN_ARCH}-Linux-musl\"\r\n\r\nif [ -n \"${DOWNLOAD_URL:-}\" ]; then\r\n    URL=\"$DOWNLOAD_URL\"\r\nelif [ \"${VERSION:-nightly}\" = \"latest\" ] || [ \"${VERSION:-nightly}\" = \"nightly\" ]; then\r\n    URL=\"https://github.com/${GITHUB_PACKAGE:-Quotidietium/Papokin}/releases/download/nightly/${BINARY_NAME}\"\r\nelse\r\n    URL=\"https://github.com/${GITHUB_PACKAGE:-Quotidietium/Papokin}/releases/download/${VERSION}/${BINARY_NAME}\"\r\nfi\r\n\r\necho \"Downloading Papokin from: $URL\"\r\ncurl -fsSL \"$URL\" -o /mnt/server/papokin\r\nchmod +x /mnt/server/papokin\r\n\r\n# Quickly start and kill server to generate initial configuration if not present\r\nif [ ! -f /mnt/server/papokin.toml ]; then\r\n    timeout 2 ./papokin || true\r\nfi",
+            "container": "ghcr.io/pterodactyl/installers:alpine",
+            "entrypoint": "ash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Rust 回溯",
+            "description": "\"0\" -> 不生成回溯，默认行为。\r\n\"1\" -> 生成精简回溯，仅显示与 panic 发生位置相关的信息。\r\n\"full\" -> 生成完整回溯，显示导致 panic 的所有调用帧，包括 Rust 标准库与依赖中的函数。",
+            "env_variable": "RUST_BACKTRACE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:1,0,full",
+            "field_type": "text"
+        },
+        {
+            "name": "Papokin 版本",
+            "description": "要安装的 Papokin 版本。可选：'nightly'、'latest'，或具体的发布标签（如 'v0.1.0'）。\r\n作用域：安装",
+            "env_variable": "VERSION",
+            "default_value": "nightly",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "GitHub 仓库",
+            "description": "用于下载发布版本的 GitHub 仓库，格式为 'owner/repo'。使用分支版本（fork）时有用。\r\n作用域：安装",
+            "env_variable": "GITHUB_PACKAGE",
+            "default_value": "Quotidietium/Papokin",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "直接下载 URL",
+            "description": "直接下载 Papokin 二进制的 URL。若提供，将覆盖 VERSION 与 GITHUB_PACKAGE。\r\n作用域：安装",
+            "env_variable": "DOWNLOAD_URL",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        }
+    ]
+}

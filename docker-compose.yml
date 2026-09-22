@@ -1,16 +1,16 @@
 services:
-  pumpkin:
-    # Make sure to change the tag to the pumpkin version you want to use.
-    # https://github.com/Pumpkin-MC/Pumpkin/pkgs/container/pumpkin/versions?filters%5Bversion_type%5D=tagged
-    #image: ghcr.io/pumpkin-mc/pumpkin:master
+  papokin:
+    # 请务必将标签改为你想使用的 papokin 版本。
+    # https://github.com/Quotidietium/Papokin/pkgs/container/papokin/versions?filters%5Bversion_type%5D=tagged
+    #image: ghcr.io/quotidietium/papokin:master
     build: .
     ports:
       - "25565:25565"
       - "19132:19132/udp"
     volumes:
-      - ./data:/pumpkin
-      # Use the following, if you want to make your config immutable
-      #- ./config:/pumpkin/config:ro
+      - ./data:/papokin
+      # 如需将配置设为只读，可使用下面这行
+      #- ./config:/papokin/config:ro
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped

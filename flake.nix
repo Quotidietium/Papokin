@@ -28,7 +28,7 @@
           ...
         }:
         let
-          manifest = (lib.importTOML ./crates/pumpkin/Cargo.toml).package;
+          manifest = (lib.importTOML ./crates/papokin/Cargo.toml).package;
           workspace-manifest = (lib.importTOML ./Cargo.toml).workspace.package;
         in
         {
@@ -53,7 +53,7 @@
 
             cargoBuildFlags = [
               "--package"
-              "pumpkin"
+              "papokin"
             ];
 
             CARGO_PROFILE_RELEASE_LTO = "thin";
