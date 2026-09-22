@@ -1,20 +1,20 @@
-# Security Policy
+# 安全政策
 
-## Reporting a Vulnerability
+## 报告漏洞
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+**请勿通过公开的 GitHub 议题报告安全漏洞。**
 
-Instead, please send email to lilalexmed@proton.me
+请改为发送邮件至 lilalexmed@proton.me
 
-You should receive a response within 48 hours.
+你将在 48 小时内收到回复。
 
-Please include the requested information listed below (as much as you can provide) to help us better understand the nature and scope of the possible issue:
-- Type of issue (e.g. buffer overflow, SQL injection, cross-site scripting, etc.)
-- Full paths of source file(s) related to the manifestation of the issue
-- The location of the affected source code (tag/branch/commit or direct URL)
-- Any special configuration required to reproduce the issue
-- Step-by-step instructions to reproduce the issue
-- Proof-of-concept or exploit code (if possible)
-- Impact of the issue, including how an attacker might exploit the issue
-  
- **We prefer all communications to be in English.** 
+为帮助我们更好地理解潜在问题的性质与范围，请尽可能提供以下信息：
+- 问题类型（例如缓冲区溢出、SQL 注入、跨站脚本等）
+- 与问题表现相关的源文件完整路径
+- 受影响源代码的位置（标签/分支/提交号或直接 URL）
+- 复现问题所需的任何特殊配置
+- 逐步复现问题的操作说明
+- 概念验证或利用代码（如有可能）
+- 问题的影响，包括攻击者可能如何利用该问题
+
+ **我们希望所有沟通使用英文进行。**
