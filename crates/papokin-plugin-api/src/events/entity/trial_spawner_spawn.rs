@@ -1,0 +1,21 @@
+use crate::wit::papokin::plugin::event::{Event, EventType, TrialSpawnerSpawnEventData};
+
+use super::super::FromIntoEvent;
+
+/// 试炼刷怪笼生成实体时触发的事件。
+pub struct TrialSpawnerSpawnEvent;
+impl FromIntoEvent for TrialSpawnerSpawnEvent {
+    const EVENT_TYPE: EventType = EventType::TrialSpawnerSpawnEvent;
+    type Data = TrialSpawnerSpawnEventData;
+
+    fn data_from_event(event: Event) -> Self::Data {
+        match event {
+            Event::TrialSpawnerSpawnEvent(data) => data,
+            _ => panic!("非预期的事件"),
+        }
+    }
+
+    fn data_into_event(data: Self::Data) -> Event {
+        Event::TrialSpawnerSpawnEvent(data)
+    }
+}
