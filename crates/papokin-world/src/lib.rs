@@ -1,0 +1,246 @@
+#![allow(clippy::unreachable)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+
+use papokin_data::{Block, dimension::Dimension};
+
+pub mod biome;
+pub mod block;
+pub mod chunk;
+pub mod chunk_system;
+pub mod cylindrical_chunk_iterator;
+pub mod data;
+pub mod dimension;
+pub mod generation;
+pub mod level;
+pub mod lighting;
+pub mod poi;
+pub mod test_instance;
+pub mod tick;
+pub mod world;
+pub mod world_info;
+
+pub const CURRENT_MC_VERSION: &str = "1.21.11";
+
+#[macro_export]
+macro_rules! global_path {
+    ($path:expr) => {{
+        use std::path::Path;
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(file!())
+            .parent()
+            .unwrap()
+            .join($path)
+    }};
+}
+
+// TODO: 有没有办法在文件内直接写 bench？
+pub use generation::{
+    GlobalRandomConfig, noise::router::proto_noise_router::ProtoNoiseRouters,
+    proto_chunk::ProtoChunk,
+};
+
+use crate::generation::{
+    noise::{
+        CHUNK_DIM, ChunkNoiseGenerator, aquifer_sampler::FluidLevel,
+        router::density_volume::DensityVolume,
+    },
+    positions::chunk_pos,
+};
+
+pub fn bench_create_and_populate_noise(random_config: &GlobalRandomConfig) {
+    use crate::generation::generator::{GeneratorInit, VanillaGenerator, WorldGenerator};
+    use crate::generation::noise::router::surface_height_sampler::{
+        SurfaceHeightEstimateSampler, SurfaceHeightSamplerBuilderOptions,
+    };
+    use crate::generation::proto_chunk::StandardChunkFluidLevelSampler;
+    use papokin_util::world_seed::Seed;
+
+    let world_gen = WorldGenerator::Noise(Box::new(VanillaGenerator::new(
+        Seed(random_config.seed),
+        Dimension::OVERWORLD,
+    )));
+    let WorldGenerator::Noise(generator) = &world_gen else {
+        unreachable!()
+    };
+    let mut chunk = ProtoChunk::new(0, 0, &world_gen);
+
+    // 创建噪声采样器及其他必需组件
+    let settings = generator.settings;
+    let generation_shape = &settings.shape;
+    let sampler = StandardChunkFluidLevelSampler::new(
+        FluidLevel::new(
+            settings.sea_level,
+            Block::from_state_id(settings.default_fluid.id),
+        ),
+        FluidLevel::new(-54, &papokin_data::Block::LAVA),
+    );
+
+    let start_x = chunk_pos::start_block_x(0);
+    let start_z = chunk_pos::start_block_z(0);
+
+    let mut noise_sampler = ChunkNoiseGenerator::new(
+        &generator.base_router.noise,
+        &generator.random_config,
+        DensityVolume::with_block_step(
+            CHUNK_DIM as usize,
+            generation_shape.height as usize,
+            CHUNK_DIM as usize,
+            start_x,
+            i32::from(generation_shape.min_y),
+            start_z,
+        ),
+        generation_shape,
+        sampler,
+        settings.aquifers_enabled,
+        settings.ore_veins_enabled,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+
+    // 地表高度估算器
+    let surface_config = SurfaceHeightSamplerBuilderOptions::new(
+        generation_shape.min_y as i32,
+        generation_shape.max_y() as i32,
+        generation_shape.vertical_cell_block_count() as usize,
+    );
+    let mut surface_height_estimate_sampler = SurfaceHeightEstimateSampler::generate(
+        &generator.base_router.surface_estimator,
+        &surface_config,
+    );
+
+    chunk.populate_noise(
+        generator,
+        &mut noise_sampler,
+        &generator.random_config.ore_random_deriver,
+        &mut surface_height_estimate_sampler,
+    );
+}
+
+pub fn bench_create_and_populate_biome(random_config: &GlobalRandomConfig) {
+    use crate::generation::generator::{GeneratorInit, VanillaGenerator, WorldGenerator};
+    use crate::generation::noise::router::multi_noise_sampler::MultiNoiseSampler;
+    use papokin_util::world_seed::Seed;
+
+    let world_gen = WorldGenerator::Noise(Box::new(VanillaGenerator::new(
+        Seed(random_config.seed),
+        Dimension::OVERWORLD,
+    )));
+    let WorldGenerator::Noise(generator) = &world_gen else {
+        unreachable!()
+    };
+    let mut chunk = ProtoChunk::new(0, 0, &world_gen);
+
+    // 创建多噪声采样器
+    let mut multi_noise_sampler = MultiNoiseSampler::generate(&generator.base_router.multi_noise);
+
+    chunk.populate_biomes(generator, &mut multi_noise_sampler);
+}
+
+pub fn bench_create_and_populate_noise_with_surface(random_config: &GlobalRandomConfig) {
+    use crate::chunk_system::{Chunk, generation_cache::SurfaceBiomeNeighborhood};
+    use crate::generation::generator::{GeneratorInit, VanillaGenerator, WorldGenerator};
+    use crate::generation::noise::router::{
+        multi_noise_sampler::MultiNoiseSampler,
+        surface_height_sampler::{
+            SurfaceHeightEstimateSampler, SurfaceHeightSamplerBuilderOptions,
+        },
+    };
+    use crate::generation::proto_chunk::StandardChunkFluidLevelSampler;
+    use papokin_util::world_seed::Seed;
+
+    let world_gen = WorldGenerator::Noise(Box::new(VanillaGenerator::new(
+        Seed(random_config.seed),
+        Dimension::OVERWORLD,
+    )));
+    let WorldGenerator::Noise(generator) = &world_gen else {
+        unreachable!()
+    };
+    let mut chunk = ProtoChunk::new(0, 0, &world_gen);
+
+    // 创建所有必需组件
+    let settings = generator.settings;
+    let generation_shape = &settings.shape;
+    let start_x = chunk_pos::start_block_x(0);
+    let start_z = chunk_pos::start_block_z(0);
+
+    // 用于生物群系的多噪声采样器
+    let mut multi_noise_sampler = MultiNoiseSampler::generate(&generator.base_router.multi_noise);
+
+    // 噪声采样器
+    let sampler = StandardChunkFluidLevelSampler::new(
+        FluidLevel::new(
+            settings.sea_level,
+            Block::from_state_id(settings.default_fluid.id),
+        ),
+        FluidLevel::new(-54, &Block::LAVA),
+    );
+
+    let mut noise_sampler = ChunkNoiseGenerator::new(
+        &generator.base_router.noise,
+        &generator.random_config,
+        DensityVolume::with_block_step(
+            CHUNK_DIM as usize,
+            generation_shape.height as usize,
+            CHUNK_DIM as usize,
+            start_x,
+            i32::from(generation_shape.min_y),
+            start_z,
+        ),
+        generation_shape,
+        sampler,
+        settings.aquifers_enabled,
+        settings.ore_veins_enabled,
+        Vec::new(),
+        Vec::new(),
+        None,
+    );
+
+    // 地表高度估算器
+    let surface_config = SurfaceHeightSamplerBuilderOptions::new(
+        generation_shape.min_y as i32,
+        generation_shape.max_y() as i32,
+        generation_shape.vertical_cell_block_count() as usize,
+    );
+    let mut surface_height_estimate_sampler = SurfaceHeightEstimateSampler::generate(
+        &generator.base_router.surface_estimator,
+        &surface_config,
+    );
+
+    chunk.populate_biomes(generator, &mut multi_noise_sampler);
+
+    // 地表生物群系缩放可能会选取紧邻区块中的 quart。这里构建与运行时调度器
+    // 提供给 Surface 任务相同的只读调色板快照。
+    let mut surface_biomes = SurfaceBiomeNeighborhood::new(0, 0);
+    for chunk_x in -1..=1 {
+        for chunk_z in -1..=1 {
+            if chunk_x == 0 && chunk_z == 0 {
+                continue;
+            }
+            let mut neighbor = ProtoChunk::new(chunk_x, chunk_z, &world_gen);
+            neighbor.step_to_biomes(generator);
+            assert!(surface_biomes.push_chunk(&Chunk::Proto(Box::new(neighbor))));
+        }
+    }
+    let center = Chunk::Proto(Box::new(chunk));
+    assert!(surface_biomes.push_chunk(&center));
+    let Chunk::Proto(mut chunk) = center else {
+        unreachable!()
+    };
+
+    chunk.populate_noise(
+        generator,
+        &mut noise_sampler,
+        &generator.random_config.ore_random_deriver,
+        &mut surface_height_estimate_sampler,
+    );
+    chunk.build_surface(
+        generator,
+        &surface_biomes,
+        &mut surface_height_estimate_sampler,
+    );
+}
