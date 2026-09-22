@@ -1,26 +1,25 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/pumpkin",
-    "crates/pumpkin-api-macros",
-    "crates/pumpkin-auth",
-    "crates/pumpkin-codecs",
-    "crates/pumpkin-command",
-    "crates/pumpkin-config",
-    "crates/pumpkin-data",
-    "crates/pumpkin-gametest",
-    "crates/pumpkin-inventory",
-    "crates/pumpkin-macros",
-    "crates/pumpkin-nbt",
-    "crates/pumpkin-plugin-api",
-    "crates/pumpkin-plugin-runtime",
-    "crates/pumpkin-plugin-utils",
-    "crates/pumpkin-protocol",
-    "crates/pumpkin-util", 
-    "crates/pumpkin-host-bindings",
-    "crates/pumpkin-world",
-    "tools/pumpkin-codegen",
-    "tools/pumpkin-fuzzer",
+    "crates/papokin",
+    "crates/papokin-api-macros",
+    "crates/papokin-codecs",
+    "crates/papokin-command",
+    "crates/papokin-config",
+    "crates/papokin-data",
+    "crates/papokin-gametest",
+    "crates/papokin-inventory",
+    "crates/papokin-macros",
+    "crates/papokin-nbt",
+    "crates/papokin-plugin-api",
+    "crates/papokin-plugin-runtime",
+    "crates/papokin-plugin-utils",
+    "crates/papokin-protocol",
+    "crates/papokin-util", 
+    "crates/papokin-host-bindings",
+    "crates/papokin-world",
+    "tools/papokin-codegen",
+    "tools/papokin-fuzzer",
 ]
 
 # [workspace.lints.rust]
@@ -108,7 +107,7 @@ struct_excessive_bools = "allow"
 unused_async_trait_impl = "allow"
 
 [workspace.package]
-version = "0.2.0+1.21.11-26.51"
+version = "0.3.0+1.21.11"
 edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0"
@@ -161,7 +160,6 @@ crc-fast = { version = "1.10.0", default-features = false, features = ["std"] }
 criterion = { version = "0.8", default-features = false }
 crypto-bigint = { version = "0.7.5", default-features = false }
 dashmap = { version = "6.2", default-features = false }
-ecdsa = { version = "0.17.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 heck = { version = "0.5", default-features = false }
 hmac = { version = "=0.13.0", default-features = false }
@@ -175,25 +173,23 @@ md5 = { version = "0.8", default-features = false }
 num-bigint = { version = "0.5", default-features = false, features = ["std"] }
 num-derive = { version = "0.5", default-features = false }
 num-traits = { version = "0.2", default-features = false, features = ["std"] }
-p384 = { version = "0.14.0", default-features = false, features = ["std", "arithmetic", "pkcs8"] }
 phf = { version = "0.14.0", default-features = false, features = ["std"] }
 proc-macro2 = { version = "1.0", default-features = false, features = ["proc-macro"] }
-pumpkin-api-macros = { path = "crates/pumpkin-api-macros", default-features = false }
-pumpkin-auth = { path = "crates/pumpkin-auth", default-features = false }
-pumpkin-codecs = { path = "crates/pumpkin-codecs", default-features = false }
-pumpkin-command = { path = "crates/pumpkin-command", default-features = false }
-pumpkin-config = { path = "crates/pumpkin-config", default-features = false }
-pumpkin-data = { path = "crates/pumpkin-data", default-features = false }
-pumpkin-inventory = { path = "crates/pumpkin-inventory", default-features = false }
-pumpkin-macros = { path = "crates/pumpkin-macros", default-features = false }
-pumpkin-nbt = { path = "crates/pumpkin-nbt", default-features = false }
-pumpkin-plugin-api = { path = "crates/pumpkin-plugin-api", default-features = false }
-pumpkin-plugin-runtime = { path = "crates/pumpkin-plugin-runtime", default-features = false }
-pumpkin-plugin-utils = { path = "crates/pumpkin-plugin-utils", default-features = false }
-pumpkin-protocol = { path = "crates/pumpkin-protocol", default-features = false }
-pumpkin-util = { path = "crates/pumpkin-util", default-features = false }
-pumpkin-host-bindings = { path = "crates/pumpkin-host-bindings", default-features = false }
-pumpkin-world = { path = "crates/pumpkin-world", default-features = false }
+papokin-api-macros = { path = "crates/papokin-api-macros", default-features = false }
+papokin-codecs = { path = "crates/papokin-codecs", default-features = false }
+papokin-command = { path = "crates/papokin-command", default-features = false }
+papokin-config = { path = "crates/papokin-config", default-features = false }
+papokin-data = { path = "crates/papokin-data", default-features = false }
+papokin-inventory = { path = "crates/papokin-inventory", default-features = false }
+papokin-macros = { path = "crates/papokin-macros", default-features = false }
+papokin-nbt = { path = "crates/papokin-nbt", default-features = false }
+papokin-plugin-api = { path = "crates/papokin-plugin-api", default-features = false }
+papokin-plugin-runtime = { path = "crates/papokin-plugin-runtime", default-features = false }
+papokin-plugin-utils = { path = "crates/papokin-plugin-utils", default-features = false }
+papokin-protocol = { path = "crates/papokin-protocol", default-features = false }
+papokin-util = { path = "crates/papokin-util", default-features = false }
+papokin-host-bindings = { path = "crates/papokin-host-bindings", default-features = false }
+papokin-world = { path = "crates/papokin-world", default-features = false }
 quote = { version = "1.0", default-features = false, features = ["proc-macro"] }
 rand = { version = "0.10.2", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["std", "encoding"] }
@@ -223,7 +219,6 @@ notify = { version = "8.2.0", default-features = false, features = ["macos_fseve
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 rustc_version_runtime = { version = "0.3", default-features = false }
 ordered-float = { version = "5.4", default-features = false, features = ["std"] }
-xxhash-rust = { version = "0.8", default-features = false, features = ["xxh64"] }
 
 # Temporary pin to the approved implementation of Component Model sync reentry:
 # https://github.com/bytecodealliance/wasmtime/commit/f6b3140dbb1d9b436ef523d14740292c956b0364
@@ -233,7 +228,6 @@ wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev
 # needed for interacting with wasmtime-wasi-http - keep in sync
 hyper = { version = "^1.11", default-features = false }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio"] }
-webrtc = { version = "0.20.5" }
 async-trait = "0.1"
 wit-bindgen = { version = "0.61", default-features = false, features = ["macros"] }
 
