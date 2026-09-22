@@ -1,15 +1,15 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use pumpkin_data::translation::java;
-use pumpkin_util::text::{TextComponent, color::NamedColor};
+use papokin_data::translation::java;
+use papokin_util::text::{TextComponent, color::NamedColor};
 
 use crate::{GameTestError, GameTestSession, GameTestState};
 
-/// Receives fully constructed `GameTest` report messages.
+/// 接收已完整构建的 `GameTest` 报告消息。
 ///
-/// The `GameTest` runtime owns when and what to report. Integrations only decide
-/// where those messages are delivered.
+/// `GameTest` 运行时决定何时报告以及报告什么。集成方只需决定
+/// 这些消息被送达的地方。
 pub trait GameTestReporter: Send + Sync {
     fn send_message(&self, message: TextComponent);
 }
@@ -41,7 +41,7 @@ impl GameTestRetryOptions {
 
     #[must_use]
     fn has_tries_left(self, attempts: u32, successes: u32) -> bool {
-        // Exact RetryOptions::hasTriesLeft semantics from vanilla.
+        // 与原版完全一致的 RetryOptions::hasTriesLeft 语义
         let has_failures = attempts != successes;
         let has_more_attempts = self.unlimited_tries()
             || attempts < u32::try_from(self.number_of_tries).unwrap_or(u32::MAX);
@@ -49,7 +49,7 @@ impl GameTestRetryOptions {
     }
 }
 
-/// Shared accounting and reporting for a group of `GameTests`.
+/// 为一组 `GameTest` 提供共享的统计与报告。
 pub struct GameTestBatchReport {
     reporter: Arc<dyn GameTestReporter>,
     remaining_tests: AtomicUsize,
@@ -98,44 +98,38 @@ impl GameTestBatchReport {
         let failed_optional = self.failed_optional.load(Ordering::Acquire);
 
         self.reporter.send_message(
-            pumpkin_macros::translate_cross!(
+            papokin_macros::translate!(
                 java::COMMANDS_TEST_SUMMARY,
-                java::COMMANDS_TEST_SUMMARY,
-                TextComponent::text(total.to_string()),
+                TextComponent::text(total.to_string())
             )
             .color_named(NamedColor::White),
         );
 
         if failed_required != 0 {
             self.reporter.send_message(
-                pumpkin_macros::translate_cross!(
+                papokin_macros::translate!(
                     java::COMMANDS_TEST_SUMMARY_FAILED,
-                    java::COMMANDS_TEST_SUMMARY_FAILED,
-                    TextComponent::text(failed_required.to_string()),
+                    TextComponent::text(failed_required.to_string())
                 )
                 .color_named(NamedColor::Red),
             );
         } else {
             self.reporter.send_message(
-                pumpkin_macros::translate_cross!(
-                    java::COMMANDS_TEST_SUMMARY_ALL_REQUIRED_PASSED,
-                    java::COMMANDS_TEST_SUMMARY_ALL_REQUIRED_PASSED,
-                )
-                .color_named(NamedColor::Green),
+                papokin_macros::translate!(java::COMMANDS_TEST_SUMMARY_ALL_REQUIRED_PASSED)
+                    .color_named(NamedColor::Green),
             );
         }
 
         if failed_optional != 0 {
-            self.reporter.send_message(pumpkin_macros::translate_cross!(
+            self.reporter.send_message(papokin_macros::translate!(
                 java::COMMANDS_TEST_SUMMARY_OPTIONAL_FAILED,
-                java::COMMANDS_TEST_SUMMARY_OPTIONAL_FAILED,
-                TextComponent::text(failed_optional.to_string()),
+                TextComponent::text(failed_optional.to_string())
             ));
         }
     }
 }
 
-/// Runs a game test and manages retries and reporting.
+/// 运行游戏测试并管理重试与报告。
 pub struct GameTestManager {
     run: GameTestSession,
     retry_options: GameTestRetryOptions,
@@ -182,9 +176,9 @@ impl GameTestManager {
         let elapsed_ms = self.run.run_time_ms();
         let is_flaky = self.run.test.max_attempts() > 1;
 
-        // This intentionally follows ReportGameListener's ordering. Command retry
-        // options take precedence for a passing execution. Flaky failure handling,
-        // however, uses max_attempts/required_successes exactly as vanilla does.
+        // 这有意遵循 ReportGameListener 的顺序。命令重试
+        // 选项对通过的执行优先生效。偶发（flaky）失败处理，
+        // 不过，其中 max_attempts/required_successes 的用法与原版完全相同。
         let should_rerun = if passed {
             if self.retry_options.has_retries() {
                 self.sink.send_message(
@@ -196,7 +190,7 @@ impl GameTestManager {
             } else if !is_flaky {
                 self.sink.send_message(
                     TextComponent::text(format!(
-                        "{} passed! ({}ms / {}gameticks)",
+                        "{} 通过！（{}ms / {}gameticks）",
                         self.run.test.id(),
                         elapsed_ms,
                         tick
@@ -207,7 +201,7 @@ impl GameTestManager {
             } else if self.successes >= self.run.test.required_successes() {
                 self.sink.send_message(
                     TextComponent::text(format!(
-                        "{} passed {} times of {} attempts.",
+                        "{} 通过了 {} 次（共 {} 次尝试）。",
                         self.run.test.id(),
                         self.successes,
                         self.attempts
@@ -218,7 +212,7 @@ impl GameTestManager {
             } else {
                 self.sink.send_message(
                     TextComponent::text(format!(
-                        "Flaky test {} succeeded, attempt: {} successes: {}",
+                        "不稳定的测试 {} 成功了，尝试次数：{} 成功次数：{}",
                         self.run.test.id(),
                         self.attempts,
                         self.successes
@@ -345,7 +339,7 @@ impl GameTestManager {
     }
 }
 
-/// Ticks ready `GameTest` runs and owns their retry lifecycle.
+/// 驱动已就绪的 `GameTest` 运行，并管理其重试生命周期。
 #[derive(Default)]
 pub struct GameTestRunner {
     active: Vec<GameTestManager>,
@@ -366,10 +360,10 @@ impl GameTestRunner {
     }
 
     pub async fn tick(&mut self) {
-        // Vanilla queues copyReset reruns and does not start them until the current
-        // set of batches has completed. Treat all currently active executions as one
-        // wave: finish the wave first, then install the scheduled copies so they begin
-        // on the following server tick.
+        // 原版将 copyReset 的重跑排入队列，直到当前
+        // 一批批次已全部完成。将当前所有活跃的执行视为一次
+        // 波次：先完成该波次，然后装入计划好的副本，让它们开始
+        // 在接下来的服务器刻执行。
         for managed in &mut self.active {
             if managed.done || managed.rerun_scheduled {
                 continue;

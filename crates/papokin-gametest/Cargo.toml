@@ -1,5 +1,5 @@
 [package]
-name = "pumpkin-gametest"
+name = "papokin-gametest"
 version.workspace = true
 description = "Minecraft GameTest framework for Pumpkin."
 edition.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 
 [dependencies]
 async-trait.workspace = true
-pumpkin-data = { workspace = true, features = ["block"] }
-pumpkin-macros.workspace = true
-pumpkin-nbt.workspace = true
-pumpkin-util.workspace = true
-pumpkin-world.workspace = true
+papokin-data = { workspace = true, features = ["block"] }
+papokin-macros.workspace = true
+papokin-nbt.workspace = true
+papokin-util.workspace = true
+papokin-world.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

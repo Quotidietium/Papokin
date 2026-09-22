@@ -1,5 +1,5 @@
-use pumpkin_data::{Block, BlockStateId};
-use pumpkin_nbt::NbtCompound;
+use papokin_data::{Block, BlockStateId};
+use papokin_nbt::NbtCompound;
 
 use crate::error::{GameTestError, GameTestResult};
 
@@ -69,8 +69,8 @@ impl GameTestStructureTemplate {
             .ok_or_else(|| invalid_structure("Structure is missing 'blocks'"))?;
         let mut parsed_blocks = Vec::with_capacity(blocks.len());
 
-        // Validate the complete structure before changing the world so malformed NBT
-        // cannot leave a half-placed test behind.
+        // 在改动世界之前校验完整结构，使畸形的 NBT
+        // 不能留下放置了一半的测试。
         for (index, block) in blocks.iter().enumerate() {
             let block = block.extract_compound().ok_or_else(|| {
                 invalid_structure(format!("Structure block {index} is not a compound"))
@@ -205,7 +205,7 @@ fn resolve_palette(structure: &NbtCompound) -> GameTestResult<Vec<PaletteEntry>>
         };
 
         if block == &Block::TEST_BLOCK && test_mode.is_none() {
-            // TestBlockMode.START is the first/default enum value in the 26.2 server source.
+            // TestBlockMode.START 是 26.2 服务器源码中的第一个/默认枚举值。
             test_mode = Some(TestBlockMode::Start);
         }
 

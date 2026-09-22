@@ -5,7 +5,7 @@ pub use state::GameTestState;
 use std::sync::Arc;
 use std::time::Instant;
 
-use pumpkin_util::math::position::BlockPos;
+use papokin_util::math::position::BlockPos;
 
 use crate::block_based::BlockBasedTest;
 use crate::error::{GameTestError, GameTestResult};
@@ -83,11 +83,11 @@ impl GameTestSession {
         }
     }
 
-    /// Creates the equivalent of vanilla `GameTestInfo::copyReset()`.
+    /// 创建等价于原版 `GameTestInfo::copyReset()` 的内容。
     ///
-    /// A rerun is a new execution object, not a finished run mutated back to Queued.
-    /// The controller coordinates and resolved Y are retained so the replacement is
-    /// prepared in place, while all per-attempt state and placement handles are fresh.
+    /// 重跑是一个新的执行对象，而不是把已完成的运行改回 Queued 状态。
+    /// 保留控制器坐标与解析出的 Y，以便替换
+    /// 原地准备就绪，而所有按次尝试的状态和放置句柄都是全新的。
     #[must_use]
     pub fn copy_reset(&self) -> Self {
         Self {
@@ -118,8 +118,8 @@ impl GameTestSession {
             return;
         }
 
-        // Move the current state out so state transitions can freely borrow `self`
-        // across async calls without holding a borrow into `self.state`.
+        // 将当前状态移出，以便状态转换可以自由借用 `self`
+        // 跨异步调用进行，而无需持有对 `self.state` 的借用。
         let state = std::mem::replace(&mut self.state, GameTestState::Queued);
         match state {
             GameTestState::Queued => self.tick_queued().await,
@@ -158,8 +158,8 @@ impl GameTestSession {
 
                 self.test_y = Some(placement.test_instance_pos().0.y);
                 self.placement = Some(placement);
-                // Vanilla's StructureSpawner calls startExecution(1), so even a test
-                // with zero setup ticks waits until the next server tick to start.
+                // 原版的 StructureSpawner 调用 startExecution(1)，因此即使某个测试
+                // 零准备刻的测试会等到下一个服务器刻才开始。
                 self.state = GameTestState::SettingUp { elapsed_ticks: 0 };
             }
             Err(error) => self.finish_failure(0, error, None).await,
@@ -167,9 +167,9 @@ impl GameTestSession {
     }
 
     async fn tick_setup(&mut self, elapsed_ticks: u32) {
-        // GameTestInfo::tick does not advance tickCount until every chunk intersecting
-        // the placed structure is actually loaded and ticking. This check is one-shot
-        // per attempt, exactly like vanilla's chunksLoaded flag.
+        // GameTestInfo::tick 在所有相交区块……之前不会推进 tickCount
+        // 放置的结构确实已加载并正在跑刻。该检查是一次性的
+        // 每次尝试一次，与原版的 chunksLoaded 标志完全一致。
         if !self.chunks_loaded {
             let Some(placement) = &self.placement else {
                 self.finish_failure(
@@ -223,8 +223,8 @@ impl GameTestSession {
             return;
         }
 
-        // BlockBasedTestInstance installs onEachTick for the half-open range
-        // [0, timeoutTicks), so timeoutTicks itself has no ACCEPT/FAIL/LOG check.
+        // BlockBasedTestInstance 为半开区间安装 onEachTick
+        // [0, timeoutTicks)，因此 timeoutTicks 本身没有 ACCEPT/FAIL/LOG 检查。
         if tick == self.test.max_ticks() {
             self.state = GameTestState::Running {
                 elapsed_ticks: tick,
@@ -251,8 +251,8 @@ impl GameTestSession {
     }
 
     async fn begin_running(&mut self, tick: u32) -> GameTestResult<()> {
-        // Vanilla starts GameTestInfo's stopwatch immediately before invoking the
-        // test body, so structure placement and setup ticks are not part of run time.
+        // 原版在调用之前立即启动 GameTestInfo 的秒表
+        // 测试体，因此结构放置与准备刻不计入运行时间。
         self.started_at.get_or_insert_with(Instant::now);
 
         let start_blocks = self.test_block_positions(TestBlockMode::Start);
@@ -275,8 +275,8 @@ impl GameTestSession {
         }
 
         if let Some(placement) = &self.placement {
-            // GameTestInfo.startTest marks the controller RUNNING immediately before
-            // invoking BlockBasedTestInstance.run, which triggers START.
+            // GameTestInfo.startTest 紧接在前将控制器标记为 RUNNING
+            // 调用 BlockBasedTestInstance.run，这将触发 START。
             self.world
                 .set_test_instance_running(placement.test_instance_pos())
                 .await?;
@@ -294,7 +294,7 @@ impl GameTestSession {
             }));
         }
 
-        // Vanilla checks ACCEPT before FAIL; ACCEPT wins if both trigger this tick.
+        // 原版先检查 ACCEPT 再检查 FAIL；若两者同刻触发，ACCEPT 优先。
         for position in &accept_blocks {
             if self.world.test_block_triggered(position).await? {
                 return Ok(RunningEvaluation::Passed);
@@ -324,8 +324,8 @@ impl GameTestSession {
 
     async fn handle_attempt_pass(&mut self, tick: u32) {
         if let Some(placement) = &self.placement {
-            // GameTestInfo::succeed removes non-player entities before the listeners
-            // report success or schedule a copyReset rerun.
+            // GameTestInfo::succeed 在监听器之前移除非玩家实体
+            // 报告成功或安排一次 copyReset 重跑。
             if let Err(error) = clear_success_entities(self.world.as_ref(), placement).await {
                 self.state = GameTestState::Failed { tick, error };
                 return;
@@ -340,8 +340,8 @@ impl GameTestSession {
                 return;
             }
 
-            // GameTestRunner's batch listener removes the test-instance barrier shell
-            // on every passed execution, including executions that will be rerun.
+            // GameTestRunner 的批处理监听器会移除测试实例的屏障外壳
+            // 在每次通过的执行时触发，包括将要重跑的执行。
             if let Err(error) = remove_barriers(
                 self.world.as_ref(),
                 placement,

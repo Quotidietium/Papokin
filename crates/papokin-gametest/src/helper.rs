@@ -1,6 +1,6 @@
-use pumpkin_data::{Block, BlockStateId};
-use pumpkin_util::math::position::BlockPos;
-use pumpkin_world::world::BlockFlags;
+use papokin_data::{Block, BlockStateId};
+use papokin_util::math::position::BlockPos;
+use papokin_world::world::BlockFlags;
 
 use crate::error::{GameTestError, GameTestResult};
 use crate::structure::TestStructureInstance;

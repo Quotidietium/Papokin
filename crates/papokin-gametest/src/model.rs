@@ -1,4 +1,4 @@
-use pumpkin_data::block_rotation::Rotation;
+use papokin_data::block_rotation::Rotation;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -54,8 +54,8 @@ impl GameTestRotation {
         }
     }
 
-    /// Combines the datapack's base rotation with an additional controller rotation.
-    /// This mirrors vanilla `Rotation::getRotated`/`GameTestInfo` extra rotation.
+    /// 将数据包（资源）的基础旋转与额外的控制器旋转相结合。
+    /// 这与原版 `Rotation::getRotated`/`GameTestInfo` 的额外旋转一致。
     #[must_use]
     pub const fn then(self, extra: Self) -> Self {
         match self.as_block_rotation().then(extra.as_block_rotation()) {

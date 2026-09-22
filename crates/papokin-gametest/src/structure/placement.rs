@@ -1,7 +1,7 @@
-use pumpkin_data::Block;
-use pumpkin_nbt::{NbtCompound, tag::NbtTag};
-use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
-use pumpkin_world::world::BlockFlags;
+use papokin_data::Block;
+use papokin_nbt::{NbtCompound, tag::NbtTag};
+use papokin_util::math::{position::BlockPos, vector3::Vector3};
+use papokin_world::world::BlockFlags;
 
 use crate::error::GameTestResult;
 use crate::model::GameTestRotation;
@@ -109,10 +109,10 @@ pub async fn place_structure(
     .await
 }
 
-/// Places a test using the effective structure rotation.
+/// 使用有效的结构旋转放置测试。
 ///
-/// The separate controller rotation is stored in `TestInstanceBlockEntity` data, as
-/// vanilla does for `/test run ... rotationSteps`.
+/// 单独的控制器旋转存储在 `TestInstanceBlockEntity` 数据中，因为
+/// 原版对 `/test run ... rotationSteps` 的做法。
 pub async fn place_structure_with_controller_rotation(
     world: &dyn GameTestWorld,
     template: &GameTestStructureTemplate,
@@ -122,9 +122,9 @@ pub async fn place_structure_with_controller_rotation(
     position: GameTestPosition,
     padding: i32,
 ) -> GameTestResult<TestStructureInstance> {
-    // TestInstanceBlockEntity.getStructurePos offsets the controller by padding and
-    // then by STRUCTURE_OFFSET. The controller itself is outside the structure box.
-    // Reruns retain the original controller Y instead of querying a heightmap again.
+    // TestInstanceBlockEntity.getStructurePos 按内边距偏移控制器，并
+    // 然后是 STRUCTURE_OFFSET。控制器本身位于结构框之外。
+    // 重跑时保留原始控制器 Y，而不是再次查询高度图。
     let test_y = match position.y {
         Some(test_y) => test_y,
         None => world.surface_height(position.x, position.z).await + 1,
@@ -144,10 +144,10 @@ pub async fn place_structure_with_controller_rotation(
     ));
     let size = [rotated_size.x, rotated_size.y, rotated_size.z];
 
-    // Vanilla TestInstanceBlockEntity::placeStructure clears non-player entities
-    // from getTestBounds() before placing a fresh attempt. This is particularly
-    // important for retries: mobs spawned by the previous attempt must not survive
-    // into the next one and keep ticking against the replacement structure.
+    // 原版 TestInstanceBlockEntity::placeStructure 会清除非玩家实体
+    // 从 getTestBounds() 获取的范围后再放置新的尝试。这一点尤其
+    // 对重试至关重要：前一次尝试生成的生物绝不能存活
+    // 合并进下一个，并继续针对替换后的结构执行刻逻辑。
     let test_min = BlockPos::new(
         origin.0.x - padding,
         origin.0.y - padding,
@@ -172,9 +172,9 @@ pub async fn place_structure_with_controller_rotation(
         )
         .await?;
 
-    // TestInstanceBlockEntity.Data stores only the extra controller rotation. The
-    // client combines this with the test definition's base rotation from the synced
-    // minecraft:test_instance registry.
+    // TestInstanceBlockEntity.Data 仅存储额外的控制器旋转。
+    // 客户端将其与来自同步数据的测试定义基础旋转合并
+    // minecraft:test_instance 注册表。
     let mut data = NbtCompound::new();
     data.put_string("test", test_id.to_string());
     data.put("size", NbtTag::IntArray(source_size.to_vec()));
@@ -192,8 +192,8 @@ pub async fn place_structure_with_controller_rotation(
         .set_block_entity_nbt(&test_instance_pos, &test_instance_nbt)
         .await?;
 
-    // StructureTemplate.placeInWorld rotates both relative positions and block
-    // states before loading block-entity NBT at the transformed absolute position.
+    // StructureTemplate.placeInWorld 会同时旋转相对坐标与方块
+    // 状态，然后再在变换后的绝对位置处加载方块实体 NBT。
     let place_flags = BlockFlags::NOTIFY_LISTENERS
         | BlockFlags::MOVED
         | BlockFlags::SKIP_REDSTONE_WIRE_STATE_REPLACEMENT
@@ -217,9 +217,9 @@ pub async fn place_structure_with_controller_rotation(
         }
     }
 
-    // GameTestInfo::placeStructure clears both scheduled block ticks and queued
-    // block events in the test box after replacement. This prevents deferred work
-    // from attempt N from executing against attempt N+1.
+    // GameTestInfo::placeStructure 清除计划中的方块刻与排队的
+    // 替换后测试盒内的方块事件。这避免了延迟工作
+    // 阻止第 N 次尝试的执行波及第 N+1 次尝试。
     world
         .clear_scheduled_block_ticks(&test_min, &test_max)
         .await?;
@@ -234,10 +234,10 @@ pub async fn place_structure_with_controller_rotation(
     ))
 }
 
-/// Encloses the structure with the same one-block barrier shell used by Vanilla.
+/// 使用与原版相同的单方块屏障外壳将结构包围起来。
 ///
-/// The floor and four walls from `TestInstanceBlockEntity::encaseStructure` are always
-/// present; the ceiling is omitted when the test requests sky access.
+/// 来自 `TestInstanceBlockEntity::encaseStructure` 的地板和四面墙始终
+/// 始终存在；当测试要求可见天空时则省略天花板。
 pub async fn encase_structure(
     world: &dyn GameTestWorld,
     placement: &TestStructureInstance,
@@ -259,10 +259,10 @@ pub async fn encase_structure(
     .await
 }
 
-/// Removes the one-block barrier shell after a successful test.
+/// 测试成功后移除单方块屏障外壳。
 ///
-/// This matches `GameTestRunner` calling `TestInstanceBlockEntity::removeBarriers` in
-/// vanilla. Only barrier blocks are removed so test blocks on the boundary are preserved.
+/// 这对应于 `GameTestRunner` 调用 `TestInstanceBlockEntity::removeBarriers` 的情况，位于
+/// 与原版一致。仅移除屏障方块，因此边界上的测试方块会被保留。
 pub async fn remove_barriers(
     world: &dyn GameTestWorld,
     placement: &TestStructureInstance,
@@ -283,8 +283,8 @@ pub async fn remove_barriers(
     .await
 }
 
-/// Vanilla `GameTestInfo::succeed` discards non-player entities inside the
-/// structure bounds inflated by one block before listeners schedule any reruns.
+/// 原版 `GameTestInfo::succeed` 会丢弃位于……内的非玩家实体
+/// 结构边界外扩一格，之后监听器才会调度任何重跑。
 pub async fn clear_success_entities(
     world: &dyn GameTestWorld,
     placement: &TestStructureInstance,

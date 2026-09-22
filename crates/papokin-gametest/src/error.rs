@@ -1,4 +1,4 @@
-use pumpkin_util::math::position::BlockPos;
+use papokin_util::math::position::BlockPos;
 use thiserror::Error;
 
 pub type GameTestResult<T> = Result<T, GameTestError>;
