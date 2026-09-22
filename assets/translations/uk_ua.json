@@ -1,12 +1,12 @@
 {
-    "commands.pumpkin.version": "Pumpkin %s\n",
-    "commands.pumpkin.description": "Допомагаємо кожному запускати швидкі \nта ефективні сервери в Minecraft.\n",
-    "commands.pumpkin.minecraft_version": "(Minecraft %s, Протокол %s)\n",
-    "commands.pumpkin.github": "[Github репозиторій]",
-    "commands.pumpkin.website": "[Сайт]",
-    "commands.pumpkin.version.hover": "Натисніть щоб скопіювати версію",
-    "commands.pumpkin.description.hover": "Натисніть щоб скопіювати опис",
-    "commands.pumpkin.minecraft_version.hover": "Натисніть щоб скопіювати версію Minecraft",
-    "commands.pumpkin.github.hover": "Натисніть щоб відкрити репозиторій.",
-    "commands.pumpkin.website.hover": "Натисніть щоб відкрити сайт."
+    "commands.papokin.version": "Papokin %s\n",
+    "commands.papokin.description": "Допомагаємо кожному запускати швидкі \nта ефективні сервери в Minecraft.\n",
+    "commands.papokin.minecraft_version": "(Minecraft %s, Протокол %s)\n",
+    "commands.papokin.github": "[Github репозиторій]",
+    "commands.papokin.website": "[Сайт]",
+    "commands.papokin.version.hover": "Натисніть щоб скопіювати версію",
+    "commands.papokin.description.hover": "Натисніть щоб скопіювати опис",
+    "commands.papokin.minecraft_version.hover": "Натисніть щоб скопіювати версію Minecraft",
+    "commands.papokin.github.hover": "Натисніть щоб відкрити репозиторій.",
+    "commands.papokin.website.hover": "Натисніть щоб відкрити сайт."
 }

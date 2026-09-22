@@ -1,7 +1,7 @@
 {
   "type": "minecraft:block_based",
   "environment": "minecraft:default",
-  "structure": "pumpkin:summon_cat",
+  "structure": "papokin:summon_cat",
   "max_ticks": 20,
   "max_attempts": 1,
   "required_successes": 1,

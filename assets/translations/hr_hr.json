@@ -1,12 +1,12 @@
 {
-    "commands.pumpkin.version": "Pumpkin %s\n",
-    "commands.pumpkin.description": "Omogućuje svima pokretanje brzih \ni učinkovitih Minecraft servera.\n",
-    "commands.pumpkin.minecraft_version": "(Minecraft %s, Protokol %s)\n",
-    "commands.pumpkin.github": "[GitHub Repozitorij]",
-    "commands.pumpkin.website": "[Web-stranica]",
-    "commands.pumpkin.version.hover": "Klikni za kopiranje verzije",
-    "commands.pumpkin.description.hover": "Klikni za kopiranje opisa",
-    "commands.pumpkin.minecraft_version.hover": "Klikni za kopiranje Minecraft verzije",
-    "commands.pumpkin.github.hover": "Klikni za otvaranje repozitorija.",
-    "commands.pumpkin.website.hover": "Klikni za otvaranje stranice."
+    "commands.papokin.version": "Papokin %s\n",
+    "commands.papokin.description": "Omogućuje svima pokretanje brzih \ni učinkovitih Minecraft servera.\n",
+    "commands.papokin.minecraft_version": "(Minecraft %s, Protokol %s)\n",
+    "commands.papokin.github": "[GitHub Repozitorij]",
+    "commands.papokin.website": "[Web-stranica]",
+    "commands.papokin.version.hover": "Klikni za kopiranje verzije",
+    "commands.papokin.description.hover": "Klikni za kopiranje opisa",
+    "commands.papokin.minecraft_version.hover": "Klikni za kopiranje Minecraft verzije",
+    "commands.papokin.github.hover": "Klikni za otvaranje repozitorija.",
+    "commands.papokin.website.hover": "Klikni za otvaranje stranice."
 }

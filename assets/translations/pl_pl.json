@@ -1,12 +1,12 @@
 {
-    "commands.pumpkin.version": "Pumpkin %s\n",
-    "commands.pumpkin.description": "Sprawiamy że każdy może hostować szybkie \ni wydajne serwery Minecraft.\n",
-    "commands.pumpkin.minecraft_version": "(Minecraft %s Protokół %s)\n",
-    "commands.pumpkin.github": "[Repozytorium Github]",
-    "commands.pumpkin.website": "[Strona internetowa]",
-    "commands.pumpkin.version.hover": "Kliknij aby skopiować wersję",
-    "commands.pumpkin.description.hover": "Kliknij aby skopiować opis",
-    "commands.pumpkin.minecraft_version.hover": "Kliknij aby skopiować wersję Minecraft",
-    "commands.pumpkin.github.hover": "Kliknij aby otworzyć repozytorium.",
-    "commands.pumpkin.website.hover": "Kliknij aby otworzyć stronę internetową."
+    "commands.papokin.version": "Papokin %s\n",
+    "commands.papokin.description": "Sprawiamy że każdy może hostować szybkie \ni wydajne serwery Minecraft.\n",
+    "commands.papokin.minecraft_version": "(Minecraft %s Protokół %s)\n",
+    "commands.papokin.github": "[Repozytorium Github]",
+    "commands.papokin.website": "[Strona internetowa]",
+    "commands.papokin.version.hover": "Kliknij aby skopiować wersję",
+    "commands.papokin.description.hover": "Kliknij aby skopiować opis",
+    "commands.papokin.minecraft_version.hover": "Kliknij aby skopiować wersję Minecraft",
+    "commands.papokin.github.hover": "Kliknij aby otworzyć repozytorium.",
+    "commands.papokin.website.hover": "Kliknij aby otworzyć stronę internetową."
 }
