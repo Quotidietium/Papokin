@@ -1,4 +1,4 @@
-//! Deserialization from Java Edition, unnamed network, and Bedrock NBT.
+//! 从 Java 版与未命名网络 NBT 反序列化。
 
 use std::borrow::Cow;
 use std::io::{Cursor, Seek, SeekFrom};
@@ -6,120 +6,29 @@ use std::io::{Cursor, Seek, SeekFrom};
 use crate::{Error, io};
 use io::Read;
 
-/// Result type returned by NBT deserialization operations.
+/// NBT 反序列化操作返回的结果类型。
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Byte source used by NBT read helpers.
+/// NBT 读取辅助函数所使用的字节源。
 ///
-/// Implementations may return borrowed strings and byte arrays when the
-/// underlying storage permits it.
+/// 在……情况下，实现可以返回借用的字符串和字节数组
+/// 在底层存储允许的情况下。
 pub trait NbtDataSource<'a> {
-    /// Reads one unsigned byte.
+    /// 读取一个无符号字节。
     fn read_u8(&mut self) -> Result<u8>;
-    /// Fills `buf` with bytes from the source.
+    /// 用来自源的字节填充 `buf`。
     fn read_bytes(&mut self, buf: &mut [u8]) -> Result<()>;
-    /// Moves the current position by `offset` bytes.
+    /// 将当前位置移动 `offset` 字节。
     fn seek_relative(&mut self, offset: i64) -> Result<()>;
-    /// Reads and decodes a string payload of `len` bytes.
+    /// 读取并解码包含 `len` 个字节的字符串负载。
     fn read_string(&mut self, len: usize) -> Result<Cow<'a, str>>;
-    /// Reads a byte-array payload of `len` elements.
+    /// 读取包含 `len` 个元素的字节数组负载。
     fn read_byte_array(&mut self, len: usize) -> Result<Cow<'a, [i8]>>;
-    /// Reads `len` ZigZag-encoded LEB128 32-bit signed integers.
-    fn read_var_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
-        let mut values = Vec::with_capacity(len.min(4096));
-        for _ in 0..len {
-            let value = read_var_u32(|| self.read_u8())?;
-            values.push(decode_zigzag_i32(value));
-        }
-        Ok(values)
-    }
-    /// Reads `len` ZigZag-encoded LEB128 64-bit signed integers.
-    fn read_var_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
-        let mut values = Vec::with_capacity(len.min(4096));
-        for _ in 0..len {
-            let value = read_var_u64(|| self.read_u8())?;
-            values.push(decode_zigzag_i64(value));
-        }
-        Ok(values)
-    }
 }
 
-fn read_var_u32(mut read_byte: impl FnMut() -> Result<u8>) -> Result<u32> {
-    let mut value = 0;
-    for i in 0..5 {
-        let byte = read_byte()?;
-        value |= (u32::from(byte) & 0x7F) << (i * 7);
-        if byte & 0x80 == 0 {
-            return Ok(value);
-        }
-    }
-    Err(Error::VarIntTooLarge)
-}
-
-fn read_var_u64(mut read_byte: impl FnMut() -> Result<u8>) -> Result<u64> {
-    let mut value = 0;
-    for i in 0..10 {
-        let byte = read_byte()?;
-        value |= (u64::from(byte) & 0x7F) << (i * 7);
-        if byte & 0x80 == 0 {
-            return Ok(value);
-        }
-    }
-    Err(Error::VarLongTooLarge)
-}
-
-const fn decode_zigzag_i32(value: u32) -> i32 {
-    ((value >> 1) as i32) ^ -((value as i32) & 1)
-}
-
-const fn decode_zigzag_i64(value: u64) -> i64 {
-    ((value >> 1) as i64) ^ -((value as i64) & 1)
-}
-
-fn unexpected_eof() -> Error {
-    Error::Incomplete(std::io::Error::new(
-        std::io::ErrorKind::UnexpectedEof,
-        "unexpected EOF",
-    ))
-}
-
-fn read_var_i32_array_from_slice(
-    data: &[u8],
-    position: &mut usize,
-    len: usize,
-) -> Result<Vec<i32>> {
-    let mut values = Vec::with_capacity(len);
-    for _ in 0..len {
-        let value = read_var_u32(|| {
-            let byte = data.get(*position).copied().ok_or_else(unexpected_eof)?;
-            *position += 1;
-            Ok(byte)
-        })?;
-        values.push(decode_zigzag_i32(value));
-    }
-    Ok(values)
-}
-
-fn read_var_i64_array_from_slice(
-    data: &[u8],
-    position: &mut usize,
-    len: usize,
-) -> Result<Vec<i64>> {
-    let mut values = Vec::with_capacity(len);
-    for _ in 0..len {
-        let value = read_var_u64(|| {
-            let byte = data.get(*position).copied().ok_or_else(unexpected_eof)?;
-            *position += 1;
-            Ok(byte)
-        })?;
-        values.push(decode_zigzag_i64(value));
-    }
-    Ok(values)
-}
-
-/// Adapts a [`Read`] and [`Seek`] stream into an [`NbtDataSource`].
+/// 将 [`Read`] 和 [`Seek`] 流适配为 [`NbtDataSource`]。
 pub struct NbtStreamReader<R>(
-    /// Wrapped input stream.
+    /// 包装后的输入流。
     pub R,
 );
 
@@ -205,23 +114,9 @@ impl<'a> NbtDataSource<'a> for Cursor<&'a [u8]> {
         self.set_position((pos + len) as u64);
         let data = self.get_ref();
         let slice = &data[pos..pos + len];
-        // SAFETY: `slice` is a valid byte slice of length `len`. `u8` and `i8` have identical size, alignment (1 byte), and valid value representations.
+        // SAFETY: `slice` 是长度为 `len` 的有效字节切片。`u8` 与 `i8` 具有相同的大小、对齐（1 字节）和有效的值表示。
         let i8_slice = unsafe { std::slice::from_raw_parts(slice.as_ptr().cast::<i8>(), len) };
         Ok(Cow::Borrowed(i8_slice))
-    }
-
-    fn read_var_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
-        let mut position = self.position() as usize;
-        let result = read_var_i32_array_from_slice(self.get_ref(), &mut position, len);
-        self.set_position(position as u64);
-        result
-    }
-
-    fn read_var_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
-        let mut position = self.position() as usize;
-        let result = read_var_i64_array_from_slice(self.get_ref(), &mut position, len);
-        self.set_position(position as u64);
-        result
     }
 }
 
@@ -240,12 +135,6 @@ impl<'a, S: NbtDataSource<'a> + ?Sized> NbtDataSource<'a> for &mut S {
     }
     fn read_byte_array(&mut self, len: usize) -> Result<Cow<'a, [i8]>> {
         (**self).read_byte_array(len)
-    }
-    fn read_var_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
-        (**self).read_var_i32_array(len)
-    }
-    fn read_var_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
-        (**self).read_var_i64_array(len)
     }
 }
 
@@ -294,80 +183,66 @@ impl<'a> NbtDataSource<'a> for Cursor<Vec<u8>> {
         self.set_position((pos + len) as u64);
         let data = self.get_ref();
         let slice = &data[pos..pos + len];
-        // SAFETY: `slice` is a valid byte slice of length `len`. `u8` and `i8` have identical size, alignment (1 byte), and valid value representations.
+        // SAFETY: `slice` 是长度为 `len` 的有效字节切片。`u8` 与 `i8` 具有相同的大小、对齐（1 字节）和有效的值表示。
         let i8_slice = unsafe { std::slice::from_raw_parts(slice.as_ptr().cast::<i8>(), len) };
         Ok(Cow::Owned(i8_slice.to_vec()))
     }
-
-    fn read_var_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
-        let mut position = self.position() as usize;
-        let result = read_var_i32_array_from_slice(self.get_ref(), &mut position, len);
-        self.set_position(position as u64);
-        result
-    }
-
-    fn read_var_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
-        let mut position = self.position() as usize;
-        let result = read_var_i64_array_from_slice(self.get_ref(), &mut position, len);
-        self.set_position(position as u64);
-        result
-    }
 }
 
-/// Format-specific primitive reader used by the NBT parser.
+/// NBT 解析器使用的特定格式原始类型读取器。
 pub trait NbtReadHelper<'a> {
-    /// Underlying byte source.
+    /// 底层字节源。
     type Reader: NbtDataSource<'a>;
 
-    /// Returns the underlying byte source.
+    /// 返回底层的字节源。
     fn reader(&mut self) -> &mut Self::Reader;
 
-    /// Advances by `count` bytes.
+    /// 前进 `count` 个字节。
     fn skip_bytes(&mut self, count: i64) -> Result<()> {
         self.reader().seek_relative(count)
     }
-    /// Advances past an unsigned byte.
+    /// 跳过一个无符号字节。
     fn skip_u8(&mut self) -> Result<()> {
         self.skip_bytes(1)
     }
-    /// Advances past a signed byte.
+    /// 跳过一个有符号字节。
     fn skip_i8(&mut self) -> Result<()> {
         self.skip_bytes(1)
     }
-    /// Advances past a 16-bit signed integer.
+    /// 跳过一个 16 位有符号整数。
     fn skip_i16(&mut self) -> Result<()> {
         self.skip_bytes(2)
     }
-    /// Advances past a 32-bit signed integer.
+    /// 跳过一个 32 位有符号整数。
     fn skip_i32(&mut self) -> Result<()> {
         self.skip_bytes(4)
     }
-    /// Advances past a 64-bit signed integer.
+    /// 跳过一个 64 位有符号整数。
     fn skip_i64(&mut self) -> Result<()> {
         self.skip_bytes(8)
     }
-    /// Advances past a 32-bit floating-point number.
+    /// 跳过一个 32 位浮点数。
     fn skip_f32(&mut self) -> Result<()> {
         self.skip_bytes(4)
     }
-    /// Advances past a 64-bit floating-point number.
+    /// 跳过一个 64 位浮点数。
     fn skip_f64(&mut self) -> Result<()> {
         self.skip_bytes(8)
     }
-    /// Advances past a length-prefixed string.
+    /// 跳过一个带长度前缀的字符串。
     fn skip_string(&mut self) -> Result<()>;
 
-    /// Reads an unsigned byte.
+    /// 读取一个无符号字节。
     fn get_u8(&mut self) -> Result<u8>;
-    /// Reads a signed byte.
+    /// 读取一个有符号字节。
     fn get_i8(&mut self) -> Result<i8>;
-    /// Reads a 16-bit signed integer.
+    /// 读取一个 16 位有符号整数。
     fn get_i16(&mut self) -> Result<i16>;
-    /// Reads a 32-bit signed integer.
+    /// 读取一个 32 位有符号整数。
     fn get_i32(&mut self) -> Result<i32>;
-    /// Reads a 64-bit signed integer.
+    /// 读取一个 64 位有符号整数。
     fn get_i64(&mut self) -> Result<i64>;
-    /// Reads an array of 32-bit signed integers.
+    /// 读取一个 32 位有符号整数数组。
     fn get_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
         let mut values = Vec::with_capacity(len.min(4096));
         for _ in 0..len {
@@ -375,7 +250,7 @@ pub trait NbtReadHelper<'a> {
         }
         Ok(values)
     }
-    /// Reads an array of 64-bit signed integers.
+    /// 读取一个 64 位有符号整数数组。
     fn get_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
         let mut values = Vec::with_capacity(len.min(4096));
         for _ in 0..len {
@@ -383,35 +258,23 @@ pub trait NbtReadHelper<'a> {
         }
         Ok(values)
     }
-    /// Reads a 32-bit floating-point number.
+    /// 读取一个 32 位浮点数。
     fn get_f32(&mut self) -> Result<f32>;
-    /// Reads a 64-bit floating-point number.
+    /// 读取一个 64 位浮点数。
     fn get_f64(&mut self) -> Result<f64>;
-    /// Reads a length-prefixed string.
+    /// 读取一个带长度前缀的字符串。
     fn get_string(&mut self) -> Result<Cow<'a, str>>;
-    /// Reads a byte array with the supplied element count.
+    /// 按给定的元素数量读取一个字节数组。
     fn get_byte_array(&mut self, len: usize) -> Result<Cow<'a, [i8]>>;
 }
 
-/// Reads Java Edition NBT primitives using big-endian numeric encoding.
+/// 以大端序数字编码读取 Java 版 NBT 基本类型。
 pub struct NbtReadHelperJava<D> {
     reader: D,
 }
 
 impl<D> NbtReadHelperJava<D> {
-    /// Creates a Java Edition reader over `r`.
-    pub const fn new(r: D) -> Self {
-        Self { reader: r }
-    }
-}
-
-/// Reads Bedrock network NBT primitives using little-endian and variable-length encoding.
-pub struct NbtReadHelperBedrock<D> {
-    reader: D,
-}
-
-impl<D> NbtReadHelperBedrock<D> {
-    /// Creates a Bedrock network reader over `r`.
+    /// 基于 `r` 创建 Java 版读取器。
     pub const fn new(r: D) -> Self {
         Self { reader: r }
     }
@@ -463,13 +326,13 @@ impl<'a, D: NbtDataSource<'a>> NbtReadHelper<'a> for NbtReadHelperJava<D> {
             .checked_mul(std::mem::size_of::<i32>())
             .ok_or(Error::LargeLength(len))?;
         let mut values = Vec::<i32>::with_capacity(len);
-        // SAFETY: The vector has capacity for `byte_len` bytes, and `u8` accepts
-        // every bit pattern. Its length remains zero until the read succeeds.
+        // SAFETY: 该向量具有容纳 `byte_len` 字节的容量，且 `u8` 接受
+        // 每个位模式。读取成功前其长度保持为零。
         let bytes =
             unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
         self.reader.read_bytes(bytes)?;
-        // SAFETY: Every byte of all `len` elements was initialized by `read_bytes`,
-        // and every bit pattern is a valid `i32`.
+        // SAFETY: 所有 `len` 元素的每个字节均由 `read_bytes` 初始化，
+        // 且每个位模式都是合法的 `i32`。
         unsafe { values.set_len(len) };
         for value in &mut values {
             *value = value.to_be();
@@ -481,13 +344,13 @@ impl<'a, D: NbtDataSource<'a>> NbtReadHelper<'a> for NbtReadHelperJava<D> {
             .checked_mul(std::mem::size_of::<i64>())
             .ok_or(Error::LargeLength(len))?;
         let mut values = Vec::<i64>::with_capacity(len);
-        // SAFETY: The vector has capacity for `byte_len` bytes, and `u8` accepts
-        // every bit pattern. Its length remains zero until the read succeeds.
+        // SAFETY: 该向量具有容纳 `byte_len` 字节的容量，且 `u8` 接受
+        // 每个位模式。读取成功前其长度保持为零。
         let bytes =
             unsafe { std::slice::from_raw_parts_mut(values.as_mut_ptr().cast::<u8>(), byte_len) };
         self.reader.read_bytes(bytes)?;
-        // SAFETY: Every byte of all `len` elements was initialized by `read_bytes`,
-        // and every bit pattern is a valid `i64`.
+        // SAFETY: 所有 `len` 元素的每个字节均由 `read_bytes` 初始化，
+        // 且每个位模式都是合法的 `i64`。
         unsafe { values.set_len(len) };
         for value in &mut values {
             *value = value.to_be();
@@ -515,95 +378,11 @@ impl<'a, D: NbtDataSource<'a>> NbtReadHelper<'a> for NbtReadHelperJava<D> {
     }
 }
 
-impl<'a, D: NbtDataSource<'a>> NbtReadHelperBedrock<D> {
-    fn get_u8(&mut self) -> Result<u8> {
-        self.reader.read_u8()
-    }
-
-    fn get_var_u32(&mut self) -> Result<u32> {
-        read_var_u32(|| self.get_u8())
-    }
-
-    fn get_var_i32(&mut self) -> Result<i32> {
-        Ok(decode_zigzag_i32(self.get_var_u32()?))
-    }
-
-    fn get_var_u64(&mut self) -> Result<u64> {
-        read_var_u64(|| self.get_u8())
-    }
-
-    fn get_var_i64(&mut self) -> Result<i64> {
-        Ok(decode_zigzag_i64(self.get_var_u64()?))
-    }
-
-    fn get_string_len(&mut self) -> Result<u32> {
-        self.get_var_u32()
-    }
-}
-
-impl<'a, D: NbtDataSource<'a>> NbtReadHelper<'a> for NbtReadHelperBedrock<D> {
-    type Reader = D;
-
-    fn reader(&mut self) -> &mut D {
-        &mut self.reader
-    }
-
-    fn skip_string(&mut self) -> Result<()> {
-        let len = self.get_string_len()? as i64;
-        self.skip_bytes(len)
-    }
-
-    fn get_u8(&mut self) -> Result<u8> {
-        self.reader.read_u8()
-    }
-    fn get_i8(&mut self) -> Result<i8> {
-        Ok(self.reader.read_u8()? as i8)
-    }
-    fn get_i16(&mut self) -> Result<i16> {
-        let mut buf = [0u8; 2];
-        self.reader.read_bytes(&mut buf)?;
-        Ok(i16::from_le_bytes(buf))
-    }
-    fn get_i32(&mut self) -> Result<i32> {
-        self.get_var_i32()
-    }
-    fn get_i64(&mut self) -> Result<i64> {
-        self.get_var_i64()
-    }
-    fn get_i32_array(&mut self, len: usize) -> Result<Vec<i32>> {
-        self.reader.read_var_i32_array(len)
-    }
-    fn get_i64_array(&mut self, len: usize) -> Result<Vec<i64>> {
-        self.reader.read_var_i64_array(len)
-    }
-    fn get_f32(&mut self) -> Result<f32> {
-        let mut buf = [0u8; 4];
-        self.reader.read_bytes(&mut buf)?;
-        Ok(f32::from_le_bytes(buf))
-    }
-    fn get_f64(&mut self) -> Result<f64> {
-        let mut buf = [0u8; 8];
-        self.reader.read_bytes(&mut buf)?;
-        Ok(f64::from_le_bytes(buf))
-    }
-
-    fn get_string(&mut self) -> Result<Cow<'a, str>> {
-        let len = self.get_string_len()? as usize;
-        self.reader.read_string(len)
-    }
-
-    fn get_byte_array(&mut self, len: usize) -> Result<Cow<'a, [i8]>> {
-        self.reader.read_byte_array(len)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use crate::serializer::{NbtWriteHelper, NbtWriteHelperBedrock};
-
-    use super::{NbtReadHelper, NbtReadHelperBedrock, NbtReadHelperJava};
+    use super::{NbtReadHelper, NbtReadHelperJava};
 
     #[test]
     fn java_numeric_arrays_decode_big_endian_values() {
@@ -616,25 +395,5 @@ mod tests {
         let long_bytes: Vec<u8> = longs.iter().flat_map(|value| value.to_be_bytes()).collect();
         let mut reader = NbtReadHelperJava::new(Cursor::new(long_bytes.as_slice()));
         assert_eq!(reader.get_i64_array(longs.len()).unwrap(), longs);
-    }
-
-    #[test]
-    fn bedrock_numeric_arrays_decode_zigzag_varints() {
-        let ints = [i32::MIN, -1, 0, 1, i32::MAX];
-        let longs = [i64::MIN, -1, 0, 1, i64::MAX];
-        let mut bytes = Vec::new();
-        let mut writer = NbtWriteHelperBedrock::new(&mut bytes);
-        for value in ints {
-            writer.write_i32(value).unwrap();
-        }
-        for value in longs {
-            writer.write_i64(value).unwrap();
-        }
-        writer.write_u8(123).unwrap();
-
-        let mut reader = NbtReadHelperBedrock::new(Cursor::new(bytes.as_slice()));
-        assert_eq!(reader.get_i32_array(ints.len()).unwrap(), ints);
-        assert_eq!(reader.get_i64_array(longs.len()).unwrap(), longs);
-        assert_eq!(reader.get_u8().unwrap(), 123);
     }
 }

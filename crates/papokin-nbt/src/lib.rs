@@ -1,8 +1,8 @@
-//! Reading, writing, and manipulating Minecraft's Named Binary Tag (NBT) data.
+//! 读取、写入和操作 Minecraft 的命名二进制标签（NBT）数据。
 //!
-//! The crate supports the standard Java Edition representation, unnamed network
-//! NBT, Bedrock network NBT, and gzip-compressed NBT. Data is handled directly
-//! via [`Nbt`], [`NbtCompound`], and [`NbtTag`].
+//! 该 crate 支持标准 Java 版表示、未命名网络
+//! NBT 以及 gzip 压缩 NBT。数据会被直接处理
+//! 通过 [`Nbt`]、[`NbtCompound`] 与 [`NbtTag`] 进行。
 
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -14,114 +14,108 @@ use std::{
 
 use bytes::Bytes;
 use deserializer::NbtReadHelper;
-use serializer::{NbtWriteHelper, NbtWriteHelperBedrock, NbtWriteHelperJava};
+use serializer::{NbtWriteHelper, NbtWriteHelperJava};
 use tag::NbtTag;
 use thiserror::Error;
 
-/// Compound-tag storage and construction helpers.
+/// 复合标签的存储与构建辅助函数。
 pub mod compound;
-/// Low-level NBT deserialization support.
+/// 底层 NBT 反序列化支持。
 pub mod deserializer;
-/// Reading and writing gzip-compressed NBT.
+/// 读写 gzip 压缩的 NBT。
 pub mod nbt_compress;
-/// Integration with Pumpkin's dynamic codec operations.
+/// 与 Pumpkin 动态编解码操作的集成。
 pub mod nbt_ops;
-/// Low-level NBT serialization support.
+/// 底层 NBT 序列化支持。
 pub mod serializer;
-/// The individual NBT tag types.
+/// 各个独立的 NBT 标签类型。
 pub mod tag;
 
 pub use compound::NbtCompound;
 
-// This NBT crate is inspired from CrabNBT
+// 这个 NBT crate 的灵感来自 CrabNBT
 
-/// Numeric identifier for an end tag.
+/// 结束标签的数字标识符。
 pub const END_ID: u8 = 0x00;
-/// Numeric identifier for a byte tag.
+/// 字节标签的数字标识符。
 pub const BYTE_ID: u8 = 0x01;
-/// Numeric identifier for a short tag.
+/// 短整型标签的数字标识符。
 pub const SHORT_ID: u8 = 0x02;
-/// Numeric identifier for an integer tag.
+/// 整型标签的数字标识符。
 pub const INT_ID: u8 = 0x03;
-/// Numeric identifier for a long tag.
+/// 长整型标签的数字标识符。
 pub const LONG_ID: u8 = 0x04;
-/// Numeric identifier for a float tag.
+/// 单精度浮点标签的数字标识符。
 pub const FLOAT_ID: u8 = 0x05;
-/// Numeric identifier for a double tag.
+/// 双精度浮点标签的数字标识符。
 pub const DOUBLE_ID: u8 = 0x06;
-/// Numeric identifier for a byte-array tag.
+/// 字节数组标签的数字标识符。
 pub const BYTE_ARRAY_ID: u8 = 0x07;
-/// Numeric identifier for a string tag.
+/// 字符串标签的数字标识符。
 pub const STRING_ID: u8 = 0x08;
-/// Numeric identifier for a list tag.
+/// 列表标签的数字标识符。
 pub const LIST_ID: u8 = 0x09;
-/// Numeric identifier for a compound tag.
+/// 复合标签的数字标识符。
 pub const COMPOUND_ID: u8 = 0x0A;
-/// Numeric identifier for an integer-array tag.
+/// 整型数组标签的数字标识符。
 pub const INT_ARRAY_ID: u8 = 0x0B;
-/// Numeric identifier for a long-array tag.
+/// 长整型数组标签的数字标识符。
 pub const LONG_ARRAY_ID: u8 = 0x0C;
 
-/// Maximum number of elements accepted when decoding a list or array.
+/// 解码列表或数组时接受的最大元素数。
 pub const MAX_ARRAY_LENGTH: usize = 512_000;
-/// Maximum nesting depth allowed when decoding NBT compound or list tags.
+/// 解码 NBT 复合标签或列表标签时允许的最大嵌套深度。
 pub const MAX_NBT_DEPTH: usize = 512;
 
-/// Errors produced while reading, writing, or converting NBT data.
+/// 读取、写入或转换 NBT 数据时产生的错误。
 #[derive(Error, Debug)]
 pub enum Error {
-    /// The root tag was not a compound tag and contains the reported tag ID.
+    /// 根标签不是复合标签（包含所报告的标签 ID）。
     #[error("The root tag of the NBT file is not a compound tag. Received tag id: {0}")]
     NoRootCompound(u8),
-    /// A tag ID not defined by the NBT format was encountered.
+    /// 遇到了 NBT 格式未定义的标签 ID。
     #[error("Encountered an unknown NBT tag id: {0}.")]
     UnknownTagId(u8),
-    /// A Java CESU-8 string could not be decoded.
+    /// 无法解码 Java CESU-8 字符串。
     #[error("Failed to Cesu 8 Decode")]
     Cesu8DecodingError,
-    /// A string could not be decoded as UTF-8.
+    /// 字符串无法解码为 UTF-8。
     #[error("Failed to UTF-8 Decode")]
     Utf8DecodingError,
-    /// Serde reported an invalid value or serializer state.
+    /// Serde 报告了无效的值或序列化器状态。
     #[error("Serde error: {0}")]
     SerdeError(String),
-    /// The requested Rust type has no NBT representation.
+    /// 所请求的 Rust 类型没有对应的 NBT 表示。
     #[error("NBT doesn't support this type: {0}")]
     UnsupportedType(String),
-    /// The underlying reader or writer returned an I/O error.
+    /// 底层读取器或写入器返回了 I/O 错误。
     #[error("NBT reading was cut short: {0}")]
     Incomplete(io::Error),
-    /// A list or array declared a negative element count.
+    /// 列表或数组声明了负数的元素数量。
     #[error("Negative list length: {0}")]
     NegativeLength(i32),
-    /// A string, list, or array exceeded the supported length.
+    /// 字符串、列表或数组超出了支持的长度。
     #[error("Length too large: {0}")]
     LargeLength(usize),
-    /// A Bedrock variable-length integer exceeded its maximum encoded size.
-    #[error("Failed to decode varint - value too large")]
-    VarIntTooLarge,
-    /// A Bedrock variable-length long exceeded its maximum encoded size.
-    #[error("Failed to decode varlong - value too large")]
-    VarLongTooLarge,
-    /// NBT nesting depth exceeded the maximum allowed limit.
+    /// NBT 嵌套深度超过了允许的最大限制。
     #[error("NBT depth exceeded maximum allowed limit")]
     MaxDepthExceeded,
-    /// A list tag specified an invalid element tag type.
+    /// 列表标签指定了无效的元素标签类型。
     #[error("Invalid element tag type for list: {0}")]
     InvalidListTag(u8),
 }
 
-/// A complete NBT document containing a named root compound.
+/// 一个完整的 NBT 文档，包含一个有名称的根复合标签。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Nbt {
-    /// Name stored alongside the root compound.
+    /// 与根复合标签一同存储的名称。
     pub name: String,
-    /// Root compound containing the document's tags.
+    /// 包含文档标签的根复合标签。
     pub root_tag: NbtCompound,
 }
 
 impl Nbt {
-    /// Creates a document from a root name and compound.
+    /// 根据根名称和复合标签创建文档。
     #[must_use]
     pub const fn new(name: String, tag: NbtCompound) -> Self {
         Self {
@@ -130,9 +124,9 @@ impl Nbt {
         }
     }
 
-    /// Reads a named NBT document from a format-specific reader.
+    /// 从特定格式的读取器中读取带名称的 NBT 文档。
     ///
-    /// Returns [`Error::NoRootCompound`] when the first tag is not a compound.
+    /// 当第一个标签不是复合标签时，返回 [`Error::NoRootCompound`]。
     pub fn read<'a, R: NbtReadHelper<'a>>(reader: &mut R) -> Result<Self, Error> {
         let tag_type_id = reader.get_u8()?;
 
@@ -146,9 +140,9 @@ impl Nbt {
         })
     }
 
-    /// Reads an NBT document that omits the root compound's name.
+    /// 读取省略了根复合标签名称的 NBT 文档。
     ///
-    /// The returned document has an empty [`Self::name`].
+    /// 返回的文档具有空的 [`Self::name`]。
     pub fn read_unnamed<'a, R: NbtReadHelper<'a>>(reader: &mut R) -> Result<Self, Error> {
         let tag_type_id = reader.get_u8()?;
 
@@ -162,7 +156,7 @@ impl Nbt {
         })
     }
 
-    /// Serializes this document using the Java Edition NBT representation.
+    /// 使用 Java 版的 NBT 表示序列化此文档。
     #[must_use]
     pub fn write(self) -> Bytes {
         let mut bytes = Vec::new();
@@ -178,35 +172,13 @@ impl Nbt {
         bytes.into()
     }
 
-    /// Serializes this document using the Bedrock network NBT representation.
-    #[must_use]
-    pub fn write_bedrock(self) -> Bytes {
-        let mut bytes = Vec::new();
-        let mut writer = NbtWriteHelperBedrock::new(&mut bytes);
-        if writer.write_u8(COMPOUND_ID).is_ok()
-            && NbtTag::String(self.name.into())
-                .serialize_data(&mut writer)
-                .is_ok()
-        {
-            let _ = self.root_tag.serialize_content(&mut writer);
-        }
-
-        bytes.into()
-    }
-
-    /// Writes this document in the Java Edition representation.
+    /// 以 Java 版的表示形式写入此文档。
     pub fn write_to_writer<W: Write>(self, mut writer: W) -> Result<(), io::Error> {
         writer.write_all(&self.write())?;
         Ok(())
     }
 
-    /// Writes this document in the Bedrock network representation.
-    pub fn write_to_writer_bedrock<W: Write>(self, mut writer: W) -> Result<(), io::Error> {
-        writer.write_all(&self.write_bedrock())?;
-        Ok(())
-    }
-
-    /// Serializes this document without the root compound's name.
+    /// 序列化此文档但不包含根复合标签的名称。
     #[must_use]
     pub fn write_unnamed(self) -> Bytes {
         let mut bytes = Vec::new();
@@ -219,7 +191,7 @@ impl Nbt {
         bytes.into()
     }
 
-    /// Writes this document without the root compound's name.
+    /// 写入此文档，但不包含根复合标签的名称。
     pub fn write_unnamed_to_writer<W: Write>(self, mut writer: W) -> Result<(), io::Error> {
         writer.write_all(&self.write_unnamed())?;
         Ok(())

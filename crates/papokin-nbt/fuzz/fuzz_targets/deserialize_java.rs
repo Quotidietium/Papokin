@@ -1,7 +1,7 @@
 #![no_main]
 use libfuzzer_sys::fuzz_target;
-use pumpkin_nbt::Nbt;
-use pumpkin_nbt::deserializer::NbtReadHelperJava;
+use papokin_nbt::Nbt;
+use papokin_nbt::deserializer::NbtReadHelperJava;
 use std::io::Cursor;
 
 fuzz_target!(|data: &[u8]| {

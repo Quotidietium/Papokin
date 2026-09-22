@@ -1,46 +1,46 @@
-//! Helpers for reading and writing gzip-compressed NBT data.
+//! 读写 gzip 压缩 NBT 数据的辅助函数。
 
 use crate::deserializer::NbtReadHelperJava;
 use crate::{Error, Nbt, NbtCompound};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use std::io::{Cursor, Read, Seek, Write};
 
-/// Reads a gzip-compressed, named NBT compound from a seekable reader.
+/// 从可寻址读取器中读取 gzip 压缩的带名称 NBT 复合标签。
 ///
-/// Decompressed data is limited to 64 MiB.
+/// 解压后的数据限制为 64 MiB。
 pub fn read_gzip_compound_tag(input: impl Read + Seek) -> Result<NbtCompound, Error> {
-    // Create a GZip decoder and directly chain it to the NBT reader
-    let mut decoder = GzDecoder::new(input).take(64 * 1024 * 1024); // 64 MB limit
+    // 创建 GZip 解码器并直接串联到 NBT 读取器
+    let mut decoder = GzDecoder::new(input).take(64 * 1024 * 1024); // 64 MB 上限
     let mut buf = Vec::new();
     decoder.read_to_end(&mut buf).map_err(Error::Incomplete)?;
     let mut reader = NbtReadHelperJava::new(Cursor::new(buf));
 
-    // Read the NBT data directly from the decoder stream
+    // 直接从解码器流读取 NBT 数据
     let nbt = Nbt::read(&mut reader)?;
     Ok(nbt.root_tag)
 }
 
-/// Writes a named NBT compound with gzip compression.
+/// 写入一个带名称的 NBT 复合标签，并使用 gzip 压缩。
 ///
-/// The root name is written as an empty string.
+/// 根名称将写为空字符串。
 pub fn write_gzip_compound_tag(compound: NbtCompound, output: impl Write) -> Result<(), Error> {
-    // Create a GZip encoder that writes to the output
+    // 创建写入输出的 GZip 编码器
     let mut encoder = GzEncoder::new(output, Compression::default());
 
-    // Create an NBT wrapper and write directly to the encoder
+    // 创建 NBT 包装器并直接写入编码器
     let nbt = Nbt::new(String::new(), compound);
     nbt.write_to_writer(&mut encoder)
         .map_err(Error::Incomplete)?;
 
-    // Finish the encoder to ensure all data is written
+    // 完成编码器以确保所有数据都被写入
     encoder.finish().map_err(Error::Incomplete)?;
 
     Ok(())
 }
 
-/// Serializes a named NBT compound into a gzip-compressed byte vector.
+/// 将带名称的 NBT 复合标签序列化为 gzip 压缩的字节向量。
 ///
-/// The root name is written as an empty string.
+/// 根名称将写为空字符串。
 pub fn write_gzip_compound_tag_to_bytes(compound: NbtCompound) -> Result<Vec<u8>, Error> {
     let mut buffer = Vec::new();
     write_gzip_compound_tag(compound, &mut buffer)?;
@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn gzip_read_write_compound() {
-        // Create a test compound
+        // 创建测试 compound
         let mut compound = NbtCompound::new();
         compound.put_byte("byte_value", 123);
         compound.put_short("short_value", 12345);
@@ -72,20 +72,20 @@ mod tests {
         compound.put("bool_value", true);
         compound.put("string_value", NbtTag::String("test string".into()));
 
-        // Create a nested compound
+        // 创建嵌套 compound
         let mut nested = NbtCompound::new();
         nested.put_int("nested_int", 42);
         compound.put_compound("nested_compound", nested);
 
-        // Write to GZip using streaming
+        // 以流式方式写入 GZip
         let mut buffer = Vec::new();
-        write_gzip_compound_tag(compound, &mut buffer).expect("Failed to compress compound");
+        write_gzip_compound_tag(compound, &mut buffer).expect("压缩 NBT 复合标签失败");
 
-        // Read from GZip using streaming
+        // 使用流式方式从 GZip 读取
         let read_compound =
-            read_gzip_compound_tag(Cursor::new(&buffer)).expect("Failed to decompress compound");
+            read_gzip_compound_tag(Cursor::new(&buffer)).expect("解压 NBT 复合标签失败");
 
-        // Verify values
+        // 验证各个值
         assert_eq!(read_compound.get_byte("byte_value"), Some(123));
         assert_eq!(read_compound.get_short("short_value"), Some(12345));
         assert_eq!(read_compound.get_int("int_value"), Some(1234567));
@@ -98,27 +98,26 @@ mod tests {
             Some("test string")
         );
 
-        // Verify nested compound
+        // 验证嵌套复合标签
         if let Some(nested) = read_compound.get_compound("nested_compound") {
             assert_eq!(nested.get_int("nested_int"), Some(42));
         } else {
-            panic!("Failed to retrieve nested compound");
+            panic!("获取嵌套复合标签失败");
         }
     }
 
     #[test]
     fn gzip_convenience_methods() {
-        // Create a test compound
+        // 创建测试 compound
         let mut compound = NbtCompound::new();
         compound.put_int("test_value", 12345);
 
-        // Test convenience method for writing
-        let buffer =
-            write_gzip_compound_tag_to_bytes(compound).expect("Failed to compress compound");
+        // 测试写入用的便捷方法
+        let buffer = write_gzip_compound_tag_to_bytes(compound).expect("压缩 NBT 复合标签失败");
 
-        // Test streaming read from the buffer
+        // 测试从缓冲区流式读取
         let read_compound =
-            read_gzip_compound_tag(Cursor::new(buffer)).expect("Failed to decompress compound");
+            read_gzip_compound_tag(Cursor::new(buffer)).expect("解压 NBT 复合标签失败");
 
         assert_eq!(read_compound.get_int("test_value"), Some(12345));
     }
@@ -127,9 +126,9 @@ mod tests {
     fn gzip_empty_compound() {
         let compound = NbtCompound::new();
         let mut buffer = Vec::new();
-        write_gzip_compound_tag(compound, &mut buffer).expect("Failed to compress empty compound");
-        let read_compound = read_gzip_compound_tag(Cursor::new(buffer))
-            .expect("Failed to decompress empty compound");
+        write_gzip_compound_tag(compound, &mut buffer).expect("压缩空 NBT 复合标签失败");
+        let read_compound =
+            read_gzip_compound_tag(Cursor::new(buffer)).expect("解压空 NBT 复合标签失败");
 
         assert_eq!(read_compound.child_tags.len(), 0);
     }
@@ -138,19 +137,19 @@ mod tests {
     fn gzip_large_compound() {
         let mut compound = NbtCompound::new();
 
-        // Add 1000 integer entries
+        // 添加 1000 个整数条目
         for i in 0..1000 {
             compound.put_int(&format!("value_{i}"), i);
         }
 
         let mut buffer = Vec::new();
-        write_gzip_compound_tag(compound, &mut buffer).expect("Failed to compress large compound");
-        let read_compound = read_gzip_compound_tag(Cursor::new(buffer))
-            .expect("Failed to decompress large compound");
+        write_gzip_compound_tag(compound, &mut buffer).expect("压缩大型 NBT 复合标签失败");
+        let read_compound =
+            read_gzip_compound_tag(Cursor::new(buffer)).expect("解压大型 NBT 复合标签失败");
 
         assert_eq!(read_compound.child_tags.len(), 1000);
 
-        // Verify a few entries
+        // 校验若干条目
         assert_eq!(read_compound.get_int("value_0"), Some(0));
         assert_eq!(read_compound.get_int("value_500"), Some(500));
         assert_eq!(read_compound.get_int("value_999"), Some(999));
@@ -160,18 +159,17 @@ mod tests {
     fn direct_file_io() {
         use tempfile::tempdir;
 
-        let temp_dir = tempdir().expect("Failed to create temporary directory");
+        let temp_dir = tempdir().expect("创建临时目录失败");
         let file_path = temp_dir.path().join("test_compound.dat");
 
         let mut compound = NbtCompound::new();
         compound.put_int("test_value", 42);
 
-        let file = File::create(&file_path).expect("Failed to create temp file");
-        write_gzip_compound_tag(compound, file).expect("Failed to write compound to file");
+        let file = File::create(&file_path).expect("创建临时文件失败");
+        write_gzip_compound_tag(compound, file).expect("将 NBT 复合标签写入文件失败");
 
-        let file = File::open(&file_path).expect("Failed to open temp file");
-        let read_compound =
-            read_gzip_compound_tag(file).expect("Failed to read compound from file");
+        let file = File::open(&file_path).expect("打开临时文件失败");
+        let read_compound = read_gzip_compound_tag(file).expect("从文件读取 NBT 复合标签失败");
 
         assert_eq!(read_compound.get_int("test_value"), Some(42));
     }

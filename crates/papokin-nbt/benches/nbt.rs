@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use pumpkin_nbt::{Nbt, NbtCompound, deserializer, tag::NbtTag};
+use papokin_nbt::{Nbt, NbtCompound, deserializer, tag::NbtTag};
 use std::io::Cursor;
 
 fn create_large_compound(depth: usize) -> NbtCompound {
@@ -42,8 +42,7 @@ fn create_large_compound(depth: usize) -> NbtCompound {
 pub fn bench_nbt(c: &mut Criterion) {
     let compound_data = create_large_compound(5);
     let nbt_wrapper = Nbt::new(String::new(), compound_data.clone());
-    let wrapper_bytes_java = nbt_wrapper.clone().write();
-    let wrapper_bytes_bedrock = nbt_wrapper.write_bedrock();
+    let wrapper_bytes_java = nbt_wrapper.write();
 
     c.bench_function("nbt/java/serialize/raw", |b| {
         b.iter(|| {
@@ -56,21 +55,6 @@ pub fn bench_nbt(c: &mut Criterion) {
         b.iter(|| {
             let mut cursor = Cursor::new(&wrapper_bytes_java[..]);
             let mut reader = deserializer::NbtReadHelperJava::new(&mut cursor);
-            Nbt::read(&mut reader).unwrap();
-        });
-    });
-
-    c.bench_function("nbt/bedrock/serialize/raw", |b| {
-        b.iter(|| {
-            let nbt = Nbt::new(String::new(), compound_data.clone());
-            let _ = nbt.write_bedrock();
-        });
-    });
-
-    c.bench_function("nbt/bedrock/deserialize/raw", |b| {
-        b.iter(|| {
-            let mut cursor = Cursor::new(&wrapper_bytes_bedrock[..]);
-            let mut reader = deserializer::NbtReadHelperBedrock::new(&mut cursor);
             Nbt::read(&mut reader).unwrap();
         });
     });

@@ -1,12 +1,12 @@
 [package]
-name = "pumpkin-nbt"
+name = "papokin-nbt"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-pumpkin-codecs.workspace = true
+papokin-codecs.workspace = true
 thiserror.workspace = true
 bytes.workspace = true
 uuid.workspace = true

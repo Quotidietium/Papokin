@@ -1,19 +1,19 @@
-//! NBT support for Pumpkin's dynamic serialization operations.
+//! 为 Pumpkin 的动态序列化操作提供 NBT 支持。
 
 use crate::compound::NbtCompound;
 use crate::tag::NbtTag;
-use pumpkin_codecs::DataResult;
-use pumpkin_codecs::DynamicOps;
-use pumpkin_codecs::Lifecycle;
-use pumpkin_codecs::MapLike;
-use pumpkin_codecs::Number;
-use pumpkin_codecs::struct_builder::{ResultStructBuilder, StringStructBuilder, StructBuilder};
-use pumpkin_codecs::{impl_get_list, impl_string_struct_builder, impl_struct_builder};
+use papokin_codecs::DataResult;
+use papokin_codecs::DynamicOps;
+use papokin_codecs::Lifecycle;
+use papokin_codecs::MapLike;
+use papokin_codecs::Number;
+use papokin_codecs::struct_builder::{ResultStructBuilder, StringStructBuilder, StructBuilder};
+use papokin_codecs::{impl_get_list, impl_string_struct_builder, impl_struct_builder};
 use std::iter::Map;
 use std::vec::IntoIter;
 use tracing::warn;
 
-/// A [`DynamicOps`] implementation that represents values as [`NbtTag`]s.
+/// 一个 [`DynamicOps`] 实现，将值表示为 [`NbtTag`]。
 pub struct NbtOps;
 
 impl DynamicOps for NbtOps {
@@ -76,10 +76,10 @@ impl DynamicOps for NbtOps {
             if let Some(key) = k.extract_string() {
                 compound.put(key, v);
             } else {
-                // The Minecraft implementation just uses the string representation of the key tag,
-                // but that probably isn't meant to be intentionally used, so we will just
-                // log a warning.
-                warn!("Invalid key tag for creating NBT compound: {k}");
+                // Minecraft 的实现只是直接使用键标签的字符串表示，
+                // 但那大概并非有意如此使用，所以我们干脆
+                // 记录一条警告。
+                warn!("创建 NBT 复合标签的键标签无效：{k}");
             }
         }
         compound.into()
@@ -139,8 +139,8 @@ impl DynamicOps for NbtOps {
     fn get_iter(&self, input: Self::Value) -> DataResult<impl Iterator<Item = Self::Value>> {
         match input {
             NbtTag::List(l) => {
-                // Check the type of this list.
-                // If the list contains compounds, we try unwrapping them.
+                // 检查该列表的类型。
+                // 如果列表包含复合标签，尝试将其解包。
                 if let Some(NbtTag::Compound(_)) = l.first() {
                     DataResult::new_success(NbtIter::CompoundList(l.into_iter().map(|c| {
                         if let NbtTag::Compound(compound) = c {
@@ -288,7 +288,7 @@ impl DynamicOps for NbtOps {
 
     fn remove(&self, input: Self::Value, key: &str) -> Self::Value {
         if let NbtTag::Compound(compound) = input {
-            // Try to remove any entries whose key matches with `key`.
+            // 尝试移除键与 `key` 匹配的所有条目。
             NbtTag::Compound(
                 compound
                     .child_tags
@@ -330,13 +330,13 @@ impl DynamicOps for NbtOps {
 }
 
 impl NbtOps {
-    /// Tries to unwrap an [`NbtCompound`].
+    /// 尝试解包一个 [`NbtCompound`]。
     ///
-    /// If `compound` only has one element with an empty key (`""`), it returns that element.
-    /// Otherwise, this simply returns a new [`NbtTag::Compound`] with `compound`.
+    /// 若 `compound` 仅有一个键为空（`""`）的元素，则返回该元素。
+    /// 否则，直接返回一个包含 `compound` 的新 [`NbtTag::Compound`]。
     fn try_unwrap(mut compound: NbtCompound) -> NbtTag {
         if compound.child_tags.len() == 1 && compound.has("") {
-            // Remove the element to own the contained tag.
+            // 移除该元素以取得包含标签的所有权。
             compound
                 .child_tags
                 .remove("")
@@ -347,7 +347,7 @@ impl NbtOps {
     }
 }
 
-/// A single concrete type for an iterator of an NBT element.
+/// NBT 元素迭代器的单个具体类型。
 enum NbtIter {
     List(IntoIter<NbtTag>),
     CompoundList(Map<IntoIter<NbtTag>, fn(NbtTag) -> NbtTag>),
@@ -370,8 +370,8 @@ impl Iterator for NbtIter {
     }
 }
 
-/// An implementation of [`MapLike`] for NBT objects.
-/// The lifetime is that of the referenced map.
+/// 针对 NBT 对象的 [`MapLike`] 实现。
+/// 生命周期与被引用的映射相同。
 struct NbtMapLike<'a> {
     compound: &'a NbtCompound,
 }
@@ -395,7 +395,7 @@ impl MapLike for NbtMapLike<'_> {
     }
 }
 
-/// Builds NBT compounds for the [`NbtOps`] dynamic codec implementation.
+/// 为 [`NbtOps`] 动态编解码器实现构建 NBT 复合标签。
 pub struct NbtStructBuilder {
     builder: DataResult<NbtTag>,
 }
@@ -417,7 +417,7 @@ impl ResultStructBuilder for NbtStructBuilder {
                             compound.put(&k, v);
                         }
                     }
-                    // This shouldn't happen, but just in case.
+                    // 这本不该发生，但以防万一。
                     _ => {
                         return DataResult::new_error(format!(
                             "Expected compound in builder, found {builder}"
@@ -449,11 +449,11 @@ impl StringStructBuilder for NbtStructBuilder {
     }
 }
 
-// List collectors
+// 列表收集器
 
-/// A collector object for NBT lists.
+/// NBT 列表的收集器对象。
 ///
-/// The variants of this object should not be used as that is an implementation detail.
+/// 不应使用此对象的各个变体，因为那属于实现细节。
 enum ListCollector {
     Generic(InnerGenericListCollector),
 
@@ -463,15 +463,15 @@ enum ListCollector {
 }
 
 impl ListCollector {
-    /// Creates a new [`ListCollector`].
+    /// 创建新的 [`ListCollector`]。
     ///
-    /// This only returns an actual collector for [`NbtTag::End`] and all list [`NbtTag`]s.
+    /// 此方法只为 [`NbtTag::End`] 和所有列表类 [`NbtTag`] 返回实际的收集器。
     fn new(tag: NbtTag) -> Option<Self> {
         match tag {
             NbtTag::End => Some(Self::new_collector()),
 
             NbtTag::List(_) | NbtTag::ByteArray(_) | NbtTag::IntArray(_) | NbtTag::LongArray(_) => {
-                // Try to get the length of the tag.
+                // 尝试获取标签的长度。
                 let len = match &tag {
                     NbtTag::List(list) => list.len(),
 
@@ -486,7 +486,7 @@ impl ListCollector {
                     return Some(Self::new_collector());
                 }
 
-                // From this point onwards, we know that the list is not empty.
+                // 从这里开始，我们知道列表不为空。
                 match tag {
                     NbtTag::List(list) => Some(Self::Generic(InnerGenericListCollector::new(list))),
                     NbtTag::ByteArray(list) => {
@@ -503,15 +503,15 @@ impl ListCollector {
         }
     }
 
-    /// Creates a new initial collector.
-    /// [`NbtTag`]s can directly be added to this collector without any type worries.
+    /// 创建新的初始收集器。
+    /// [`NbtTag`] 可以直接添加到此收集器中，无需担心任何类型问题。
     const fn new_collector() -> Self {
         Self::Generic(InnerGenericListCollector {
             result: NbtTag::List(vec![]),
         })
     }
 
-    /// Accepts an [`NbtTag`].
+    /// 接受一个 [`NbtTag`]。
     fn accept(self, tag: NbtTag) -> Self {
         match self {
             Self::Generic(c) => c.accept(tag),
@@ -521,7 +521,7 @@ impl ListCollector {
         }
     }
 
-    /// Accepts all [`NbtTag`]s of the provided list.
+    /// 接受所提供列表中的所有 [`NbtTag`]。
     fn accept_all(self, tags: impl IntoIterator<Item = NbtTag>) -> Self {
         let mut collector = self;
         for tag in tags {
@@ -530,7 +530,7 @@ impl ListCollector {
         collector
     }
 
-    /// Provides the final result.
+    /// 提供最终结果。
     fn result(self) -> NbtTag {
         match self {
             Self::Generic(c) => c.result(),
@@ -541,7 +541,7 @@ impl ListCollector {
     }
 }
 
-/// An 'inner' list collector stored in one of the corresponding [`ListCollector`] enums.
+/// 存储在对应 [`ListCollector`] 枚举之一的“内部”列表收集器。
 trait InnerListCollector {
     fn accept(self, tag: NbtTag) -> ListCollector
     where
@@ -550,7 +550,7 @@ trait InnerListCollector {
     fn result(self) -> NbtTag;
 }
 
-/// An implementation of [`InnerListCollector`] for a generic list (of any type).
+/// 针对（任意类型的）通用列表的 [`InnerListCollector`] 实现。
 struct InnerGenericListCollector {
     result: NbtTag,
 }
@@ -587,7 +587,7 @@ impl InnerGenericListCollector {
     }
 }
 
-/// An implementation of [`InnerListCollector`] specifically for [`NbtTag::ByteArray`]s.
+/// 专门针对 [`NbtTag::ByteArray`] 的 [`InnerListCollector`] 实现。
 struct InnerByteListCollector {
     list: Vec<i8>,
 }
@@ -672,38 +672,32 @@ mod test {
 
     #[test]
     fn list_collecting() {
-        // Int list collector
+        // 整数列表收集器
         let tag = NbtTag::IntArray(vec![10, 15, 20]);
 
         assert_eq!(
-            ListCollector::new(tag)
-                .expect("List collector should exist")
-                .result(),
+            ListCollector::new(tag).expect("列表收集器应存在").result(),
             NbtTag::IntArray(vec![10, 15, 20])
         );
 
-        // Byte list collector
+        // 字节列表收集器
         let tag = NbtTag::ByteArray(vec![-1, 45, 100].into());
 
         assert_eq!(
-            ListCollector::new(tag)
-                .expect("List collector should exist")
-                .result(),
+            ListCollector::new(tag).expect("列表收集器应存在").result(),
             NbtTag::ByteArray(vec![-1, 45, 100].into())
         );
 
-        // Long list
+        // 长列表
         let tag = NbtTag::LongArray(vec![11_234_567_890, -986, 1, -937_238_122]);
 
         assert_eq!(
-            ListCollector::new(tag)
-                .expect("List collector should exist")
-                .result(),
+            ListCollector::new(tag).expect("列表收集器应存在").result(),
             NbtTag::LongArray(vec![11_234_567_890, -986, 1, -937_238_122])
         );
 
-        // Generic list collector
-        // Homogeneous elements
+        // 通用列表收集器
+        // 同构元素
         let mut collector = ListCollector::new_collector();
 
         collector = collector.accept(NbtTag::Float(-123.4));
@@ -714,7 +708,7 @@ mod test {
             NbtTag::List(vec![NbtTag::Float(-123.4), NbtTag::Float(12.5)])
         );
 
-        // Heterogeneous elements
+        // 异构元素
         let mut collector = ListCollector::new_collector();
 
         collector = collector.accept(NbtTag::Byte(99));
