@@ -1,0 +1,49 @@
+use crate::{
+    math::java_string_hash,
+    random::{RandomImpl, get_seed, legacy_rand::LegacyRand},
+};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+/// 表示一个世界生成种子。
+///
+/// 种子以 `u64` 存储，但遵循 Java 风格的行为：
+/// - 数字字符串先解析为 `i64` 再进行转换。
+/// - 非数字字符串使用 Java 字符串哈希算法进行哈希。
+/// - 空输入或仅含空白字符的输入会生成随机种子。
+///
+/// 这使得可以兼容典型的 Minecraft 风格种子输入。
+#[derive(Clone, Copy)]
+pub struct Seed(pub u64);
+
+impl From<&str> for Seed {
+    fn from(value: &str) -> Self {
+        let trimmed = value.trim();
+        let value = (!trimmed.is_empty()).then(|| {
+            let i64_value = trimmed
+                .parse::<i64>()
+                .unwrap_or_else(|_| i64::from(java_string_hash(trimmed)));
+            i64_value as u64
+        });
+
+        Self(value.unwrap_or_else(|| LegacyRand::from_seed(get_seed()).next_i64() as u64))
+    }
+}
+
+impl Serialize for Seed {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&(self.0 as i64).to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for Seed {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        Ok(Self::from(raw.as_str()))
+    }
+}
