@@ -1,0 +1,21 @@
+[package]
+name = "papokin-command"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+papokin-util.workspace = true
+papokin-protocol = { workspace = true, features = ["default"] }
+papokin-data = { workspace = true, features = ["default"] }
+papokin-nbt.workspace = true
+papokin-codecs.workspace = true
+
+uuid.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
