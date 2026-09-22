@@ -1,0 +1,357 @@
+interface server {
+    use player.{player, ban-player-options, ban-ip-options, server-link, known-server-link, server-link-label};
+    use common.{game-mode, position};
+    use %world.{%world};
+    use text.{text-component};
+    use uuid.{uuid};
+    use recipe.{recipe-manager};
+    use enchantments.{enchantment-manager, custom-enchantment};
+    use permission.{permission-level};
+    use advancement.{advancement-info};
+    use datapack.{datapack-manager, datapack-info};
+    use damage-types.{damage-type-manager};
+    use tag.{tag-manager};
+    use registry.{registry-manager};
+
+    /// 表示 ops 配置中的一条管理员条目。
+    record op-entry {
+        uuid: uuid,
+        name: string,
+        level: permission-level,
+        bypasses-player-limit: bool,
+    }
+
+    /// 用于查询和管理服务器管理员的接口。
+    resource op-manager {
+        /// 检查某个玩家 UUID 当前是否为管理员。
+        is-op: func(id: uuid) -> bool;
+
+        /// 获取某个玩家 UUID 的管理员条目，如果存在。
+        get-op: func(id: uuid) -> option<op-entry>;
+
+        /// 获取某个玩家 UUID 的有效权限等级（非管理员时返回 zero）。
+        get-permission-level: func(id: uuid) -> permission-level;
+
+        /// 以指定等级与绕过设置授予玩家（在线或离线）管理员身份。
+        op-player: func(name: string, id: uuid, level: permission-level, bypasses-player-limit: bool);
+
+        /// 撤销玩家（在线或离线）的管理员身份。该玩家此前是管理员时返回 true。
+        deop-player: func(id: uuid) -> bool;
+
+        /// 返回服务器上所有管理员条目的列表。
+        list-ops: func() -> list<op-entry>;
+    }
+
+    /// 表示封禁列表中的一条被封禁玩家条目。
+    record banned-player-entry {
+        uuid: uuid,
+        name: string,
+        created: string,
+        source: string,
+        expires: option<string>,
+        reason: string,
+    }
+
+    /// 表示 IP 封禁列表中的一条被封禁 IP 条目。
+    record banned-ip-entry {
+        ip: string,
+        created: string,
+        source: string,
+        expires: option<string>,
+        reason: string,
+    }
+
+    /// 玩家与 IP 封禁的全局管理器。
+    resource ban-manager {
+        /// 检查某个玩家 UUID 当前是否被封禁。
+        is-player-banned: func(id: uuid) -> bool;
+
+        /// 获取某个玩家 UUID 的封禁条目，如果已被封禁。
+        get-player-ban: func(id: uuid) -> option<banned-player-entry>;
+
+        /// 按名称与 UUID 以指定选项封禁玩家（对在线与离线玩家均有效）。
+        ban-player: func(name: string, id: uuid, options: ban-player-options);
+
+        /// 按 UUID 移除玩家封禁。该玩家此前被封禁时返回 true。
+        unban-player: func(id: uuid) -> bool;
+
+        /// 返回当前所有生效的玩家封禁。
+        list-player-bans: func() -> list<banned-player-entry>;
+
+        /// 检查某个 IP 地址当前是否被封禁。
+        is-ip-banned: func(ip: string) -> bool;
+
+        /// 获取某个 IP 地址的封禁条目，如果已被封禁。
+        get-ip-ban: func(ip: string) -> option<banned-ip-entry>;
+
+        /// 以指定选项封禁一个 IP 地址。
+        ban-ip: func(ip: string, options: ban-ip-options);
+
+        /// 移除一个 IP 封禁。该 IP 此前被封禁时返回 true。
+        unban-ip: func(ip: string) -> bool;
+
+        /// 返回当前所有生效的 IP 封禁。
+        list-ip-bans: func() -> list<banned-ip-entry>;
+    }
+
+    /// 表示服务器白名单中的一条玩家条目。
+    record whitelist-entry {
+        uuid: uuid,
+        name: string,
+    }
+
+    /// 服务器白名单的全局管理器。
+    resource whitelist-manager {
+        /// 返回白名单当前是否启用。
+        is-enabled: func() -> bool;
+
+        /// 启用或禁用服务器白名单。启用且设置了 enforce-whitelist 时，
+        /// 会踢出不在白名单中的玩家。
+        set-enabled: func(enabled: bool);
+
+        /// 检查某个玩家 UUID 是否在白名单中。
+        is-whitelisted: func(id: uuid) -> bool;
+
+        /// 把玩家加入白名单（在线或离线）。新加入时返回 true。
+        add-player: func(name: string, id: uuid) -> bool;
+
+        /// 把玩家从白名单移除。该玩家此前在白名单中时返回 true。
+        remove-player: func(id: uuid) -> bool;
+
+        /// 返回所有白名单玩家条目。
+        list-entries: func() -> list<whitelist-entry>;
+    }
+
+    /// 表示 Minecraft 服务器的难度设置。
+    enum difficulty {
+        /// 敌对生物不生成。玩家自动恢复生命值。
+        peaceful,
+        /// 敌对生物造成较少伤害。
+        easy,
+        /// 标准 Minecraft 难度。
+        normal,
+        /// 敌对生物造成更多伤害。
+        hard,
+    }
+
+    /// 表示三个主要的 Minecraft 维度。
+    enum dimension {
+        overworld,
+        nether,
+        end,
+    }
+
+    record sys-info {
+        cpu-count: option<u32>,
+        total-memory: option<u64>,
+        used-memory: option<u64>,
+        os-name: option<string>,
+        os-version: option<string>,
+        papokin-version: string,
+    }
+
+    /// 玩家数据的快照，无论在线或离线。
+    record offline-player-info {
+        /// 玩家的 UUID。
+        uuid: string,
+        /// 玩家最后已知的名称，如果在用户缓存中或在线。
+        name: option<string>,
+        /// 玩家此前是否在此服务器上玩过（有数据文件或当前在线）。
+        has-played-before: bool,
+        /// 玩家最后一次被看到的时间，Unix 纪元毫秒（数据文件的修改
+        /// 时间；在线时为 none）。
+        last-played-ms: option<u64>,
+        /// 玩家当前是否在线。
+        is-online: bool,
+        /// 最后已知的世界（维度标识符），如果存在数据文件。
+        last-world: option<string>,
+        /// 最后已知的位置，如果存在数据文件。
+        last-position: option<position>,
+        /// 最后已知的游戏模式，如果存在数据文件。
+        gamemode: option<game-mode>,
+        /// 重生点（世界, x, y, z），如果已设置。
+        respawn-world: option<string>,
+        respawn-position: option<position>,
+        /// 玩家是否为管理员。
+        is-op: bool,
+        /// 玩家是否在白名单中。
+        is-whitelisted: bool,
+        /// 玩家是否被封禁。
+        is-banned: bool,
+    }
+
+    /// 正在运行的服务器的构建与版本信息。
+    record server-build-info {
+        /// 服务器品牌（如 "Pumpkin"）。
+        brand: string,
+        /// 服务器实现版本（crate 版本）。
+        server-version: string,
+        /// 此服务器实现的主要 Minecraft（Java）版本字符串。
+        minecraft-version: string,
+        /// 插件 API 版本门限（PLUGIN_API_VERSION）。
+        plugin-api-version: u32,
+    }
+
+    variant command-sender {
+        console,
+        player(player),
+    }
+
+    /// 表示全局服务器实例。
+    resource server {
+        /// 返回系统信息（CPU、内存、操作系统）。
+        /// 仅当插件拥有相应权限时才会返回对应字段。
+        get-sys-info: func() -> sys-info;
+
+        /// 返回正在运行的服务器的构建与版本信息。
+        get-build-info: func() -> server-build-info;
+
+        /// 返回服务器当前的难度等级。
+        get-difficulty: func() -> difficulty;
+
+        /// 返回当前连接到服务器的玩家总数。
+        get-player-count: func() -> u32;
+
+        /// 返回每刻毫秒数（MSPT）的滚动平均值。
+        /// 低于 50.0 才能保持稳定的 20 TPS。
+        get-mspt: func() -> f64;
+
+        /// 返回有效的每秒刻数（TPS）。
+        /// 理想值为 20.0。
+        get-tps: func() -> f64;
+
+        /// 返回所有世界中全部在线玩家的列表。
+        get-all-players: func() -> list<player>;
+
+        /// 按精确名称搜索玩家。
+        get-player-by-name: func(name: string) -> option<player>;
+
+        /// 按 UUID 字符串搜索玩家。
+        get-player-by-uuid: func(id: uuid) -> option<player>;
+
+        /// 按 UUID 查找玩家，无论在线或离线。玩家完全未知时返回
+        /// none。
+        get-offline-player-by-uuid: func(uuid: string) -> option<offline-player-info>;
+
+        /// 通过用户缓存按名称查找玩家，无论在线或离线。未知时返回
+        /// none。
+        get-offline-player-by-name: func(name: string) -> option<offline-player-info>;
+
+        /// 返回此服务器上所有世界的列表。
+        get-all-worlds: func() -> list<%world>;
+
+        /// 按维度名（如 "minecraft:overworld"）或自定义世界名（如
+        /// "world"、"arena_1"）获取世界。
+        get-world-by-name: func(name: string) -> option<%world>;
+
+        /// 按名称或维度检查世界是否存在。
+        has-world: func(name: string) -> bool;
+
+        execute-command: func(command: string, sender: command-sender);
+
+        /// 按名称与维度创建或加载一个世界。
+        /// 已存在同名世界时直接返回它。
+        create-world: func(name: string, dimension: dimension) -> %world;
+
+        /// 按名称或维度卸载并保存一个世界。
+        /// 世界找不到、是主/默认世界、或里面仍有玩家时返回错误。
+        unload-world: func(name: string) -> result<_, string>;
+
+        /// 把所有玩家、玩家进度与已加载的世界保存到磁盘。
+        save-all: func() -> result<_, string>;
+
+        /// 返回指定世界中所有在线玩家的列表。
+        get-players-in-world: func(world-ref: %world) -> list<player>;
+
+        /// 返回指定世界中在线玩家的数量。
+        get-player-count-in-world: func(world-ref: %world) -> u32;
+
+        /// 向所有玩家广播一条系统聊天消息。
+        broadcast: func(message: string);
+
+        /// 用 256 字节签名从所有玩家的聊天窗口删除一条已签名的聊天
+        /// 消息。
+        delete-message-by-signature: func(signature: list<u8>);
+
+        /// 用签名缓存 ID 从所有玩家的聊天窗口删除一条已签名的聊天
+        /// 消息。
+        delete-message-by-id: func(signature-id: s32);
+
+        /// 向所有玩家广播玩家列表的页眉与页脚。
+        broadcast-tab-list-header-footer: func(header: text-component, footer: text-component);
+
+        /// 返回服务器允许的最大玩家数量。
+        get-max-players: func() -> u32;
+
+        /// 返回服务器是否处于极限模式。
+        is-hardcore: func() -> bool;
+
+        /// 返回服务器是否处于在线模式（向 Mojang 验证身份）。
+        is-online-mode: func() -> bool;
+
+        /// 返回服务器的 MOTD（Message of the Day）。
+        get-motd: func() -> string;
+
+        /// 返回服务器是否启用了白名单。
+        has-whitelist: func() -> bool;
+
+        /// 返回服务器是否允许下界维度。
+        get-allow-nether: func() -> bool;
+
+        /// 返回服务器是否允许末地维度。
+        get-allow-end: func() -> bool;
+
+        /// 返回服务器的最大视距。
+        get-view-distance: func() -> u8;
+
+        /// 返回服务器的最大模拟距离。
+        get-simulation-distance: func() -> u8;
+
+        /// 返回服务器的默认游戏模式。
+        get-default-gamemode: func() -> game-mode;
+
+        /// 返回用于注册自定义配方的配方管理器。
+        get-recipe-manager: func() -> recipe-manager;
+
+        /// 返回用于查询或修改服务器管理员的管理员管理器。
+        get-op-manager: func() -> op-manager;
+
+        /// 返回用于查询和修改玩家与 IP 封禁的全局封禁管理器。
+        get-ban-manager: func() -> ban-manager;
+
+        /// 返回用于查询和修改服务器白名单的全局白名单管理器。
+        get-whitelist-manager: func() -> whitelist-manager;
+
+        /// 按 ID 返回进度的详细信息（如 "minecraft:story/mine_stone"
+        /// 或 "story/mine_stone"）。
+        get-advancement: func(id: string) -> option<advancement-info>;
+
+        /// 返回服务器上所有已注册进度 ID 的列表。
+        get-all-advancement-ids: func() -> list<string>;
+
+        /// 返回用于注册和查询自定义附魔的全局附魔管理器。
+        get-enchantment-manager: func() -> enchantment-manager;
+
+        /// 按 ID 返回附魔（原版或自定义）的信息。
+        get-enchantment: func(id: string) -> option<custom-enchantment>;
+
+        /// 返回服务器上所有已注册附魔 ID（自定义与原版）的列表。
+        get-all-enchantment-ids: func() -> list<string>;
+
+        /// 返回用于查看、启用、禁用与重载数据包的全局数据包管理器。
+        get-datapack-manager: func() -> datapack-manager;
+
+        /// 返回用于注册和查询自定义伤害类型的全局伤害类型管理器。
+        get-damage-type-manager: func() -> damage-type-manager;
+
+        /// 返回用于修改和查询标签表的全局标签管理器。
+        get-tag-manager: func() -> tag-manager;
+
+        /// 返回用于注册和查询自定义注册表条目的全局注册表管理器。
+        get-registry-manager: func() -> registry-manager;
+
+        /// 向所有已连接玩家广播自定义服务器链接（1.21+ 中显示在客户
+        /// 端 Esc 暂停菜单里）。
+        set-server-links: func(links: list<server-link>);
+    }
+}

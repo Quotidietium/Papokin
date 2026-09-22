@@ -1,0 +1,22 @@
+/// 插件配置文件（相当于 Bukkit 的 `getConfig`）。
+///
+/// 宿主代表各插件将其配置存储在 `<数据目录>/config.toml`；沙箱中的插件
+/// 从不直接触碰文件系统。`load-config` 会把已存储的文件深度合并到插件
+/// 提供的默认值之上（已存储的用户值优先），持久化合并后的文档并将其
+/// 返回——因此新增的默认键会出现，而用户值在升级后依然保留。
+interface config {
+    /// 加载插件配置，并将其合并到 TOML `defaults` 之上。
+    ///
+    /// * `defaults`：包含插件默认值的 TOML 文档。插件不带默认值时可以
+    ///   为空。
+    ///
+    /// # 错误
+    /// 任一文档不是合法 TOML 时返回错误。
+    load-config: func(defaults: string) -> result<string, string>;
+
+    /// 用给定的 TOML 内容覆盖插件的配置文件。
+    ///
+    /// # 错误
+    /// 内容不是合法 TOML 或写入失败时返回错误。
+    save-config: func(content: string) -> result<_, string>;
+}

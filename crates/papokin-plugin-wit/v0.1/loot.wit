@@ -1,0 +1,59 @@
+interface loot {
+    use item-stack.{item-stack};
+    use inventory.{inventory};
+
+    /// 影响战利品生成的上下文参数，对应服务器生成器实际消费的原版
+    /// 战利品上下夫子集（外加原版钓鱼使用的 `luck`）。
+    ///
+    /// 原版管线在生成期间不读取的字段（位置、世界时间、天气、实体引用
+    /// 等）被刻意不暴露；它们对结果没有影响。
+    record loot-context {
+        /// 玩家幸运值（原版 `generic.luck` 属性值）。
+        ///
+        /// 注意：服务器的战利品生成器目前不读取 `luck`（还没有任何条件
+        /// 消费它）；暴露它是为了让将来新增感知幸运值条件的表无需改动
+        /// API。
+        luck: f32,
+        /// 掉落是否源自玩家击杀；驱动实体战利品表使用的
+        /// `killed-by-player` 条件。
+        killed-by-player: bool,
+        /// 造成掉落的爆炸半径；驱动 `survives-explosion` 条件。`none`
+        /// 表示没有爆炸，该条件必定通过。
+        explosion-radius: option<f32>,
+        /// 破坏/击杀所用的工具；其附魔驱动精准采集、剪刀、时运与抢夺
+        /// 的判定。
+        ///
+        /// 该句柄会被此 record 消耗：请在调用前一刻构造工具物品堆
+        /// （如 `ItemStack::new`），或传入一个不再需要的快照。
+        tool: option<item-stack>,
+    }
+
+    /// 返回给定键的战利品表是否存在。
+    ///
+    /// `minecraft:` 命名空间前缀可选；
+    /// `"chests/simple_dungeon"` 与 `"minecraft:chests/simple_dungeon"`
+    /// 解析到同一张原版表。
+    has-loot-table: func(key: string) -> bool;
+
+    /// 用默认上下文（无工具、非玩家击杀、无爆炸）与调用方给定的种子，
+    /// 从指定名称的表生成战利品。
+    ///
+    /// 相同的 `(key, seed)` 对总是产出相同的物品堆。不存在键为 `key`
+    /// 的表时返回 `err`。
+    ///
+    /// 这是纯数据操作：不会向世界生成任何东西，因此在任何上下文中调用
+    /// 都是安全的，包括无头启动阶段。
+    generate-loot: func(key: string, seed: s64) -> result<list<item-stack>, string>;
+
+    /// 用显式的上下文参数从指定名称的表生成战利品。
+    ///
+    /// 行为同 `generate-loot`；各字段驱动的内容见 `loot-context`。
+    generate-loot-with-context: func(key: string, seed: s64, context: loot-context) -> result<list<item-stack>, string>;
+
+    /// 生成战利品并散布到物品栏的空槽位中，与原版战利品箱首次打开时
+    /// 使用的打乱-拆分算法相同。
+    ///
+    /// 仅支持通用容器物品栏（箱子、木桶、运输矿车等）；传入玩家物品栏
+    /// 返回 `err`。不存在键为 `key` 的表时返回 `err`。
+    fill-inventory: func(key: string, seed: s64, target: borrow<inventory>) -> result<_, string>;
+}

@@ -1,0 +1,104 @@
+interface item-stack {
+    use attributes.{attribute, attribute-modifier};
+    use data-components.{data-component};
+    use enchantments.{attribute-modifier-slot, enchantment};
+    use text.{text-component};
+
+    /// 表示一个附魔及其等级。
+    record enchantment-value {
+        enchantment: enchantment,
+        level: u32,
+    }
+
+    /// 表示物品堆上的一个自定义附魔及其等级。
+    record custom-enchantment-value {
+        enchantment-id: string,
+        level: u32,
+    }
+
+    /// 表示应用于物品堆上特定槽位的属性修饰符。
+    record item-attribute-modifier {
+        attribute: attribute,
+        modifier: attribute-modifier,
+        slot: attribute-modifier-slot,
+    }
+
+    /// 表示一个数据组件及其序列化值。
+    record data-component-value {
+        component: data-component,
+        /// 组件的序列化值。
+        value: list<u8>,
+    }
+
+    use common.{nbt-entry, nbt-tree, nbt-tag};
+
+    resource item-stack {
+        constructor(registry-key: string, count: u8);
+
+        /// 返回物品的唯一注册表键（如 "minecraft:diamond"）。
+        get-registry-key: func() -> string;
+        
+        /// 返回堆叠中的物品数量。
+        get-count: func() -> u8;
+        /// 设置堆叠中的物品数量。
+        set-count: func(count: u8);
+
+        /// 返回此堆叠可容纳的最大物品数量。
+        get-max-count: func() -> u8;
+
+        /// 返回此物品堆上的所有附魔。
+        get-enchantments: func() -> list<enchantment-value>;
+        /// 向此物品堆添加一个附魔。
+        add-enchantment: func(enchantment: enchantment, level: u32);
+        /// 从此物品堆移除一个附魔。
+        remove-enchantment: func(enchantment: enchantment);
+
+        /// 返回此物品堆上的所有自定义附魔。
+        get-custom-enchantments: func() -> list<custom-enchantment-value>;
+        /// 向此物品堆添加一个自定义附魔。
+        add-custom-enchantment: func(enchantment-id: string, level: u32);
+        /// 从此物品堆移除一个自定义附魔。
+        remove-custom-enchantment: func(enchantment-id: string);
+        /// 返回此物品堆上某个自定义附魔的等级，如果存在。
+        get-custom-enchantment-level: func(enchantment-id: string) -> option<u32>;
+        /// 返回此物品堆是否具有某个自定义附魔。
+        has-custom-enchantment: func(enchantment-id: string) -> bool;
+
+        /// 返回此物品堆上的所有属性修饰符。
+        get-attribute-modifiers: func() -> list<item-attribute-modifier>;
+        /// 向此物品堆添加一个属性修饰符。
+        add-attribute-modifier: func(modifier: item-attribute-modifier);
+        /// 从此物品堆移除指定属性的所有属性修饰符。
+        remove-attribute-modifiers: func(attribute: attribute);
+        /// 清空此物品堆上的所有自定义属性修饰符。
+        clear-attribute-modifiers: func();
+
+        /// 返回此物品堆的 lore。
+        get-lore: func() -> list<text-component>;
+        /// 设置此物品堆的 lore。
+        set-lore: func(lore: list<text-component>);
+        /// 向此物品堆的 lore 添加一行。
+        add-lore: func(line: text-component);
+
+        /// 返回此物品堆的自定义名称，如果已设置。
+        get-custom-name: func() -> option<text-component>;
+        /// 设置此物品堆的自定义名称。
+        set-custom-name: func(name: option<text-component>);
+
+        /// 在此物品堆上设置一个带命名空间的自定义数据值。
+        set-custom-data: func(namespace: string, key: string, value: nbt-tree);
+        /// 返回此物品堆上一个带命名空间的自定义数据值，如果已设置。
+        get-custom-data: func(namespace: string, key: string) -> option<nbt-tree>;
+        /// 从此物品堆移除一个带命名空间的自定义数据值。
+        remove-custom-data: func(namespace: string, key: string);
+        /// 返回此物品堆是否具有某个带命名空间的自定义数据值。
+        has-custom-data: func(namespace: string, key: string) -> bool;
+
+        /// 返回此物品堆上的所有数据组件。
+        get-components: func() -> list<data-component-value>;
+        /// 在此物品堆上设置一个数据组件。
+        set-component: func(component: data-component, value: list<u8>);
+        /// 从此物品堆移除一个数据组件。
+        remove-component: func(component: data-component);
+    }
+}

@@ -1,0 +1,78 @@
+package papokin:plugin@0.1.0;
+
+interface inventory {
+    use item-stack.{item-stack};
+    use common.{hand};
+
+    /// 通用物品栏资源，用于 GUI、玩家物品栏与容器。
+    resource inventory {
+        /// 返回此物品栏的槽位数量。
+        get-size: func() -> u32;
+
+        /// 若此物品栏所有槽位均为空则返回 true。
+        is-empty: func() -> bool;
+
+        /// 返回指定槽位的物品，为空时返回 none。
+        get-item: func(slot: u32) -> option<item-stack>;
+
+        /// 设置指定槽位的物品。
+        set-item: func(slot: u32, item: option<item-stack>);
+
+        /// 移除并返回指定槽位的物品。
+        remove-item: func(slot: u32) -> option<item-stack>;
+
+        /// 清空此物品栏中的所有物品。
+        clear: func();
+
+        /// 以槽位列表的形式返回此物品栏中的全部物品。
+        get-all-items: func() -> list<option<item-stack>>;
+
+        /// 用列表设置此物品栏中的全部物品。
+        set-all-items: func(items: list<option<item-stack>>);
+
+        /// 统计此物品栏中具有给定 ID 的物品总数。
+        count-item: func(item-id: string) -> u32;
+
+        /// 检查物品栏是否含有至少一个具有给定 ID 的物品。
+        contains-item: func(item-id: string) -> bool;
+    }
+
+    /// 专用的玩家物品栏句柄，可访问主物品栏、盔甲、副手与快捷栏。
+    resource player-inventory {
+        /// 返回通用的 36 槽物品栏句柄（快捷栏 + 主存储区）。
+        as-inventory: func() -> inventory;
+
+        /// 返回指定手中当前持有的物品。
+        get-item-in-hand: func(hand: hand) -> option<item-stack>;
+        /// 设置指定手中的物品。
+        set-item-in-hand: func(hand: hand, item: option<item-stack>);
+
+        /// 返回当前选中的快捷栏槽位索引（0-8）。
+        get-selected-slot: func() -> u8;
+        /// 设置当前选中的快捷栏槽位索引（0-8）。
+        set-selected-slot: func(slot: u8);
+
+        /// 盔甲槽位访问器
+        get-helmet: func() -> option<item-stack>;
+        set-helmet: func(item: option<item-stack>);
+
+        get-chestplate: func() -> option<item-stack>;
+        set-chestplate: func(item: option<item-stack>);
+
+        get-leggings: func() -> option<item-stack>;
+        set-leggings: func(item: option<item-stack>);
+
+        get-boots: func() -> option<item-stack>;
+        set-boots: func(item: option<item-stack>);
+
+        get-off-hand: func() -> option<item-stack>;
+        set-off-hand: func(item: option<item-stack>);
+
+        /// 清空所有盔甲槽位。
+        clear-armor: func();
+        /// 清空 36 个主物品栏槽位。
+        clear-main: func();
+        /// 清空所有槽位（主物品栏、盔甲、副手）。
+        clear-all: func();
+    }
+}

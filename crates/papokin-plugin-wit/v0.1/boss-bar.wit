@@ -1,0 +1,83 @@
+interface boss-bar {
+    use text.{text-component};
+    use player.{player};
+
+
+    /// 表示 Boss 血条的颜色。
+    enum boss-bar-color {
+        pink,
+        blue,
+        red,
+        green,
+        yellow,
+        purple,
+        white,
+    }
+
+    /// 表示 Boss 血条的刻痕/分段。
+    enum boss-bar-division {
+        no-division,
+        notches-6,
+        notches-10,
+        notches-12,
+        notches-20,
+    }
+
+    /// 可在 Boss 血条上切换的元数据标志。
+    record boss-bar-metadata {
+        /// 让能看到此 Boss 血条的玩家天空变暗。
+        darken-sky: bool,
+        /// 为 true 时，此血条被视为"龙血条"（用于末影龙）。
+        dragon-bar: bool,
+        /// 为 true 时，在能看到此 Boss 血条的玩家周围制造迷雾。
+        create-fog: bool,
+    }
+
+    /// 表示可以向玩家展示的 Boss 血条。
+    resource boss-bar {
+        /// 创建一个新的 Boss 血条。
+        constructor(title: text-component, color: boss-bar-color, division: boss-bar-division);
+        
+        /// 返回此 Boss 血条的标题。
+        get-title: func() -> text-component;
+        
+        /// 设置此 Boss 血条的标题。
+        set-title: func(title: text-component);
+        
+        /// 返回此 Boss 血条的血量（0.0 到 1.0）。
+        get-health: func() -> f32;
+        
+        /// 设置此 Boss 血条的血量（0.0 到 1.0）。
+        set-health: func(health: f32);
+        
+        /// 返回此 Boss 血条的颜色。
+        get-color: func() -> boss-bar-color;
+        
+        /// 设置此 Boss 血条的颜色。
+        set-color: func(color: boss-bar-color);
+        
+        /// 返回此 Boss 血条的分段。
+        get-division: func() -> boss-bar-division;
+        
+        /// 设置此 Boss 血条的分段。
+        set-division: func(division: boss-bar-division);
+
+        /// 返回此 Boss 血条当前生效的元数据。
+        get-metadata: func() -> boss-bar-metadata;
+
+        /// 更新此 Boss 血条的元数据。
+        set-metadata: func(metadata: boss-bar-metadata);
+        
+        /// 把玩家加入此 Boss 血条，使其对该玩家可见。
+        add-player: func(player: player);
+        
+        /// 把玩家从此 Boss 血条移除，对其隐藏。
+        remove-player: func(player: player);
+        
+        /// 返回当前能看到此 Boss 血条的所有玩家的列表。
+        get-players: func() -> list<player>;
+        
+        /// 从所有玩家处移除此 Boss 血条并清理它。
+        remove-all: func();
+    }
+}

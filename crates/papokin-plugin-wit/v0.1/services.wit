@@ -1,0 +1,36 @@
+/// 服务器级服务注册表（相当于 Bukkit 的 `ServicesManager`）。
+///
+/// 由于插件运行在隔离的沙箱中，这里的"服务"按名称发现，并通过 IPC
+/// 接口调用：提供方注册一个服务名，消费方查找该提供方并用
+/// `send-ipc-message` 向其发消息。
+interface services {
+    /// 服务注册表中的一条注册条目。
+    record service-provider {
+        /// 服务能力名称。
+        service: string,
+        /// 提供该服务的插件。
+        plugin: string,
+        /// 多个提供方之间的优先级；数值高者优先。
+        priority: s32,
+    }
+
+    /// 将本插件注册为 `service` 的提供方。
+    ///
+    /// 同一插件重复注册同一服务会更新其优先级。插件卸载或禁用时，
+    /// 注册会被自动移除。
+    ///
+    /// * `service`：服务能力名称（按惯例带命名空间，例如
+    ///   `my-plugin:economy`）。
+    /// * `priority`：多个提供方之间的优先级；数值高者优先。
+    register-service: func(service: string, priority: s32) -> result<_, string>;
+
+    /// 移除本插件对 `service` 的注册。
+    unregister-service: func(service: string);
+
+    /// 返回 `service` 当前优先级最高的活跃提供方，如有。
+    get-service-provider: func(service: string) -> option<service-provider>;
+
+    /// 返回 `service` 的全部活跃提供方，按优先级降序（再按注册顺序）
+    /// 排列。
+    get-service-providers: func(service: string) -> list<service-provider>;
+}

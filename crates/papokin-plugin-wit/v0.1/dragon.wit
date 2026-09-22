@@ -1,0 +1,96 @@
+package papokin:plugin@0.1.0;
+
+/// 末影龙战斗（DragonBattle）的查看与控制。
+///
+/// 在服务器的 `DragonFight` 管理器之上镜像 Paper 的 `DragonBattle`
+/// API：查询被追踪的龙、观察并驱动重生序列、生成战斗的结构（返回
+/// 传送门、末地水晶、折跃门）。战斗的 Boss 血条有意不在此重复暴露；
+/// 请改用 `boss-bar` 接口。
+///
+/// 龙战只存在于末地；`get-dragon-fight` 对任何其他维度都返回
+/// `none`。
+interface dragon {
+    use common.{block-pos};
+    use uuid.{uuid};
+    use %world.{%world as end-world};
+
+    /// 龙重生动画的阶段，与原版
+    /// `net.minecraft.world.level.dimension.end.DragonRespawnStage`
+    /// 对应。
+    enum dragon-respawn-stage {
+        /// 水晶开始向龙的生成点发射光束。
+        start,
+        /// 准备召唤黑曜石柱（咆哮动画）。
+        preparing-to-summon-pillars,
+        /// 黑曜石柱及其水晶正在逐一重新生成。
+        summoning-pillars,
+        /// 龙本身即将被召唤。
+        summoning-dragon,
+        /// 结束序列并生成新的龙。
+        end,
+    }
+
+    /// 某个世界的龙战句柄。
+    ///
+    /// 句柄在其世界处于加载状态时保持有效；世界卸载后发起的调用会
+    /// 失败，而不会让世界保持存活。
+    resource dragon-fight {
+        /// 返回此战斗所追踪的龙的 UUID；当前没有追踪到龙（例如龙已被
+        /// 击杀）时返回 `none`。
+        get-dragon-uuid: func() -> option<uuid>;
+
+        /// 返回战斗是否认为龙仍然存活（龙被击杀且尚未召唤新龙时为
+        /// `false`）。
+        is-dragon-alive: func() -> bool;
+
+        /// 返回龙在此世界中是否曾被击杀过（Paper
+        /// `hasBeenKilledPreviously`）。驱动首次击杀奖励，如龙蛋。
+        has-been-killed-previously: func() -> bool;
+
+        /// 返回当前的重生动画阶段；没有进行中的重生序列时返回
+        /// `none`。
+        get-respawn-stage: func() -> option<dragon-respawn-stage>;
+
+        /// 在重生动画中向前跳转（Paper `setRespawnPhase`）。传入 `end`
+        /// 会结束序列并生成新的龙。没有进行中的重生序列、没有任何改变
+        /// 时返回 `false`。
+        set-respawn-stage: func(stage: dragon-respawn-stage) -> bool;
+
+        /// 返回黑曜石柱上仍然存活的末地水晶数量，以最近一次水晶扫描
+        /// 为准（原版在战斗激活期间每 100 刻扫描一次）。
+        get-alive-crystals: func() -> s32;
+
+        /// 返回被追踪的返回传送门位置；战斗尚未定位或放置传送门时
+        /// 返回 `none`。
+        get-exit-portal-location: func() -> option<block-pos>;
+
+        /// 若龙已死亡且返回传送门四周放置了四块水晶，则开始重生序列
+        /// （原版 `tryRespawn`，Paper `initiateRespawn`）。调用后有重生
+        /// 序列在运行时返回 `true`。
+        initiate-respawn: func() -> bool;
+
+        /// 中止进行中的重生序列：重置黑曜石柱水晶并重新激活返回传送
+        /// 门。没有进行中的重生序列、没有任何改变时返回 `false`。
+        abort-respawn: func() -> bool;
+
+        /// 重置所有黑曜石柱水晶：清除其光束目标并使其重新可被伤害
+        /// （Paper `resetCrystals`）。
+        reset-crystals: func();
+
+        /// 在 20 个原版折跃门位置之一生成一个新的末地折跃门（与战斗
+        /// 在击杀后选择的那个相同）。
+        spawn-gateway: func();
+
+        /// 在被追踪（或被发现）的传送门位置放置基岩返回传送门结构。
+        /// `active` 为 true 时填充传送门方块，否则基座为空。
+        spawn-exit-portal: func(active: bool);
+
+        /// 在每根尚无水晶的黑曜石柱顶部生成一块末地水晶（原版
+        /// `spawnCrystals`）。
+        spawn-crystals: func();
+    }
+
+    /// 返回 `in-world` 的龙战；该世界不是末地时返回 `none`（只有末地
+    /// 有龙战）。
+    get-dragon-fight: func(in-world: borrow<end-world>) -> option<dragon-fight>;
+}

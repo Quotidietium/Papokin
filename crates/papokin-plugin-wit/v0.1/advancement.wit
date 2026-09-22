@@ -1,0 +1,41 @@
+package papokin:plugin@0.1.0;
+
+interface advancement {
+    use text.{text-component};
+
+    /// 进度的边框类型。
+    enum frame-type {
+        task,
+        challenge,
+        goal,
+    }
+
+    /// 进度的显示信息。
+    record advancement-display {
+        title: text-component,
+        description: text-component,
+        frame: frame-type,
+        show-toast: bool,
+        hidden: bool,
+        announce-to-chat: bool,
+        background: option<string>,
+        x: f32,
+        y: f32,
+    }
+
+    /// 进度的详细信息。
+    record advancement-info {
+        id: string,
+        parent-id: option<string>,
+        criteria: list<string>,
+        display: option<advancement-display>,
+    }
+
+    /// 表示某玩家在一个进度上的完成情况。
+    record advancement-progress {
+        advancement-id: string,
+        done: bool,
+        awarded-criteria: list<string>,
+        remaining-criteria: list<string>,
+    }
+}

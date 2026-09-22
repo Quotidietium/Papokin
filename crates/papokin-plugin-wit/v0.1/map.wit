@@ -1,0 +1,95 @@
+interface %map {
+    use %world.{%world as map-world};
+
+    /// 绘制在地图画布上的光标（又称装饰）图标。
+    ///
+    /// `icon-type` 是原版地图装饰类型 id
+    /// （`pumpkin_data::map_decoration::MapDecorationType`；0 是白色
+    /// 玩家标记）。`x`/`z` 是画布上的位置，范围 -128..=127；
+    /// `direction` 是以 22.5 度为一步、共 16 步的旋转（0..=15）。
+    record map-cursor {
+        /// 原版地图装饰类型 id。
+        icon-type: s32,
+        /// 在地图画布上的 X 位置（-128..=127）。
+        x: s8,
+        /// 在地图画布上的 Z 位置（-128..=127）。
+        z: s8,
+        /// 以 22.5 度为一步、共 16 步的旋转（0..=15）。
+        direction: s8,
+        /// 此光标可选的悬停文本。
+        display-name: option<string>,
+    }
+
+    /// 服务器端地图的插件可绘制视图。
+    ///
+    /// 画布固定为 128x128 像素。通过 `set-pixel` / `set-colors-data`
+    /// 写入的像素会经最近色查找量化到原版地图调色板，因此插件无需
+    /// 了解调色板即可渲染地图。
+    ///
+    /// 每个变更类调用都会把地图标记为脏：持有该地图的玩家会立即收到
+    /// 新的 `CMapItemData` 数据包，常规的每刻地图同步也会在下一刻
+    /// 重新发送它（附带实时的玩家光标）。
+    resource map-view {
+        /// 返回此地图的数字 id。
+        get-id: func() -> s32;
+
+        /// 返回此地图的比例（0..=4）；每提高一级，每像素覆盖的方块数
+        /// 翻倍。
+        get-scale: func() -> u8;
+
+        /// 设置此地图的比例（超过 4 的值会被钳制）。
+        set-scale: func(scale: u8);
+
+        /// 返回此地图是否已锁定（画布对玩家冻结）。
+        is-locked: func() -> bool;
+
+        /// 锁定此地图：原版地形更新不再改变它。
+        lock: func();
+
+        /// 重新解锁此地图。
+        unlock: func();
+
+        /// 用一个 0xAARRGGBB 颜色设置一个像素。完全透明的颜色
+        /// （alpha 为 0）映射到调色板颜色 0（未探索）；否则 RGB 通道
+        /// 会被量化到最接近的地图调色板颜色。越界坐标会被忽略。
+        set-pixel: func(x: u32, y: u32, color: u32);
+
+        /// 返回当前存储在 (x, y) 处的原始调色板字节（越界时为 0）。
+        get-pixel: func(x: u32, y: u32) -> u32;
+
+        /// 替换整个画布。接受的长度：
+        /// - 128*128：原始调色板字节，原样拷贝；
+        /// - 128*128*3：RGB 三元组，量化到调色板；
+        /// - 128*128*4：RGBA 四元组，量化（忽略 alpha）。
+        /// 其他长度会失败。
+        set-colors-data: func(colors: list<u8>);
+
+        /// 返回原始 128*128 调色板字节的副本。
+        get-colors-data: func() -> list<u8>;
+
+        /// 用地图所在世界的地形重新渲染整个画布（与原版每刻地图更新
+        /// 使用同一管线）。
+        render-terrain: func();
+
+        /// 追加一个光标并返回其索引，可配合 `remove-cursor` 使用。
+        add-cursor: func(cursor: map-cursor) -> u32;
+
+        /// 移除位于 `index` 的光标；索引越界时返回 false。
+        remove-cursor: func(index: u32) -> bool;
+
+        /// 返回所有由插件添加的光标，按插入顺序排列。
+        get-cursors: func() -> list<map-cursor>;
+
+        /// 移除所有由插件添加的光标。
+        clear-cursors: func();
+    }
+
+    /// 在 `world` 中以 (`center-x`, `center-z`) 为中心创建一张新地图，
+    /// 并返回其可绘制视图。地图 id 由服务器分配；要把地图交给玩家，
+    /// 请在玩家的物品栏中放入一个带有返回 id 的 `filled_map` 物品。
+    create-map: func(in-world: borrow<map-world>, center-x: s32, center-z: s32, scale: u8) -> map-view;
+
+    /// 返回一个已存在地图 id 的可绘制视图；不存在该 id 的地图时返回
+    /// `none`。
+    get-map: func(map-id: s32) -> option<map-view>;
+}

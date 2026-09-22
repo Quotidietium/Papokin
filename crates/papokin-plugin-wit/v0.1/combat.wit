@@ -1,0 +1,30 @@
+/// 生物实体的只读战斗追踪器查询。
+///
+/// 每个生物实体都维护一个战斗追踪器，记录其当前战斗回合的伤害条目、
+/// 击杀归属与战斗状态。查询函数位于 `world` 接口的 `living-entity`
+/// 资源上；本接口承载共享的记录类型。
+interface combat {
+    /// 实体战斗历史中单条已记录的伤害事件。
+    record combat-entry {
+        /// 伤害类型名称：原版消息 id（如 "arrow"），或插件注册的自定义
+        /// 伤害类型的带命名空间注册名（如 "myplugin:frost"）。
+        damage-type: string,
+        /// 对受害者的生命值/伤害吸收值造成的伤害量。
+        damage: f32,
+        /// 记录该伤害时受害者的摔落距离。
+        fall-distance: f32,
+        /// 直接伤害来源（如箭）的实体 id，如有。
+        source-id: option<s32>,
+        /// 被记为攻击者（致害者，缺省时回退为直接来源）的实体 id，如有。
+        attacker-id: option<s32>,
+        /// 渲染为纯控制台文本的攻击者显示名，如有。
+        attacker-name: option<string>,
+        /// 命中时攻击者主手物品的自定义名称，如有。
+        attacker-item-name: option<string>,
+        /// 被记为攻击者的是否为玩家。
+        attacker-is-player: bool,
+        /// 记录时间戳，单位毫秒。按每秒 20 刻（1 刻 = 50 毫秒）从世界
+        /// 刻时钟推导。
+        timestamp-ms: s64,
+    }
+}

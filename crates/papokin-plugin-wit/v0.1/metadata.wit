@@ -1,0 +1,43 @@
+/// 描述插件及其兼容性的插件元数据。
+interface metadata {
+    /// 插件相对于服务器启动的加载时机。
+    ///
+    /// `startup` 插件在任何世界创建之前加载（引导阶段），在 `on-load`
+    /// 期间不得触碰世界或玩家；`post-world` 插件在世界就绪后加载
+    /// （默认）。
+    variant load-order {
+        /// 在世界创建之前加载（引导阶段）。
+        startup,
+        /// 在世界就绪后加载（默认）。
+        post-world,
+    }
+
+    record plugin-metadata {
+        /// 插件名称。
+        name: string,
+        /// 插件版本（semver）。
+        version: string,
+        /// 插件作者。
+        authors: list<string>,
+        /// 插件的简短描述。
+        description: string,
+        /// 硬依赖：缺少其中任何一个时插件加载失败。
+        dependencies: list<string>,
+        /// 插件请求的权限。
+        permissions: list<string>,
+        /// 软依赖边：当所列插件存在时，本插件在它们之后加载。缺失的
+        /// 名称会被忽略。
+        load-after: list<string>,
+        /// 软排序边：当所列插件存在时，本插件在它们之前加载。缺失的
+        /// 名称会被忽略。
+        load-before: list<string>,
+        /// 本插件满足的能力别名：其他插件可以在 `dependencies` /
+        /// `load-after` / `load-before` 中引用这些名称，而不是提供方的
+        /// 具体名称。
+        provides: list<string>,
+        /// 本插件加载所处的启动阶段。
+        load-order: load-order,
+    }
+
+    get-metadata: func() -> plugin-metadata;
+}

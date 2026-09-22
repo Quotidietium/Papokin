@@ -1,0 +1,46 @@
+interface permission {
+    /// 表示玩家的权限等级
+    ///
+    /// 权限等级决定玩家对命令和服务器操作的访问范围。
+    /// 每个数值等级对应一个特定角色：
+    /// - `Zero`：`normal`：玩家可以使用基础命令。
+    /// - `One`：`moderator`：玩家可以绕过出生点保护。
+    /// - `Two`：`gamemaster`：玩家或执行者可以使用更多命令，玩家可以使用命令方块。
+    /// - `Three`：`admin`：玩家或执行者可以使用与多人游戏管理相关的命令。
+    /// - `Four`：`owner`：玩家或执行者可以使用全部命令，包括与服务器管理相关的命令。
+    enum permission-level {
+        zero,
+        one,
+        two,
+        three,
+        four,
+    }
+
+    /// 描述权限的默认行为
+    variant permission-default {
+        /// 默认不授予权限
+        deny,
+        /// 默认授予权限
+        allow,
+        /// 默认向管理员授予权限
+        op(permission-level),
+    }
+
+    /// 子权限条目
+    record permission-child {
+        node: string,
+        value: bool,
+    }
+
+    /// 在系统中定义一个权限节点
+    record permission {
+        /// 完整节点名（例如 "minecraft:command.gamemode"）
+        node: string,
+        /// 对此权限作用的描述
+        description: string,
+        /// 此权限的默认值
+        default: permission-default,
+        /// 受此权限影响的子节点
+        children: list<permission-child>,
+    }
+}

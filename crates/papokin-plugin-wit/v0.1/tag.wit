@@ -1,0 +1,37 @@
+package papokin:plugin@0.1.0;
+
+/// 插件可写的标签覆盖层：对静态标签表的运行时增补。
+interface tag {
+  /// 用于修改和查询标签的全局管理器。
+  ///
+  /// 仅在服务器启动期间（插件加载时）可以修改；标签表一旦冻结，所有
+  /// 变更类调用都返回错误。
+  resource tag-manager {
+    /// 把 `entry-name` 追加到 `registry-key` 的标签 `tag-name` 中；当该
+    /// 标签在静态表与插件覆盖层中都不存在时会创建它。
+    ///
+    /// * `registry-key`：标签所属的注册表，如 "item"、"block" 或
+    ///   "damage_type"（可带 "minecraft:" 前缀）。
+    /// * `tag-name`：带命名空间的标签名，如 "minecraft:anvil" 或
+    ///   "my_plugin:things"。
+    /// * `entry-name`：条目的资源名：原版名称（"minecraft:stone" 或裸
+    ///   "stone"），或插件注册的自定义带命名空间 id
+    ///   （"my_plugin:frost"）。
+    ///
+    /// 添加已在标签中的名称是无操作；添加先前被移除的名称会重新加回
+    /// （以最后一次操作为准）。
+    add-to-tag: func(registry-key: string, tag-name: string, entry-name: string) -> result<_, string>;
+
+    /// 从 `registry-key` 的标签 `tag-name` 中移除 `entry-name`。该条目
+    /// 可以来自静态表，也可以来自先前的 `add-to-tag`。
+    remove-from-tag: func(registry-key: string, tag-name: string, entry-name: string) -> result<_, string>;
+
+    /// 创建一个新的、初始为空的标签。`add-to-tag` 会隐式创建标签；显式
+    /// 创建适用于发布一个空标签。
+    create-tag: func(registry-key: string, tag-name: string) -> result<_, string>;
+
+    /// 某个标签条目名称的合并视图：静态表加上插件添加、减去插件移除。
+    /// 标签未知时为空。
+    get-tag-values: func(registry-key: string, tag-name: string) -> list<string>;
+  }
+}

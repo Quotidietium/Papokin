@@ -1,0 +1,39 @@
+interface gui {
+    use text.{text-component};
+    use common.{click-type};
+    use item-stack.{item-stack};
+    use screens.{screen};
+    use inventory.{inventory};
+
+    resource gui {
+        constructor(%type: screen, title: text-component);
+        /// 返回此 GUI 底层的物品栏句柄。
+        get-inventory: func() -> inventory;
+        set-item: func(slot: u32, item: item-stack);
+        get-item: func(slot: u32) -> option<item-stack>;
+        
+        /// 返回此 GUI 的类型。
+        get-type: func() -> screen;
+        
+        /// 返回此 GUI 的标题。
+        get-title: func() -> text-component;
+        
+        /// 返回此 GUI 的槽位数量。
+        get-size: func() -> u32;
+        
+        /// 清空 GUI 中的所有物品。
+        clear-items: func();
+
+        /// 设置玩家是否可以从物品栏中取出物品。
+        set-allow-grab-items: func(allow: bool);
+
+        /// 返回玩家是否可以从物品栏中取出物品。
+        get-allow-grab-items: func() -> bool;
+
+        /// 设置玩家是否可以从自己的物品栏向此物品栏放入物品。
+        set-allow-put-items: func(allow: bool);
+
+        /// 返回玩家是否可以从自己的物品栏向此物品栏放入物品。
+        get-allow-put-items: func() -> bool;
+    }
+}

@@ -1,0 +1,28 @@
+/// 插件消息通道（相当于 Bukkit 的 `Messenger`）。
+///
+/// 插件注册其处理的客户端方向通道；玩家在这些通道上发来的消息会被
+/// 派发到插件的 `handle-plugin-message` 导出函数。发给玩家的消息直接在
+/// 通道上发送。自定义通道按惯例使用 `plugin:channel` 格式；原版命名空间
+/// 通道（`minecraft:*`）不可注册。
+interface messaging {
+    /// 注册一个由本插件处理的传入通道。
+    ///
+    /// 玩家在此通道上发来的消息会被派发到本插件的
+    /// `handle-plugin-message` 导出函数。重复注册同一通道是无操作。
+    ///
+    /// # 错误
+    /// 通道被保留（`minecraft:*`）或非法时返回错误。
+    register-incoming-channel: func(channel: string) -> result<_, string>;
+
+    /// 注销一个先前注册过的传入通道。
+    unregister-incoming-channel: func(channel: string);
+
+    /// 返回本插件已注册的传入通道。
+    get-incoming-channels: func() -> list<string>;
+
+    /// 在给定通道上向玩家发送插件消息。
+    ///
+    /// # 错误
+    /// 玩家不在线或通道非法时返回错误。
+    send-plugin-message: func(player-uuid: string, channel: string, data: list<u8>) -> result<_, string>;
+}

@@ -1,0 +1,261 @@
+/// 提供整个插件 API 通用的类型与工具。
+interface common {
+    /// 以 postcard 字节数组形式序列化的文本组件。
+    /// @deprecated 请改用 text 接口中的 text-component 资源。
+    type raw-text-component = list<u8>;
+
+    /// 表示 NBT 复合标签中的一个条目。
+    record nbt-entry {
+        key: string,
+        value: u32,
+    }
+
+    /// 表示一棵 Minecraft NBT 标签树。
+    record nbt-tree {
+        root: u32,
+        tags: list<nbt-tag>,
+    }
+
+    /// 表示一个 Minecraft NBT 标签。
+    variant nbt-tag {
+        byte(s8),
+        short(s16),
+        int(s32),
+        long(s64),
+        float(f32),
+        double(f64),
+        byte-array(list<s8>),
+        string-tag(string),
+        list-tag(list<u32>),
+        compound(list<nbt-entry>),
+        int-array(list<s32>),
+        long-array(list<s64>),
+    }
+
+    /// 世界网格中的一个位置（整数）。
+    record block-pos {
+        x: s32,
+        y: s32,
+        z: s32,
+    }
+
+    /// 世界中的精确坐标（浮点数）。
+    type position = tuple<f64, f64, f64>;
+
+    /// 表示玩家的手。
+    enum hand {
+        left,
+        right,
+    }
+
+    /// 表示 Minecraft 中可用的游戏模式。
+    enum game-mode {
+        survival,
+        creative,
+        adventure,
+        spectator,
+    }
+
+    /// 16 种 Minecraft 基础颜色。
+    enum named-color {
+        black,
+        dark-blue,
+        dark-green,
+        dark-aqua,
+        dark-red,
+        dark-purple,
+        gold,
+        gray,
+        dark-gray,
+        blue,
+        green,
+        aqua,
+        red,
+        light-purple,
+        yellow,
+        white,
+    }
+
+    /// 以红、绿、蓝分量表示的 RGB 颜色。
+    record rgb-color {
+        r: u8,
+        g: u8,
+        b: u8,
+    }
+
+    /// 带 alpha（透明度）通道的 ARGB 颜色。
+    record argb-color {
+        a: u8,
+        r: u8,
+        g: u8,
+        b: u8,
+    }
+
+    /// 表示 GUI 中点击交互的类型。
+    enum click-type {
+        left,
+        right,
+        shift-left,
+        shift-right,
+        middle,
+        drop,
+        control-drop,
+        double-click,
+        number-key,
+        unknown,
+    }
+
+    /// 表示实体可以处于的各种姿势。
+    enum entity-pose {
+        standing,
+        fall-flying,
+        sleeping,
+        swimming,
+        spin-attack,
+        crouching,
+        long-jumping,
+        dying,
+        croaking,
+        using-tongue,
+        sitting,
+        roaring,
+        sniffing,
+        emerging,
+        digging,
+        sliding,
+        shooting,
+        inhaling,
+    }
+
+    /// Minecraft 支持的全部语言环境。
+    enum locale {
+        af-za,
+        ar-sa,
+        ast-es,
+        az-az,
+        ba-ru,
+        bar,
+        be-by,
+        bg-bg,
+        br-fr,
+        brb,
+        bs-ba,
+        ca-es,
+        cs-cz,
+        cy-gb,
+        da-dk,
+        de-at,
+        de-ch,
+        de-de,
+        el-gr,
+        en-au,
+        en-ca,
+        en-gb,
+        en-nz,
+        en-pt,
+        en-ud,
+        en-us,
+        enp,
+        enws,
+        eo-uy,
+        es-ar,
+        es-cl,
+        es-ec,
+        es-es,
+        es-mx,
+        es-uy,
+        es-ve,
+        esan,
+        et-ee,
+        eu-es,
+        fa-ir,
+        fi-fi,
+        fil-ph,
+        fo-fo,
+        fr-ca,
+        fr-fr,
+        fra-de,
+        fur-it,
+        fy-nl,
+        ga-ie,
+        gd-gb,
+        gl-es,
+        haw-us,
+        he-il,
+        hi-in,
+        hr-hr,
+        hu-hu,
+        hy-am,
+        id-id,
+        ig-ng,
+        io-en,
+        is-is,
+        isv,
+        it-it,
+        ja-jp,
+        jbo-en,
+        ka-ge,
+        kk-kz,
+        kn-in,
+        ko-kr,
+        ksh,
+        kw-gb,
+        la-la,
+        lb-lu,
+        li-li,
+        lmo,
+        lo-la,
+        lol-us,
+        lt-lt,
+        lv-lv,
+        lzh,
+        mk-mk,
+        mn-mn,
+        ms-my,
+        mt-mt,
+        nah,
+        nds-de,
+        nl-be,
+        nl-nl,
+        nn-no,
+        no-no,
+        oc-fr,
+        ovd,
+        pl-pl,
+        pt-br,
+        pt-pt,
+        qya-aa,
+        ro-ro,
+        rpr,
+        ru-ru,
+        ry-ua,
+        sah-sah,
+        se-no,
+        sk-sk,
+        sl-si,
+        so-so,
+        sq-al,
+        sr-cs,
+        sr-sp,
+        sv-se,
+        sxu,
+        szl,
+        ta-in,
+        th-th,
+        tl-ph,
+        tlh-aa,
+        tok,
+        tr-tr,
+        tt-ru,
+        uk-ua,
+        val-es,
+        vec-it,
+        vi-vn,
+        yi-de,
+        yo-ng,
+        zh-cn,
+        zh-hk,
+        zh-tw,
+        zlm-arab,
+    }
+}

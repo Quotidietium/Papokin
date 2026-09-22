@@ -1,0 +1,16 @@
+interface uuid {
+    /// 以两个 64 位整数表示的 128 位 UUID。
+    record uuid {
+        high: u64,
+        low: u64,
+    }
+
+    /// 生成一个新的随机 v4 UUID。
+    generate: func() -> uuid;
+
+    /// 从字符串解析 UUID。字符串不是合法 UUID 时返回 none。
+    parse: func(s: string) -> option<uuid>;
+
+    /// 将 UUID 转换为其标准字符串表示。
+    to-string: func(id: uuid) -> string;
+}

@@ -1,0 +1,56 @@
+interface merchant {
+    use %world.{entity};
+    use item-stack.{item-stack};
+
+    /// 单个商人交易报价：村民或流浪商人交易列表中的一项。
+    ///
+    /// `trade-offer` 内的物品堆是快照。修改从 `get-trade-offers` 获得的
+    /// 物品堆不会写回实体；要生效请把该报价传给 `set-trade-offers` /
+    /// `add-trade-offer`。
+    record trade-offer {
+        /// 交易的主要花费物品堆（在客户端应用需求/特价调整之前）。
+        base-cost-a: item-stack,
+        /// 玩家获得的物品堆。
+        output: item-stack,
+        /// 可选的次要花费物品堆。
+        cost-b: option<item-stack>,
+        /// 完成交易是否生成经验球。
+        reward-exp: bool,
+        /// 自上次补货以来此报价已使用的次数。
+        uses: s32,
+        /// 此报价在售罄前可使用的次数。
+        max-uses: s32,
+        /// 交易给予的商人经验（村民交易经验）。
+        xp: s32,
+        /// 应用于 `base-cost-a` 的特价修正值（如声望折扣）；会加到显示的
+        /// 第一项花费上。
+        special-price: s32,
+        /// `base-cost-a` 的需求价格倍率。
+        price-multiplier: f32,
+        /// 驱动动态价格调整的需求值。
+        demand: s32,
+    }
+
+    /// 对可交易实体（村民、流浪商人）的交易视图。
+    ///
+    /// 所有变更都会把报价列表重新发送给当前正在与该实体交易的玩家
+    /// （`ClientboundMerchantOffers`）。
+    resource merchant {
+        /// 当 `entity` 可交易（村民或流浪商人）时返回商人句柄，否则返回
+        /// `none`。
+        from-entity: static func(entity: borrow<entity>) -> option<merchant>;
+
+        /// 返回商人当前交易报价的快照。
+        get-trade-offers: func() -> list<trade-offer>;
+
+        /// 用 `offers` 替换全部交易报价，并重新发送给正在交易的玩家。
+        set-trade-offers: func(offers: list<trade-offer>);
+
+        /// 追加一条交易报价，并把报价列表重新发送给正在交易的玩家。
+        add-trade-offer: func(offer: trade-offer);
+
+        /// 移除位于 `index` 的交易报价，并把报价列表重新发送给正在交易
+        /// 的玩家。`index` 越界时返回 `false`。
+        remove-trade-offer: func(index: s32) -> bool;
+    }
+}

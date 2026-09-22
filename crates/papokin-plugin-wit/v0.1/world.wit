@@ -1,0 +1,1284 @@
+interface %world {
+    use common.{position, entity-pose, block-pos, nbt-tree};
+    use block-entity.{block-entity, command-block-entity, block-entity-type};
+    use text.{text-component};
+    use scoreboard.{scoreboard};
+    use particles.{particle};
+    use sounds.{sound, sound-category};
+    use entity-types.{entity-type};
+    use biomes.{biome};
+    use attributes.{attribute, modifier-operation, attribute-modifier};
+    use item-stack.{item-stack};
+    use damage-types.{damage-type};
+    use game-rules.{game-rule, game-rule-value};
+    use combat.{combat-entry};
+
+    use uuid.{uuid};
+
+    /// 生物实体（mob、盔甲架、玩家）可用的装备槽位。
+    enum equipment-slot {
+        main-hand,
+        off-hand,
+        feet,
+        legs,
+        chest,
+        head,
+        body,
+        saddle,
+    }
+
+    /// 定义方块被活塞推动时的行为。
+    enum piston-behavior {
+        /// 正常行为；方块可被推动和拉动。
+        normal,
+        /// 方块被推动时被破坏。
+        destroy,
+        /// 方块无法被推动或拉动。
+        block,
+        /// 方块被活塞忽略。
+        ignore,
+        /// 方块只能被推动，不能被拉动。
+        push-only
+    }
+
+    /// 实体类型的生成类别，等价于 Bukkit 的 `SpawnCategory`。
+    ///
+    /// 对应原版的 `MobCategory` 常量；决定自然生成上限、
+    /// 友好性、持久性与消失距离。
+    enum spawn-category {
+        /// 敌对生物（僵尸、骷髅等）。上限 70，不持久。
+        monster,
+        /// 被动动物。上限 10，持久。
+        creature,
+        /// 环境生物（蝙蝠）。上限 15。
+        ambient,
+        /// 美西螈。上限 5。
+        axolotls,
+        /// 地下水生生物（发光鱿鱼）。上限 5。
+        underground-water-creature,
+        /// 水生生物（海豚、鱿鱼）。上限 5，持久。
+        water-creature,
+        /// 水生环境生物（鱼）。上限 20。
+        water-ambient,
+        /// 其他一切（玩家、弹射物、物品等）。无上限。
+        misc,
+    }
+
+    /// 一个脑部记忆槽位的存在状态，等价于原版的
+    /// `MemoryStatus`，但不包含"服务器未知"的情况。
+    enum memory-status {
+        /// 记忆类型已在 mob 的脑中注册，但没有值。
+        registered,
+        /// 记忆类型已注册且当前持有值。
+        value-present,
+    }
+
+    /// mob 的一个脑部记忆槽位的只读视图。
+    record brain-memory {
+        /// 槽位当前是否持有值。
+        status: memory-status,
+        /// 字符串化的存储值（原版调试转储格式，如方块
+        /// 位置、实体引用或列表；值会过期时包含剩余的 ttl），
+        /// 槽位无值时为 none。
+        value: option<string>,
+        /// 值过期前的刻数；值永不过期或槽位无值时为
+        /// none。
+        ttl: option<s64>,
+    }
+
+    /// 可添加到 mob 实体的预定义 AI 目标。
+    variant builtin-ai-goal {
+        swim,
+        wander-around(f32),
+        melee-attack(f32),
+        look-at-player(f32),
+        look-around,
+        escape-danger(f32),
+        avoid-entity(f32),
+        blaze-attack,
+        creeper-ignite,
+        eat-grass,
+        zombie-attack(f32),
+    }
+
+    /// mob 寻路时评估的节点与地形分类类型。
+    enum path-node-type {
+        blocked,
+        open,
+        walkable,
+        walkable-door,
+        trapdoor,
+        powder-snow,
+        danger-powder-snow,
+        fence,
+        lava,
+        water,
+        water-border,
+        rail,
+        unpassable-rail,
+        danger-fire,
+        damage-fire,
+        danger-other,
+        damage-other,
+        door-open,
+        door-wood-closed,
+        door-iron-closed,
+        breach,
+        leaves,
+        sticky-honey,
+        cocoa,
+        damage-cautious,
+        danger-trapdoor,
+    }
+
+    /// Minecraft 的 16 种染料颜色。
+    enum dye-color {
+        white,
+        orange,
+        magenta,
+        light-blue,
+        yellow,
+        lime,
+        pink,
+        gray,
+        light-gray,
+        cyan,
+        purple,
+        blue,
+        brown,
+        green,
+        red,
+        black,
+    }
+
+    /// 村民职业标识符。
+    enum villager-profession {
+        none,
+        armorer,
+        butcher,
+        cartographer,
+        cleric,
+        farmer,
+        fisherman,
+        fletcher,
+        leatherworker,
+        librarian,
+        mason,
+        nitwit,
+        shepherd,
+        toolsmith,
+        weaponsmith,
+    }
+
+    /// 羊实体的专属数据。
+    record sheep-data {
+        color: dye-color,
+        is-sheared: bool,
+    }
+
+    /// 狼实体的专属数据。
+    record wolf-data {
+        is-tamed: bool,
+        owner: option<uuid>,
+        is-sitting: bool,
+        collar-color: dye-color,
+        is-angry: bool,
+        is-begging: bool,
+    }
+
+    /// 猫实体的专属数据。
+    record cat-data {
+        is-tamed: bool,
+        owner: option<uuid>,
+        is-sitting: bool,
+        collar-color: dye-color,
+    }
+
+    /// 村民实体的专属数据。
+    record villager-data {
+        profession: villager-profession,
+        level: u8,
+        experience: u32,
+    }
+
+    /// 苦力怕实体的专属数据。
+    record creeper-data {
+        is-powered: bool,
+        fuse: s32,
+        is-ignited: bool,
+        explosion-radius: u8,
+    }
+
+    /// 史莱姆与岩浆怪实体的专属数据。
+    record slime-data {
+        size: s32,
+    }
+
+    /// 末影人实体的专属数据。
+    record enderman-data {
+        carried-block-state: option<u16>,
+        is-screaming: bool,
+        is-staring: bool,
+    }
+
+    /// 铁傀儡实体的专属数据。
+    record iron-golem-data {
+        is-player-created: bool,
+    }
+
+    /// 狐狸实体的专属数据。
+    record fox-data {
+        is-sitting: bool,
+        is-sleeping: bool,
+        is-crouching: bool,
+    }
+
+    /// 可成长动物 mob 的专属数据。
+    record ageable-data {
+        is-baby: bool,
+        age: s32,
+        in-love-ticks: s32,
+    }
+
+    /// 僵尸实体的专属数据。
+    record zombie-data {
+        is-baby: bool,
+        can-break-doors: bool,
+    }
+
+    /// 潜影贝实体的专属数据。
+    record shulker-data {
+        attached-face: block-direction,
+        peek-amount: u8,
+        color: option<dye-color>,
+    }
+
+    /// 持有特定 mob 类型专属数据的标记变体。
+    variant mob-data {
+        sheep(sheep-data),
+        wolf(wolf-data),
+        cat(cat-data),
+        villager(villager-data),
+        creeper(creeper-data),
+        slime(slime-data),
+        enderman(enderman-data),
+        iron-golem(iron-golem-data),
+        fox(fox-data),
+        ageable(ageable-data),
+        zombie(zombie-data),
+        shulker(shulker-data),
+        generic,
+    }
+
+    /// 定义爆炸与世界中方块的交互方式。
+    enum explosion-interaction {
+        /// 不与方块交互。
+        none,
+        /// 方块被破坏并可能掉落战利品。
+        block,
+        /// mob 引发的爆炸的典型交互。
+        mob,
+        /// TNT 爆炸的典型交互。
+        tnt,
+        /// 触发特定的方块行为。
+        trigger,
+    }
+
+    /// 用于控制方块更新与通知的标志。
+    flags block-flags {
+        /// 向相邻方块通知该变化。
+        notify-neighbors,
+        /// 向客户端监听者通知该变化。
+        notify-listeners,
+        /// 即使方块状态相同也强制设置。
+        force-state,
+        /// 方块被移除时跳过物品掉落。
+        skip-drops,
+        /// 表示方块被移动过（如被活塞）。
+        moved,
+        /// 跳过红石线的状态替换。
+        skip-redstone-wire-state-replacement,
+        /// 跳过方块实体被替换时的回调。
+        skip-block-entity-replaced-callback,
+        /// 跳过方块被添加时的回调。
+        skip-block-added-callback,
+    }
+
+    /// 相对传送标志：设置的标志将对应分量标记为
+    /// 相对于实体当前状态，而非绝对值
+    ///（Papo `TeleportFlags` 的等价物）。
+    ///
+    /// 相对标志只影响玩家客户端；非玩家实体没有
+    /// 相对传送机制，会忽略这些标志。
+    flags teleport-flags {
+        /// X 坐标为相对值。
+        x,
+        /// Y 坐标为相对值。
+        y,
+        /// Z 坐标为相对值。
+        z,
+        /// 偏航角相对于当前偏航角。
+        y-rot,
+        /// 俯仰角相对于当前俯仰角。
+        x-rot,
+        /// X 增量（速度）为相对值。
+        delta-x,
+        /// Y 增量（速度）为相对值。
+        delta-y,
+        /// Z 增量（速度）为相对值。
+        delta-z,
+        /// 旋转以增量方式应用。
+        rotate-delta,
+    }
+
+    /// 方块的可燃属性。
+    record flammable {
+        spread-chance: u8,
+        burn-chance: u8,
+    }
+
+    /// 方块状态的详细信息。
+    record block-state {
+        /// 方块状态的内部数字 ID。
+        id: u16,
+        /// 父方块类型的数字 ID。
+        block-id: u16,
+        /// 父方块类型的命名空间标识符。
+        block-name: string,
+        /// 此方块发出的光照等级（0-15）。
+        luminance: u8,
+        /// 此方块遮挡光照的程度。
+        opacity: u8,
+        /// 方块硬度，决定挖掘速度。
+        hardness: f32,
+        /// 此方块是否视为空气。
+        is-air: bool,
+        /// 此方块是否为液体。
+        is-liquid: bool,
+        /// 此方块是否为固体。
+        is-solid: bool,
+        /// 此方块是否占据完整立方体。
+        is-full-cube: bool,
+        /// 此方块被活塞推动时的行为。
+        piston-behavior: piston-behavior,
+        /// 此方块是否接收随机刻。
+        has-random-ticks: bool,
+
+        /// 此方块是否会着火。
+        burnable: bool,
+        /// 是否需要特定工具挖掘此方块才能获得掉落物。
+        tool-required: bool,
+        /// 此方块侧面是否透明。
+        sided-transparency: bool,
+        /// 此方块是否可被其他方块替换（如草）。
+        replaceable: bool,
+        /// 此方块在红石意义上是否视为实心方块。
+        is-solid-block: bool,
+        /// 方块实体类型的数字 ID（如有）。
+        block-entity-type: u16,
+        /// 音符盒放在此方块上时使用的乐器。
+        instrument: noteblock-instrument,
+        /// 此方块的碰撞形状。
+        collision-shapes: list<bounding-box>,
+        /// 此方块的轮廓形状。
+        outline-shapes: list<bounding-box>,
+
+        /// 方块底面是否为实心。
+        down-side-solid: bool,
+        /// 方块顶面是否为实心。
+        up-side-solid: bool,
+        /// 方块北面是否为实心。
+        north-side-solid: bool,
+        /// 方块南面是否为实心。
+        south-side-solid: bool,
+        /// 方块西面是否为实心。
+        west-side-solid: bool,
+        /// 方块东面是否为实心。
+        east-side-solid: bool,
+        /// 底面中心是否为实心。
+        down-center-solid: bool,
+        /// 顶面中心是否为实心。
+        up-center-solid: bool,
+        /// 此方块在地图上显示的颜色。
+        map-color: u8,
+        /// 方块状态的属性键值对（如 facing=north）。
+        properties: list<tuple<string, string>>,
+    }
+
+    /// 音符盒使用的乐器。
+    enum noteblock-instrument {
+        harp,
+        basedrum,
+        snare,
+        hat,
+        bass,
+        flute,
+        bell,
+        guitar,
+        chime,
+        xylophone,
+        iron-xylophone,
+        cow-bell,
+        didgeridoo,
+        bit,
+        banjo,
+        pling,
+        trumpet,
+        trumpet-exposed,
+        trumpet-oxidized,
+        trumpet-weathered,
+        zombie,
+        skeleton,
+        creeper,
+        dragon,
+        wither-skeleton,
+        piglin,
+        custom-head,
+    }
+
+    /// Minecraft 方块类型的静态定义。
+    record block {
+        /// 方块类型的内部数字 ID。
+        id: u16,
+        /// 唯一的命名空间 ID（如 "minecraft:stone"）。
+        name: string,
+        /// 方块的破坏难度（-1.0 表示无法破坏）。
+        hardness: f32,
+        /// 爆炸抗性。
+        blast-resistance: f32,
+        /// 此方块在地图上显示的颜色。
+        map-color: u8,
+        /// 摩擦系数（默认 0.6，冰为 0.98）。
+        slipperiness: f32,
+        /// 此方块对实体行走速度的影响程度。
+        velocity-multiplier: f32,
+        /// 此方块对实体跳跃高度的影响程度。
+        jump-velocity-multiplier: f32,
+        /// 此方块在物品栏/掉落物中关联的物品 ID。
+        item-id: u16,
+        /// 无额外属性放置时的默认方块状态 ID。
+        default-state-id: u16,
+        /// 属于此方块类型的所有有效状态 ID。
+        state-ids: list<u16>,
+        /// 此方块默认是否为固体。
+        is-solid: bool,
+        /// 此方块是否视为空气。
+        is-air: bool,
+        /// 此方块是否可燃。
+        is-flammable: bool,
+        /// 可燃时的可燃性细节。
+        flammable: option<flammable>,
+    }
+
+    /// 方块状态 ID 的简单包装。
+    record block-state-id {
+        id: u16,
+    }
+
+    resource entity {
+        get-id: func() -> u32;
+        get-uuid: func() -> uuid;
+        get-type: func() -> entity-type;
+
+        /// 返回此实体类型的生成类别（原版 `MobCategory`，Bukkit
+        /// `SpawnCategory`）。
+        get-spawn-category: func() -> spawn-category;
+
+        get-position: func() -> position;
+        get-world: func() -> %world;
+
+        get-yaw: func() -> f32;
+        get-pitch: func() -> f32;
+        get-head-yaw: func() -> f32;
+
+        teleport: func(pos: position, world-ref: %world);
+        /// 按逐分量相对标志传送实体。
+        ///
+        /// 这些标志只影响玩家客户端；非玩家实体会被
+        /// 绝对传送并忽略 `flags`。yaw/pitch 为 `none` 时保持
+        /// 当前旋转并忽略对应的旋转标志。
+        teleport-with-flags: func(pos: position, yaw: option<f32>, pitch: option<f32>, %flags: teleport-flags, world-ref: %world);
+        set-velocity: func(velocity: position);
+        get-velocity: func() -> position;
+
+        get-pose: func() -> entity-pose;
+        get-name: func() -> text-component;
+        set-custom-name: func(name: text-component);
+        get-custom-name: func() -> option<text-component>;
+        set-custom-name-visible: func(visible: bool);
+        is-custom-name-visible: func() -> bool;
+
+        is-invulnerable: func() -> bool;
+        set-invulnerable: func(invulnerable: bool);
+
+        get-fire-ticks: func() -> s32;
+        set-fire-ticks: func(ticks: s32);
+
+        get-fall-distance: func() -> f32;
+        set-fall-distance: func(distance: f32);
+
+        get-ticks-lived: func() -> s32;
+        set-ticks-lived: func(ticks: s32);
+
+        is-sneaking: func() -> bool;
+        set-sneaking: func(sneaking: bool);
+        is-sprinting: func() -> bool;
+        set-sprinting: func(sprinting: bool);
+        is-swimming: func() -> bool;
+        set-swimming: func(swimming: bool);
+        is-invisible: func() -> bool;
+        set-invisible: func(invisible: bool);
+        is-glowing: func() -> bool;
+        set-glowing: func(glowing: bool);
+        is-fall-flying: func() -> bool;
+        set-fall-flying: func(fall-flying: bool);
+
+        is-silent: func() -> bool;
+        set-silent: func(silent: bool);
+        has-gravity: func() -> bool;
+        set-has-gravity: func(gravity: bool);
+
+        get-width: func() -> f32;
+        get-height: func() -> f32;
+
+        set-rotation: func(yaw: f32, pitch: f32);
+
+        is-on-ground: func() -> bool;
+        is-on-fire: func() -> bool;
+        set-on-fire: func(on-fire: bool);
+        has-visual-fire: func() -> bool;
+        set-visual-fire: func(visual-fire: bool);
+
+        get-portal-cooldown: func() -> u32;
+        set-portal-cooldown: func(cooldown: u32);
+
+        get-remaining-air: func() -> s32;
+        set-remaining-air: func(air: s32);
+        get-max-air: func() -> s32;
+
+        get-eye-height: func() -> f32;
+        get-eye-position: func() -> position;
+
+        get-nearby-entities: func(x: f64, y: f64, z: f64) -> list<entity>;
+
+        get-vehicle: func() -> option<entity>;
+        set-vehicle: func(vehicle: option<entity>);
+        get-passengers: func() -> list<entity>;
+        add-passenger: func(passenger: entity);
+        remove-passenger: func(passenger: entity);
+        eject-passengers: func();
+
+        get-bounding-box: func() -> bounding-box;
+
+        is-in-water: func() -> bool;
+        is-in-lava: func() -> bool;
+
+        remove: func();
+
+        /// 从实体眼部位置沿其视线方向进行射线检测。
+        raycast: func(max-distance: f64, fluid-handling: bool) -> option<raycast-result>;
+
+        /// 从实体眼部位置沿其视线方向进行射线追踪，以找到目标方块。
+        ray-trace-block: func(max-distance: f64, include-fluids: bool) -> option<ray-trace-block-result>;
+
+        /// 从实体眼部位置沿其视线方向进行射线追踪，以找到目标实体。
+        ray-trace-entity: func(max-distance: f64) -> option<ray-trace-entity-result>;
+
+        /// 返回指定距离内当前视线方向上的目标实体。
+        get-target-entity: func(max-distance: f64) -> option<entity>;
+
+        /// 在此实体上设置一个命名空间自定义数据值。
+        set-custom-data: func(namespace: string, key: string, value: nbt-tree);
+        /// 返回此实体上的命名空间自定义数据值（若已设置）。
+        get-custom-data: func(namespace: string, key: string) -> option<nbt-tree>;
+        /// 移除此实体上的命名空间自定义数据值。
+        remove-custom-data: func(namespace: string, key: string);
+        /// 返回此实体是否有命名空间自定义数据值。
+        has-custom-data: func(namespace: string, key: string) -> bool;
+
+        /// 将此实体序列化为其 NBT 快照字节：Java 版 NBT，
+        /// 根复合标签无名，与保存实体到区块数据时使用的布局
+        /// 相同。文档始终包含实体类型的命名空间 "id"，
+        /// 因此之后可以用 `world.spawn-entity-from-snapshot`
+        /// 重建。等价于 Bukkit 的 `Entity#createSnapshot`。
+        create-snapshot: func() -> list<u8>;
+
+        /// 若此实体有生命值与属性，则以 living-entity 返回，否则为 none。
+        as-living: func() -> option<living-entity>;
+
+        /// 若此实体是 AI 驱动的 mob 实体，则以 mob 返回，否则为 none。
+        as-mob: func() -> option<mob>;
+
+        /// 返回此实体是否为生物实体。
+        is-living: func() -> bool;
+
+        /// 返回此实体是否为 AI 驱动的 mob。
+        is-mob: func() -> bool;
+    }
+
+    /// 表示具有生命值、战斗数值、属性与装备的生物实体（mob、玩家、盔甲架）。
+    resource living-entity {
+        /// 转换回基础实体句柄。
+        as-entity: func() -> entity;
+
+        /// 若此生物实体具有 AI/导航能力，则以 mob 返回，否则为 none。
+        as-mob: func() -> option<mob>;
+
+        /// 返回此生物实体是否为 AI 驱动的 mob。
+        is-mob: func() -> bool;
+
+        // 生命与战斗
+        get-health: func() -> f32;
+        set-health: func(health: f32);
+        get-max-health: func() -> f32;
+        set-max-health: func(max-health: f32);
+        damage: func(amount: f32, damage-type: damage-type);
+        /// 按伤害类型名称造成伤害：可以是原版伤害类型
+        ///（"minecraft:arrow" 或 "arrow"），也可以是插件注册的
+        /// 自定义伤害类型（"myplugin:frost"）。名称不是已注册的
+        /// 伤害类型时触发 WASM trap。
+        damage-by-name: func(amount: f32, damage-type-name: string);
+        is-dead: func() -> bool;
+
+        // 战斗追踪器（只读）
+
+        /// 返回当前战斗回合记录的伤害条目，
+        /// 最旧的在前。实体最近未受到伤害时为空
+        ///（追踪器在一段时间无伤害后重置）。
+        get-combat-entries: func() -> list<combat-entry>;
+        /// 返回被记为击杀者的攻击方的伤害条目：
+        /// 伤害最高的生物攻击方；当玩家的总伤害满足
+        /// 原版三分之一规则时优先取玩家。没有记录到
+        /// 生物攻击方时为 `none`。
+        get-killer: func() -> option<combat-entry>;
+        /// 返回此实体当前是否被标记为处于战斗中。
+        is-in-combat: func() -> bool;
+        /// 返回战斗时长（毫秒）：战斗结束减去
+        /// 战斗开始；仍在战斗中则为当前时间减去战斗开始。
+        get-combat-duration-ms: func() -> s64;
+        /// 返回最后一次确认命中的伤害类型名称：
+        /// 原版消息 id（如 "arrow"），或插件注册的
+        /// 自定义伤害类型的命名空间名称。没有记住的
+        /// 命中时为 `none`（40 刻后遗忘）。
+        get-last-damage-type-name: func() -> option<string>;
+        /// 返回当前战斗回合中是否有攻击方是玩家。
+        has-player-attacker: func() -> bool;
+
+        get-absorption: func() -> f32;
+        set-absorption: func(amount: f32);
+
+        // 属性
+        get-attribute-value: func(attr: attribute) -> f64;
+        get-attribute-base: func(attr: attribute) -> f64;
+        set-attribute-base: func(attr: attribute, value: f64);
+        add-attribute-modifier: func(attr: attribute, modifier: attribute-modifier);
+        remove-attribute-modifier: func(attr: attribute, id: string);
+        get-attribute-modifiers: func(attr: attribute) -> list<attribute-modifier>;
+        reset-attribute: func(attr: attribute);
+        reset-all-attributes: func();
+
+        // 装备
+        get-equipment: func(slot: equipment-slot) -> option<item-stack>;
+        set-equipment: func(slot: equipment-slot, stack: option<item-stack>);
+        clear-equipment: func();
+
+        get-age: func() -> s32;
+        set-age: func(age: s32);
+        send-system-message: func(message: text-component);
+    }
+
+    /// 表示具有目标、锁敌与寻路导航的 AI 驱动 mob 实体（如僵尸、村民）。
+    resource mob {
+        /// 转换回基础实体句柄。
+        as-entity: func() -> entity;
+
+        /// 转换为 living-entity 句柄。
+        as-living: func() -> living-entity;
+
+        // 目标与锁敌
+        add-ai-goal: func(priority: u8, goal: builtin-ai-goal);
+        add-custom-ai-goal: func(priority: u8, goal-id: u32);
+        clear-ai-goals: func();
+        set-ai-disabled: func(disabled: bool);
+        is-ai-disabled: func() -> bool;
+        set-target: func(target: option<entity>);
+        get-target: func() -> option<entity>;
+
+        // 寻路与导航
+        navigate-to-pos: func(pos: position, speed: f64) -> bool;
+        navigate-to-entity: func(target: entity, speed: f64) -> bool;
+        stop-navigation: func();
+        is-navigating: func() -> bool;
+        has-reached-destination: func() -> bool;
+        set-navigation-speed: func(speed: f64);
+        can-reach: func(pos: position, max-distance: f32) -> bool;
+        set-pathfinding-malus: func(node-type: path-node-type, malus: f32);
+        get-pathfinding-malus: func(node-type: path-node-type) -> f32;
+        look-at: func(pos: position);
+        look-at-entity: func(target: entity);
+
+        /// 返回此 mob 的专属数据。
+        get-mob-data: func() -> mob-data;
+
+        /// 设置此 mob 的专属数据。
+        /// 提供的数据变体与此 mob 不兼容时返回 false。
+        set-mob-data: func(data: mob-data) -> bool;
+
+        /// 设置此实体的冰冻刻数（0 到 140）。
+        set-freeze-ticks: func(ticks: s32);
+        /// 返回此实体当前的冰冻刻数。
+        get-freeze-ticks: func() -> s32;
+
+        // 脑部记忆（只读，等价于查询 Bukkit 的 `MemoryKey`）
+        /// 按原版名称读取一条脑部记忆。同时接受
+        /// 命名空间形式（"minecraft:walk_target"）和裸路径
+        ///（"walk_target"）。名称不是已知记忆类型，或该记忆
+        /// 类型未注册在此 mob 的脑中时返回 none
+        ///（目标驱动的 mob 拥有空的、"无脑"的脑）。
+        ///
+        /// 值以原版调试转储格式字符串化；带类型的
+        /// 记忆值（位置、实体引用、列表、数字、
+        /// 布尔值）都渲染为文本。
+        get-brain-memory: func(name: string) -> option<brain-memory>;
+        /// 返回当前注册在此 mob 脑中的所有记忆类型的
+        /// 原版名称，按字母顺序排序。
+        list-brain-memories: func() -> list<string>;
+    }
+
+    /// 射线检测的结果。
+    record raycast-result {
+        /// 被击中的方块位置。
+        pos: block-pos,
+        /// 被击中的方块面。
+        face: block-direction,
+    }
+
+    /// 方块射线追踪的详细结果。
+    record ray-trace-block-result {
+        /// 被击中的方块位置。
+        pos: block-pos,
+        /// 被击中的方块面。
+        face: block-direction,
+        /// 世界空间中的精确命中坐标。
+        hit-pos: position,
+    }
+
+    /// 实体射线追踪的结果。
+    record ray-trace-entity-result {
+        /// 被击中的实体。
+        entity: entity,
+        /// 世界空间中的精确命中坐标。
+        hit-pos: position,
+        /// 从射线起点到命中位置的距离。
+        distance: f64,
+    }
+
+    resource chunk {
+        /// 获取区块的 X 坐标。
+        get-x: func() -> s32;
+
+        /// 获取区块的 Z 坐标。
+        get-z: func() -> s32;
+
+        /// 获取相对于区块的指定位置处的方块状态 ID。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-block-state-id: func(pos: block-pos) -> u16;
+
+        /// 获取相对于区块的指定位置处的详细方块状态信息。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-block-state: func(pos: block-pos) -> block-state;
+
+        /// 设置相对于区块的指定位置处的方块状态。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        set-block-state: func(pos: block-pos, state: u16);
+
+        /// 获取相对于区块的指定位置处的方块。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-block: func(pos: block-pos) -> block;
+
+        /// 使用默认状态设置相对于区块的指定位置处的方块。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        set-block: func(pos: block-pos, block: block);
+
+        /// 按方块 ID 使用默认状态设置相对于区块的指定位置处的方块。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        set-block-by-id: func(pos: block-pos, block-id: u16);
+
+        /// 获取相对于区块的指定位置处的生物群系。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-biome: func(pos: block-pos) -> biome;
+
+        /// 获取相对于区块的指定位置处的方块实体（如有）。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-block-entity: func(pos: block-pos) -> option<block-entity-type>;
+
+        /// 获取相对于区块的指定 X 和 Z 处最高的非空气方块 Y 坐标。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-top-block-y: func(x: s32, z: s32) -> s32;
+
+        /// 获取相对于区块的指定位置处的天空光照等级。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-sky-light: func(pos: block-pos) -> u8;
+
+        /// 获取相对于区块的指定位置处的方块光照等级。
+        /// X 和 Z 必须在 [0, 15] 范围内。
+        get-block-light: func(pos: block-pos) -> u8;
+
+        /// 在此区块上设置一个命名空间自定义数据值。
+        set-custom-data: func(namespace: string, key: string, value: nbt-tree);
+        /// 返回此区块上的命名空间自定义数据值（若已设置）。
+        get-custom-data: func(namespace: string, key: string) -> option<nbt-tree>;
+        /// 移除此区块上的命名空间自定义数据值。
+        remove-custom-data: func(namespace: string, key: string);
+        /// 返回此区块是否有命名空间自定义数据值。
+        has-custom-data: func(namespace: string, key: string) -> bool;
+    }
+
+    /// 区块的方块与生物群系数据的只读时间点副本。
+    ///
+    /// 通过 `world.get-chunk-snapshot` 创建。数据在创建时复制
+    ///（读取时复制），因此即使活动区块之后被修改或卸载，
+    /// 快照仍保持有效且不变。批量数据存放在宿主侧；
+    /// 只有通过这些函数请求的值会跨越边界。
+    resource chunk-snapshot {
+        /// 获取区块的 X 坐标。
+        get-x: func() -> s32;
+
+        /// 获取区块的 Z 坐标。
+        get-z: func() -> s32;
+
+        /// 返回最小 Y 坐标（世界底部）。
+        get-min-y: func() -> s32;
+
+        /// 返回此快照中 16 格高的区段数量。
+        get-section-count: func() -> u32;
+
+        /// 获取相对于区块的指定位置处的方块状态 ID。
+        /// X 和 Z 必须在 [0, 15] 范围内；Y 为绝对坐标。超出范围的
+        /// 位置返回空气方块状态 ID。
+        get-block-state-id: func(pos: block-pos) -> u16;
+
+        /// 获取相对于区块的指定位置处的详细方块状态信息。
+        /// X 和 Z 必须在 [0, 15] 范围内；Y 为绝对坐标。
+        get-block-state: func(pos: block-pos) -> block-state;
+
+        /// 获取相对于区块的指定位置处的方块。
+        /// X 和 Z 必须在 [0, 15] 范围内；Y 为绝对坐标。
+        get-block: func(pos: block-pos) -> block;
+
+        /// 获取相对于区块的指定位置处的生物群系。
+        /// X 和 Z 必须在 [0, 15] 范围内；Y 为绝对坐标。
+        get-biome: func(pos: block-pos) -> biome;
+
+        /// 获取指定 X 和 Z 处最高的非空气方块 Y 坐标
+        ///（相对于区块）。X 和 Z 必须在 [0, 15] 范围内。
+        /// 整列都是空气时返回 min-y - 1。
+        get-top-block-y: func(x: s32, z: s32) -> s32;
+
+        /// 转储一个 16x16x16 区段的全部 4096 个方块状态 ID
+        ///（section-index 0 为底部区段），顺序为 Y 优先，然后 Z，
+        /// 然后 X。这是分页批量读取路径：完整的区块转储是
+        /// section-count 次调用、每次约 8 KiB，而不是一次
+        /// 非常大的传输。
+        dump-section-block-states: func(section-index: u32) -> list<u16>;
+
+        /// 转储一个区段的全部 64 个生物群系 ID（4x4x4 四分位分辨率），
+        /// 顺序为 Y 优先，然后 Z，然后 X。
+        dump-section-biomes: func(section-index: u32) -> list<u8>;
+    }
+
+    /// 表示世界的边界。
+    resource world-border {
+        /// 获取边界的中心 X 坐标。
+        get-center-x: func() -> f64;
+        /// 获取边界的中心 Z 坐标。
+        get-center-z: func() -> f64;
+        /// 获取边界的中心位置。
+        get-center: func() -> position;
+        /// 设置边界的中心坐标。
+        set-center: func(x: f64, z: f64);
+
+        /// 获取边界的当前直径。
+        get-diameter: func() -> f64;
+        /// 获取边界的当前直径（get-diameter 的别名）。
+        get-size: func() -> f64;
+        /// 设置边界的直径，可选地提供渐变速度（刻）。
+        set-diameter: func(diameter: f64, speed: option<u64>);
+        /// 立即设置边界的大小。
+        set-size: func(size: f64);
+        /// 设置边界的大小，带以秒为单位的过渡时长。
+        set-size-transition: func(new-size: f64, time-seconds: u64);
+
+        /// 获取渐变/过渡时的目标直径。
+        get-target-diameter: func() -> f64;
+        /// 获取目标过渡时长/速度（刻）。
+        get-target-speed: func() -> s64;
+
+        /// 获取距边界多远开始出现警告效果（方块）。
+        get-warning-distance: func() -> s32;
+        /// 设置警告距离（方块）。
+        set-warning-distance: func(distance: s32);
+
+        /// 获取玩家触及边界前多久发出警告（秒）。
+        get-warning-delay: func() -> s32;
+        /// 设置警告延迟（秒）。
+        set-warning-delay: func(delay: s32);
+        /// 获取警告时间（get-warning-delay 的别名）。
+        get-warning-time: func() -> s32;
+        /// 设置警告时间（set-warning-delay 的别名）。
+        set-warning-time: func(time: s32);
+
+        /// 获取边界外的安全伤害缓冲距离（方块）。
+        get-damage-buffer: func() -> f64;
+        /// 设置边界外的安全伤害缓冲距离（方块）。
+        set-damage-buffer: func(buffer: f64);
+
+        /// 获取在缓冲区外时每方块每秒造成的伤害量。
+        get-damage-amount: func() -> f64;
+        /// 设置在缓冲区外时每方块每秒造成的伤害量。
+        set-damage-amount: func(damage: f64);
+
+        /// 返回指定坐标是否在边界内。
+        contains: func(x: f64, z: f64) -> bool;
+        /// 返回指定位置是否在边界内。
+        contains-pos: func(pos: position) -> bool;
+
+        /// 将世界边界重置为原版默认设置。
+        reset: func();
+    }
+
+    /// 表示轴对齐包围盒。
+    record bounding-box {
+        min: position,
+        max: position,
+    }
+
+    /// 表示世界配置的共享出生点位置。
+    record world-spawn-location {
+        /// 共享世界出生点的方块位置。
+        pos: block-pos,
+        /// 玩家在此生成时应朝向的偏航角。
+        yaw: f32,
+        /// 玩家在此生成时应使用的俯仰角。
+        pitch: f32,
+    }
+
+    /// 表示基本方向或方块面。
+    enum block-direction {
+        down,
+        up,
+        north,
+        south,
+        west,
+        east,
+    }
+
+    /// 表示一个 Minecraft 世界（维度）。
+    resource %world {
+        /// 返回此世界的唯一标识符。
+        get-id: func() -> string;
+
+        /// 获取与此世界关联的世界边界（get-world-border 的别名）。
+        get-border: func() -> world-border;
+
+        /// 获取与此世界关联的世界边界。
+        get-world-border: func() -> world-border;
+
+        /// 获取指定区块坐标处的区块。
+        get-chunk: func(x: s32, z: s32) -> option<chunk>;
+
+        /// 返回指定区块坐标处的区块是否
+        /// 当前已加载在内存中。
+        is-chunk-loaded: func(x: s32, z: s32) -> bool;
+
+        /// 返回指定区块坐标处区块的只读、读取时复制的
+        /// 快照，区块未加载时为 none。
+        /// 快照是时间点副本：之后对活动区块的修改
+        ///（或其卸载）不会影响它。
+        get-chunk-snapshot: func(x: s32, z: s32) -> option<chunk-snapshot>;
+
+        /// 将指定区块坐标处的区块标记或取消标记为
+        /// 强制加载。强制加载的区块即使附近没有玩家
+        /// 也会保持加载（和运行刻）；当没有其他因素使其
+        /// 保持加载时，取消标记会让区块重新可被卸载。
+        set-chunk-forced: func(x: s32, z: s32, forced: bool);
+
+        /// 返回指定区块坐标处的区块是否
+        /// 被标记为强制加载。
+        is-chunk-forced: func(x: s32, z: s32) -> bool;
+
+        /// 请求加载指定区块坐标处的区块，
+        /// 当区块既未加载也不在磁盘上时异步生成它。
+        ///
+        /// 每次调用都会在区块上持有一个使其保持加载的
+        /// 插件票据；每调用一次 `load-chunk` 就调用一次
+        /// `unload-chunk` 来释放。调用时区块已加载则返回
+        /// true；触发了加载/生成且仍在进行中则返回 false
+        ///（在之后的刻轮询 `is-chunk-loaded` 或 `get-chunk`）。
+        load-chunk: func(x: s32, z: s32) -> bool;
+
+        /// 释放一个先前通过 `load-chunk` 获取的插件票据。
+        /// 当没有插件票据、强制加载标记或玩家观察者使其
+        /// 保持加载时，区块变为可卸载。没有持有插件票据时
+        /// 不做任何事。不会清除强制加载标记。
+        unload-chunk: func(x: s32, z: s32);
+
+        /// 获取指定位置处的方块状态 ID。
+        get-block-state-id: func(pos: block-pos) -> u16;
+
+        /// 获取指定位置处的详细方块状态信息。
+        get-block-state: func(pos: block-pos) -> block-state;
+
+        /// 设置指定位置处的方块状态。
+        set-block-state: func(pos: block-pos, state: u16, update-flags: block-flags);
+
+        /// 获取指定位置处的方块类型。
+        get-block: func(pos: block-pos) -> block;
+
+        /// 获取指定位置处的数字方块 ID。
+        get-block-id: func(pos: block-pos) -> u16;
+
+        /// 使用默认状态设置指定位置处的方块。
+        set-block: func(pos: block-pos, block: block, update-flags: block-flags);
+
+        /// 按数字方块 ID 使用默认状态设置指定位置处的方块。
+        set-block-by-id: func(pos: block-pos, block-id: u16, update-flags: block-flags);
+
+        /// 按命名空间名称使用默认状态设置指定位置处的方块。
+        /// 方块被识别并成功设置时返回 true。
+        set-block-by-name: func(pos: block-pos, name: string, update-flags: block-flags) -> bool;
+
+        /// 返回当前一天内的时间（刻）。
+        get-time-of-day: func() -> u64;
+
+        /// 设置当前一天内的时间（刻）。
+        set-time-of-day: func(time: u64);
+
+        /// 返回世界的总年龄（刻）。
+        get-world-age: func() -> u64;
+
+        /// 返回维度类型（如 \"minecraft:overworld\"）。
+        get-dimension: func() -> string;
+
+        /// 返回此世界配置的共享出生点位置。
+        get-spawn-location: func() -> world-spawn-location;
+
+        /// 获取指定 X 和 Z 处最高的非空气方块 Y 坐标。
+        get-top-block-y: func(x: s32, z: s32) -> s32;
+
+        /// 获取最高的阻挡运动的方块 Y 坐标。
+        get-motion-blocking-height: func(x: s32, z: s32) -> s32;
+
+        /// 返回当前是否正在下雨或下雪。
+        is-raining: func() -> bool;
+
+        /// 设置是否应下雨或下雪。
+        set-raining: func(raining: bool);
+
+        /// 返回当前是否有雷暴。
+        is-thundering: func() -> bool;
+
+        /// 设置是否应有雷暴。
+        set-thundering: func(thundering: bool);
+
+        /// 向此世界中的所有玩家广播系统消息。
+        broadcast-system-message: func(message: text-component, overlay: bool);
+
+        /// 返回与此世界关联的记分板。
+        get-scoreboard: func() -> scoreboard;
+
+        /// 在指定位置为世界中的所有玩家播放音效。
+        play-sound: func(sound: sound, category: sound-category, pos: position, volume: f32, pitch: f32);
+
+        /// 在指定位置为世界中的所有玩家播放自定义资源包音效标识符。
+        play-custom-sound: func(sound-name: string, category: sound-category, pos: position, volume: f32, pitch: f32);
+
+        /// 在指定位置生成粒子。
+        spawn-particle: func(particle: particle, pos: position, offset: position, max-speed: f32, count: s32);
+
+        /// 在指定位置制造爆炸。
+        create-explosion: func(pos: position, power: f32, create-fire: bool, interaction: explosion-interaction);
+
+        /// 返回此世界的海平面高度。
+        get-sea-level: func() -> s32;
+
+        /// 返回最小 Y 坐标（世界底部）。
+        get-min-y: func() -> s32;
+
+        /// 返回指定位置处的天空光照等级。
+        get-sky-light: func(pos: block-pos) -> u8;
+
+        /// 设置指定位置处的天空光照等级。
+        set-sky-light: func(pos: block-pos, level: u8);
+
+        /// 返回指定位置处的方块光照等级。
+        get-block-light: func(pos: block-pos) -> u8;
+
+        /// 设置指定位置处的方块光照等级。
+        set-block-light: func(pos: block-pos, level: u8);
+
+        /// 返回指定位置处的生物群系。
+        get-biome: func(pos: block-pos) -> biome;
+
+        /// 在给定位置生成指定类型的实体。
+        spawn-entity: func(entity-type: entity-type, pos: position) -> entity;
+
+        /// Rebuilds an entity from its NBT snapshot bytes (as produced by
+        /// `entity.create-snapshot`) and spawns it at the given position.
+        ///
+        /// The snapshot must contain a namespaced "id" of a known, saveable
+        /// entity type; returns none when the bytes are not valid NBT, the
+        /// type is unknown, or the type cannot be spawned from data (e.g.
+        /// players). The position argument wins over the "Pos" stored in the
+        /// snapshot, and the rebuilt entity always receives a fresh UUID so a
+        /// snapshot can be spawned any number of times.
+        spawn-entity-from-snapshot: func(nbt: list<u8>, pos: position) -> option<entity>;
+
+        /// Returns a list of all entities in this world.
+        get-entities: func() -> list<entity>;
+
+        /// Spawns a lightning bolt at the specified position.
+        strike-lightning: func(pos: position, effect-only: bool);
+
+        /// Performs a raycast from start position to end position to hit blocks.
+        ray-trace-blocks: func(start: position, end: position) -> option<position>;
+
+        /// Performs a raycast from start position to end position to hit blocks, with optional fluid handling.
+        ray-trace-block: func(start: position, end: position, include-fluids: bool) -> option<ray-trace-block-result>;
+
+        /// Performs a raycast from start position to end position to find the closest entity hit.
+        ray-trace-entity: func(start: position, end: position) -> option<ray-trace-entity-result>;
+
+        /// Performs a raycast from start position to end position to find all entities hit along the ray.
+        ray-trace-entities: func(start: position, end: position) -> list<ray-trace-entity-result>;
+
+        /// Returns the block entity at the specified position, if any.
+        get-block-entity: func(pos: block-pos) -> option<block-entity-type>;
+
+        /// Returns the raw NBT bytes of the block entity at the given position, if any.
+        get-block-entity-nbt: func(pos: block-pos) -> option<list<u8>>;
+
+        /// Restores a block entity from raw NBT bytes at the given position.
+        /// The NBT must contain a valid "id" field (e.g. "minecraft:chest").
+        set-block-entity-nbt: func(pos: block-pos, nbt-data: list<u8>) -> result<_, string>;
+
+        /// Returns the name of this world (e.g. "world", "world_nether", "arena_1").
+        get-name: func() -> string;
+
+        /// Saves all chunk data, block entities, and entities for this world to disk.
+        save: func() -> result<_, string>;
+
+        /// Sets a custom chunk generator for this world using a registered generator ID.
+        set-chunk-generator: func(generator-id: u32);
+
+        /// Sets a namespaced custom data value on this world.
+        set-custom-data: func(namespace: string, key: string, value: nbt-tree);
+        /// Returns a namespaced custom data value from this world, if set.
+        get-custom-data: func(namespace: string, key: string) -> option<nbt-tree>;
+        /// Removes a namespaced custom data value from this world.
+        remove-custom-data: func(namespace: string, key: string);
+        /// Returns whether this world has a namespaced custom data value.
+        has-custom-data: func(namespace: string, key: string) -> bool;
+
+        /// Gets the value of a game rule in this world.
+        get-game-rule: func(rule: game-rule) -> game-rule-value;
+        /// Sets the value of a game rule in this world.
+        set-game-rule: func(rule: game-rule, value: game-rule-value);
+    }
+
+    /// Generation phase for custom chunk generation.
+    enum generation-phase {
+        biomes,
+        noise,
+        surface,
+        features,
+    }
+
+    /// Mutable chunk buffer representing a 16x16 column during custom world generation.
+    resource chunk-buffer {
+        /// Returns the chunk X coordinate.
+        get-x: func() -> s32;
+        /// Returns the chunk Z coordinate.
+        get-z: func() -> s32;
+        /// Returns the minimum Y coordinate for this world.
+        get-min-y: func() -> s32;
+        /// Returns the height of the chunk in blocks.
+        get-height: func() -> u32;
+
+        /// Sets the block state ID at local coordinates (0..16, y, 0..16).
+        set-block-state-id: func(x: u8, y: s32, z: u8, state-id: u16);
+        /// Gets the block state ID at local coordinates (0..16, y, 0..16).
+        get-block-state-id: func(x: u8, y: s32, z: u8) -> u16;
+
+        /// Fills an entire horizontal 16x16 layer at the given Y level with a block state ID.
+        fill-layer: func(y: s32, state-id: u16);
+        /// Fills a vertical column from min-y to max-y at local (x, z) with a block state ID.
+        fill-range: func(x: u8, min-y: s32, max-y: s32, z: u8, state-id: u16);
+        /// Fills a 3D cuboid with a block state ID.
+        fill-cuboid: func(min-x: u8, min-y: s32, min-z: u8, max-x: u8, max-y: s32, max-z: u8, state-id: u16);
+
+        /// Sets the biome at local coordinates (0..16, y, 0..16).
+        set-biome: func(x: u8, y: s32, z: u8, biome: biome);
+        /// Fills the entire chunk with the given biome.
+        fill-biome: func(biome: biome);
+    }
+
+    /// Resolves a block name and optional properties to a block state ID.
+    /// Returns none if the block name is unknown.
+    resolve-block-state: func(name: string, properties: list<tuple<string, string>>) -> option<u16>;
+
+    /// A block's registry name and its property key-value pairs for a state ID.
+    record block-state-info {
+        name: string,
+        properties: list<tuple<string, string>>,
+    }
+
+    /// Resolves a block state ID back to its block name and properties.
+    /// Returns none if the state ID is unknown.
+    block-state-to-info: func(state-id: u16) -> option<block-state-info>;
+
+    /// Gets a block type by its numerical block ID.
+    get-block-by-id: func(id: u16) -> option<block>;
+
+    /// Gets a block type by its namespaced name (e.g., "minecraft:stone" or "stone").
+    get-block-by-name: func(name: string) -> option<block>;
+
+    /// Gets all registered blocks.
+    get-all-blocks: func() -> list<block>;
+
+    /// Gets the names of all registered blocks.
+    get-all-block-names: func() -> list<string>;
+
+    /// Gets the total number of registered block types.
+    get-block-count: func() -> u32;
+
+    /// Gets the total number of registered block states.
+    get-block-state-count: func() -> u32;
+
+    /// Gets all valid block states for a block type.
+    get-states-for-block: func(block: block) -> list<block-state>;
+
+    /// Gets all valid block states for a numerical block ID.
+    get-states-for-block-id: func(block-id: u16) -> list<block-state>;
+
+    /// Gets all valid state IDs for a numerical block ID.
+    get-state-ids-for-block-id: func(block-id: u16) -> list<u16>;
+
+    /// Gets property key-value pairs for a numerical block state ID.
+    get-block-properties: func(state-id: u16) -> list<tuple<string, string>>;
+
+    /// Gets the block type associated with a block state ID.
+    get-block-from-state-id: func(state-id: u16) -> option<block>;
+
+    /// Gets the block type associated with a block state.
+    get-block-from-state: func(state: block-state) -> block;
+
+    /// Gets the default block state for a block type.
+    get-default-state-from-block: func(block: block) -> block-state;
+
+    /// Gets the default block state for a numerical block ID.
+    get-default-state-from-block-id: func(block-id: u16) -> option<block-state>;
+
+    /// Gets the detailed block state for a numerical block state ID.
+    get-block-state-by-id: func(state-id: u16) -> option<block-state>;
+}

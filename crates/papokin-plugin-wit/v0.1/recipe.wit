@@ -1,0 +1,146 @@
+interface recipe {
+    use item-stack.{item-stack};
+
+    /// 配方书中的配方分类。
+    enum recipe-category {
+        building,
+        redstone,
+        equipment,
+        misc,
+        food,
+        blocks,
+    }
+
+    /// 表示配方中的一种材料。
+    variant ingredient {
+        /// 指定物品（如 "minecraft:diamond"）。
+        item(string),
+        /// 物品的标签组（如 "minecraft:logs"）。
+        tag(string),
+        /// 多个指定物品之一。
+        one-of(list<string>),
+    }
+
+    /// 表示一个有形状的合成配方。
+    record shaped-recipe {
+        /// 配方的图案（如 ["# #", " s ", "# #"]）。
+        pattern: list<string>,
+        /// 图案中字符到材料的映射。
+        key: list<tuple<string, ingredient>>,
+        /// 产出的物品堆。
+        output: item-stack,
+        /// 配方分组（可选）。
+        group: option<string>,
+        /// 配方在配方书中的分类。
+        category: option<recipe-category>,
+        /// 解锁配方时是否显示 toast 通知。
+        show-notification: option<bool>,
+    }
+
+    /// 表示一个无形状的合成配方。
+    record shapeless-recipe {
+        /// 所需材料的列表。
+        ingredients: list<ingredient>,
+        /// 产出的物品堆。
+        output: item-stack,
+        /// 配方分组（可选）。
+        group: option<string>,
+        /// 配方在配方书中的分类。
+        category: option<recipe-category>,
+    }
+
+    /// 表示一个烧炼配方（熔炉、高炉、烟熏炉、营火）。
+    record cooking-recipe {
+        /// 待烧炼的材料。
+        ingredient: ingredient,
+        /// 产出的物品堆。
+        output: item-stack,
+        /// 奖励的经验值。
+        experience: f32,
+        /// 烧炼所需时间，单位刻。
+        cooking-time: u32,
+        /// 配方分组（可选）。
+        group: option<string>,
+        /// 配方在配方书中的分类。
+        category: option<recipe-category>,
+    }
+
+    /// 烧炼设备的类型。
+    enum cooking-type {
+        smelting,
+        blasting,
+        smoking,
+        campfire,
+    }
+
+    /// 表示一个切石配方。
+    record stonecutting-recipe {
+        /// 输入材料。
+        ingredient: ingredient,
+        /// 产出的物品堆。
+        output: item-stack,
+    }
+
+    /// 表示一个锻造转变配方（如下界合金升级）。
+    record smithing-transform-recipe {
+        /// 模板物品（如下界合金升级锻造模板）。
+        template: ingredient,
+        /// 待转变的基础物品。
+        base: ingredient,
+        /// 转变消耗的附加物品。
+        addition: ingredient,
+        /// 产出的物品堆。
+        output: item-stack,
+        /// 是否把基础物品的数据组件复制到产物上。
+        copy-components: bool,
+    }
+
+    /// 表示一个锻造纹饰配方（装饰性盔甲纹饰）。
+    record smithing-trim-recipe {
+        /// 纹饰模板物品。
+        template: ingredient,
+        /// 待加纹饰的基础物品（通常是盔甲）。
+        base: ingredient,
+        /// 纹饰材料物品（如 "minecraft:diamond"）。
+        addition: ingredient,
+    }
+
+    /// 表示一个酿造配方。
+    record brewing-recipe {
+        /// 容器物品 id（如 "minecraft:potion"）。
+        input-item: string,
+        /// 所需的输入药水类型 id（如 "minecraft:water"），如有。
+        input-potion: option<string>,
+        /// 反应物物品 id（如 "minecraft:blaze_powder"）。
+        reagent: string,
+        /// 产出的容器物品 id。
+        output-item: string,
+        /// 产出的药水类型 id，如有。
+        output-potion: option<string>,
+    }
+
+    /// 注册配方的通用接口。
+    resource recipe-manager {
+        /// 注册一个有形状的合成配方。
+        register-shaped: func(id: string, recipe: shaped-recipe);
+        
+        /// 注册一个无形状的合成配方。
+        register-shapeless: func(id: string, recipe: shapeless-recipe);
+
+        /// 注册一个烧炼配方。
+        register-cooking: func(id: string, station-type: cooking-type, recipe: cooking-recipe);
+
+        /// 注册一个切石配方。
+        register-stonecutting: func(id: string, recipe: stonecutting-recipe);
+
+        /// 注册一个锻造转变配方。
+        register-smithing-transform: func(id: string, recipe: smithing-transform-recipe);
+
+        /// 注册一个锻造纹饰配方。
+        register-smithing-trim: func(id: string, recipe: smithing-trim-recipe);
+
+        /// 注册一个酿造配方。
+        register-brewing: func(id: string, recipe: brewing-recipe);
+    }
+}
+

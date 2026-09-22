@@ -1,0 +1,66 @@
+interface text {
+    use common.{named-color, rgb-color, argb-color};
+
+    resource text-component {
+        /// 创建一个纯文本组件。
+        text: static func(plain: string) -> text-component;
+        /// 创建一个翻译组件。
+        translate: static func(key: string, %with: list<text-component>) -> text-component;
+        /// 创建一个实体名称/选择器文本组件。
+        entity-names: static func(selector: string, separator: option<string>) -> text-component;
+        /// 创建一个按键绑定文本组件（如 "key.jump"）。
+        keybind: static func(keybind: string) -> text-component;
+        /// 创建一个自定义翻译组件。
+        custom: static func(namespace: string, key: string, locale: string, %with: list<text-component>) -> text-component;
+
+        /// 把旧版 Minecraft 格式化字符串（默认使用分节符 '§'）解析为文本组件。
+        from-legacy-string: static func(input: string) -> text-component;
+        /// 用自定义颜色代码符号（如 '&' 或 '§'）解析旧版格式化字符串。
+        from-legacy-string-with-code: static func(input: string, code-symbol: char) -> text-component;
+
+        /// 解析标准的 Minecraft JSON 文本组件。
+        from-json: static func(json: string) -> result<text-component, string>;
+        /// 把文本组件序列化为 JSON 格式。
+        to-json: func() -> string;
+
+        add-child: func(child: text-component);
+        add-text: func(text: string);
+        get-text: func() -> string;
+        encode: func() -> list<u8>;
+        to-pretty-console: func() -> string;
+
+        // 样式
+
+        color-named: func(color: named-color);
+        color-rgb: func(color: rgb-color);
+        gradient-named: func(colors: list<named-color>);
+        gradient: func(colors: list<rgb-color>);
+        rainbow: func();
+        bold: func(value: bool);
+        italic: func(value: bool);
+        underlined: func(value: bool);
+        strikethrough: func(value: bool);
+        obfuscated: func(value: bool);
+        /// 按住 Shift 点击时插入聊天框的文本
+        insertion: func(text: string);
+        font: func(font: string);
+        shadow-color: func(color: argb-color);
+
+        // 点击事件
+
+        click-open-url: func(url: string);
+        click-open-file: func(path: string);
+        click-run-command: func(command: string);
+        click-suggest-command: func(command: string);
+        click-change-page: func(page: u32);
+        click-copy-to-clipboard: func(text: string);
+
+        // 悬停事件
+
+        hover-show-text: func(text: text-component);
+        /// 物品数据，SNBT 字符串形式
+        hover-show-item: func(item: string);
+        hover-show-entity: func(entity-type: string, id: string, name: option<text-component>);
+    }
+}
+

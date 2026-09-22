@@ -1,0 +1,7 @@
+interface ipc {
+    type plugin-id = string;
+    type ipc-message = list<u8>;
+
+    // 向指定插件发送消息，并同步接收响应（或错误）。
+    send-ipc-message: func(recipient: plugin-id, message: ipc-message) -> result<result<ipc-message, string>>;
+}

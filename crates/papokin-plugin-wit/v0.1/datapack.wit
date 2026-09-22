@@ -1,0 +1,54 @@
+package papokin:plugin@0.1.0;
+
+interface datapack {
+    /// 已发现或已加载数据包的信息。
+    record datapack-info {
+        id: string,
+        name: string,
+        description: string,
+        pack-format: u32,
+        is-enabled: bool,
+        recipe-count: u32,
+        function-count: u32,
+    }
+
+    /// 启用数据包时相对于其他包的放置位置选项。
+    variant enable-position {
+        first,
+        last,
+        before(string),
+        after(string),
+    }
+
+    /// 用于查看和控制服务器数据包的全局管理器。
+    resource datapack-manager {
+        /// 返回所有已知数据包（包括已启用与可用/已禁用）。
+        list-all-packs: func() -> list<datapack-info>;
+
+        /// 仅返回当前已启用的数据包。
+        list-enabled-packs: func() -> list<datapack-info>;
+
+        /// 返回可用（已禁用）的数据包。
+        list-available-packs: func() -> list<datapack-info>;
+
+        /// 按名称或 ID 获取指定数据包的详细信息。
+        get-pack: func(name: string) -> option<datapack-info>;
+
+        /// 检查数据包当前是否已启用。
+        is-enabled: func(name: string) -> bool;
+
+        /// 以指定的优先级位置启用数据包。
+        enable-pack: func(name: string, position: enable-position) -> result<_, string>;
+
+        /// 禁用一个已启用的数据包。
+        disable-pack: func(name: string) -> result<_, string>;
+
+        /// 重载所有已启用的数据包、配方与函数标签，向在线玩家同步
+        /// 配方，并触发 `#minecraft:load`。
+        reload: func() -> result<_, string>;
+
+        /// 执行一个数据包函数或函数标签（如 "namespace:fn" 或
+        /// "#namespace:tag"）。返回执行的命令条数。
+        execute-function: func(name: string) -> result<u32, string>;
+    }
+}

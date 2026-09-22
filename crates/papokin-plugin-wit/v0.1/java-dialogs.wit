@@ -1,0 +1,155 @@
+/// 提供用于向 Java 版玩家展示富对话框的类型与工具。
+/// 这些对话框支持多种布局、正文元素（文本与物品）以及交互式输入
+/// （复选框、文本框、滑块）。
+interface java-dialogs {
+    use text.{text-component};
+    use item-stack.{item-stack};
+
+    /// 表示对话框的布局与按钮配置。
+    enum dialog-type {
+        /// 只有单个"确定"按钮的简单对话框。
+        notice,
+        /// 带"是"与"否"按钮的对话框。
+        confirmation,
+        /// 可滚动的自定义按钮列表。
+        multi-action,
+        /// 打开其他已注册对话框的按钮列表。
+        dialog-list,
+        /// 专门用于展示服务器相关链接的菜单。
+        server-links,
+    }
+
+    /// 表示对话框主内容区域中的一个元素。
+    variant dialog-body {
+        /// 一条简单的文本消息。
+        plain-message(text-component),
+        /// 一个可视化的物品展示。
+        item(item-stack),
+    }
+
+    /// 表示对话框中的交互式输入控件。
+    variant dialog-input {
+        /// 表示真/假状态的复选框。
+        %bool(dialog-input-bool),
+        /// 简单的字符串输入框。
+        %text(dialog-input-text),
+        /// 在范围内进行数值输入的滑块。
+        number-range(dialog-input-number-range),
+        /// 多选一的选择按钮。
+        single-option(dialog-input-single-option),
+    }
+
+    /// 复选框输入控件。
+    record dialog-input-bool {
+        label: text-component,
+        default-value: bool,
+    }
+
+    /// 文本框输入控件。
+    record dialog-input-text {
+        label: text-component,
+        placeholder: text-component,
+        default-value: string,
+    }
+
+    /// 数值范围滑块输入控件。
+    record dialog-input-number-range {
+        label: text-component,
+        min-value: f32,
+        max-value: f32,
+        initial-value: f32,
+        step: f32,
+        label-format: option<string>,
+    }
+
+    /// 多选一选择输入控件。
+    record dialog-input-single-option {
+        label: text-component,
+        options: list<text-component>,
+        initial-index: u32,
+    }
+
+    /// 定义对话框关闭后的行为。
+    enum after-action {
+        /// 让玩家回到上一个界面（例如保持物品栏打开）。
+        peek,
+        /// 关闭所有打开的界面。
+        pop,
+    }
+
+    /// 表示对话框中可点击的按钮。
+    record action-button {
+        text: text-component,
+        tooltip: option<text-component>,
+        width: option<u32>,
+        action: action,
+    }
+
+    /// 表示由按钮点击触发的动作。
+    variant action {
+        /// 打开一个外部 URL。
+        open-url(string),
+        /// 触发一个带 ID 与可选负载的自定义服务器端回调。
+        custom-click(custom-click-action),
+    }
+
+    /// 表示一个自定义服务器端动作。
+    record custom-click-action {
+        /// 动作的唯一标识符（会回传给服务器）。
+        id: string,
+        /// 随动作发送的可选二进制数据。
+        payload: option<list<u8>>,
+    }
+
+    /// 表示在 Java 版对话框中展示的链接。
+    record link {
+        /// 链接显示的标签。
+        label: link-label,
+        /// 链接指向的 URL。
+        url: string,
+    }
+
+    /// 链接的标签，可以是内置类型或自定义文本。
+    variant link-label {
+        /// 带预定义图标/标签的内置链接类型。
+        built-in(link-type),
+        /// 自定义文本组件标签。
+        custom(text-component),
+    }
+
+    /// Java 版客户端识别的内置链接类型。
+    enum link-type {
+        bug-report,
+        community-guidelines,
+        support,
+        status,
+        feedback,
+        community,
+        website,
+        forums,
+        news,
+        announcements,
+    }
+
+    /// 表示向 Java 版玩家展示的对话框。
+    record dialog {
+        /// 对话框的主标题。
+        title: text-component,
+        /// 对话框的布局类型。
+        %type: dialog-type,
+        /// 在主区域显示的正文元素列表。
+        body: list<dialog-body>,
+        /// 交互式输入控件列表。
+        inputs: list<dialog-input>,
+        /// 可点击按钮列表（用于 multi-action 等类型）。
+        buttons: list<action-button>,
+        /// 链接列表（主要用于 server-links 类型）。
+        links: list<link>,
+        /// 对话框关闭后的行为。
+        after-action: option<after-action>,
+        /// 玩家是否可以用 Esc 键退出对话框。
+        can-close-with-escape: bool,
+        /// 在链接到/打开此对话框的按钮上显示的文本。
+        external-title: option<text-component>,
+    }
+}

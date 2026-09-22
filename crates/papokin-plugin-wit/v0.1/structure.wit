@@ -1,0 +1,53 @@
+package papokin:plugin@0.1.0;
+
+/// 结构模板的注册与放置。
+///
+/// 模板使用原版 `.nbt` 结构格式（gzip 压缩的 NBT）。宿主将它们保存在
+/// `/place template` 命令所解析的同一个模板缓存中，因此在此注册的模板
+/// 可以立即通过本接口和该命令放置。
+interface structure {
+    use common.{block-pos};
+    use %world.{%world};
+
+    /// 放置结构模板时应用的旋转。
+    enum rotation {
+        /// 不旋转（0 度）。
+        none,
+        /// 顺时针 90 度。
+        clockwise-90,
+        /// 180 度。
+        clockwise-180,
+        /// 逆时针 90 度。
+        counterclockwise-90,
+    }
+
+    /// 放置结构模板时应用的镜像。
+    enum mirror {
+        /// 不镜像。
+        none,
+        /// 沿 Z 轴镜像（北 <-> 南）。
+        left-right,
+        /// 沿 X 轴镜像（东 <-> 西）。
+        front-back,
+    }
+
+    /// 在运行时从 gzip 压缩的 NBT 字节（原版 `.nbt` 结构格式）注册一个
+    /// 结构模板。
+    ///
+    /// 名称按原版方式规范化：裸名 `foo` 变为 `minecraft:foo`。以已存在
+    /// 的名称（内嵌或先前注册的）注册会将其替换，对后续查找生效。
+    /// 字节解压或解析失败时返回错误。
+    register-structure: func(name: string, nbt: list<u8>) -> result<_, string>;
+
+    /// 把一个已注册或内嵌的结构模板放置到世界中，原点位于 `pos`。
+    /// `rotation` 与 `mirror` 缺省时默认为 `none`。不存在名为 `name`
+    /// 的模板时返回错误。
+    place-structure: func(world-ref: borrow<%world>, name: string, pos: block-pos, rotation: option<rotation>, mirror: option<mirror>) -> result<bool, string>;
+
+    /// 返回给定名称的模板是否可以解析，涵盖运行时注册与内嵌模板。
+    has-structure: func(name: string) -> bool;
+
+    /// 列出所有已知模板名称：全部内嵌模板加上全部运行时注册的模板，
+    /// 去重并排序。
+    list-structures: func() -> list<string>;
+}

@@ -1,0 +1,49 @@
+/// 客户端 cookie 存储，相当于 Paper 1.20.5+ 的 ClientCookie API。
+///
+/// Cookie 是服务器存储在 Java 版客户端上的小型数据块（最多 5120 字节，
+/// 即原版的 5 KiB 上限）；客户端在服务器间转移时会保留它们，并在服务器
+/// 询问时交回。典型用途是会话令牌与必须在代理转移后保留的按玩家偏好
+/// 设置。
+///
+/// 每个函数都以其客户端为目标的那个玩家为参数。Cookie 是 Java 版协议
+/// 特性。
+///
+/// `store-cookie` 与 `request-cookie` 发送游戏阶段的客户端方向数据包，
+/// 因此只能送达已完全连接（已进入游戏）的玩家。`get-cookie` 从不发送
+/// 数据包：它读取服务器端缓存的、客户端自连接以来发回的 cookie 响应
+/// （响应也可能在登录与配置阶段到达并被保留下来）。因此一个键只有在
+/// 一次 `request-cookie` 往返完成后才会出现在 `get-cookie` 中。
+interface cookie {
+    use player.{player};
+
+    /// 在玩家的客户端上存储一个 cookie。
+    ///
+    /// `key` 必须是合法的资源标识符：`namespace:path`，或裸路径（原版
+    /// 将其视为 `minecraft` 命名空间），只能使用小写字母、数字与
+    /// `_ . -`（路径中还可使用 `/`）。`payload` 不得超过 5120 字节；
+    /// 超过时调用失败而不是截断。
+    ///
+    /// # 错误
+    /// 键不是合法标识符或负载超过原版上限时返回错误。
+    store-cookie: func(player: borrow<player>, key: string, payload: list<u8>) -> result<_, string>;
+
+    /// 向玩家的客户端请求存储在 `key` 下的 cookie。
+    ///
+    /// 请求在网络层是异步的：客户端的响应到达后会被放入服务器端缓存，
+    /// 可用 `get-cookie` 读取。
+    ///
+    /// # 错误
+    /// 键不是合法标识符时返回错误。
+    request-cookie: func(player: borrow<player>, key: string) -> result<_, string>;
+
+    /// 返回此玩家的 cookie `key` 的缓存值；客户端（尚）未上报时返回
+    /// `none`。从不发送数据包。
+    get-cookie: func(player: borrow<player>, key: string) -> option<list<u8>>;
+
+    /// 清除 cookie `key`：将其从服务器端缓存丢弃，并用空负载覆盖客户
+    /// 端的副本（原版没有专门的删除数据包，因此写入空值即清除信号）。
+    ///
+    /// # 错误
+    /// 键不是合法标识符时返回错误。
+    clear-cookie: func(player: borrow<player>, key: string) -> result<_, string>;
+}

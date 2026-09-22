@@ -1,0 +1,65 @@
+/// 初始化与事件处理期间提供给插件的核心上下文。
+interface context {
+    use server.{server};
+    use event.{event-type, event-priority};
+    use command.{command};
+    use permission.{permission};
+
+    /// 已签名插件的、经过校验的市场元数据。
+    record marketplace-metadata {
+        /// 此插件所注册的市场基础 URL。
+        marketplace-url: string,
+        /// 插件在市场上的唯一 ID。
+        plugin-id: s64,
+        /// 插件的规范名称。
+        plugin-name: string,
+        /// 插件的 semver 版本字符串。
+        version: string,
+        /// 开发者 ID。
+        dev-id: s64,
+        /// 开发者显示名或用户名。
+        dev-name: string,
+        /// 是否为付费市场插件。
+        is-paid: bool,
+        /// 购买者/被授权用户 ID（免费/开源为 0）。
+        user-id: s64,
+        /// 签发给购买者的唯一许可证密钥，付费时存在。
+        license-key: option<string>,
+        /// 此二进制/许可证签发时间的 ISO-8601 时间戳。
+        issued-at: string,
+    }
+
+    /// 插件相关操作的上下文句柄。
+    resource context {
+        /// 为指定事件注册处理器。
+        ///
+        /// * `handler-id`：事件处理器的唯一 ID。
+        /// * `event-type`：要监听的事件类型。
+        /// * `event-priority`：此处理器相对于其他处理器的调用时机。
+        ///   `lowest` 最先运行，`highest` 最后运行。
+        /// * `blocking`：事件是否应等待此处理器完成。
+        /// * `ignore-cancelled`：事件已被取消时跳过此处理器（仅对可取消
+        ///   的事件有意义）。
+        register-event: func(handler-id: u32, event-type: event-type, event-priority: event-priority, blocking: bool, ignore-cancelled: bool);
+
+        /// 注册一个新命令。
+        ///
+        /// * `command`：命令定义。
+        /// * `permission`：执行此命令所需的权限节点。
+        register-command: func(command: command, permission: string);
+
+        /// 向服务器注册一个权限节点。
+        register-permission: func(permission: permission) -> result<_, string>;
+
+        /// 返回插件私有数据目录的路径。
+        get-data-folder: func() -> string;
+
+        /// 返回全局服务器实例。
+        get-server: func() -> server;
+
+        /// 若此插件二进制已签名则返回校验过的市场元数据，未签名返回
+        /// none。
+        get-marketplace-metadata: func() -> option<marketplace-metadata>;
+    }
+}
+

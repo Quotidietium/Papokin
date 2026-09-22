@@ -1,0 +1,155 @@
+/// Pumpkin 插件的主入口。
+/// 此 world 定义了插件必须向宿主提供的导出，以及宿主向插件提供的导入。
+package papokin:plugin@0.1.0;
+
+world plugin {
+    use context.{context};
+    use event.{event};
+    use server.{server as server-instance};
+    use command.{command-sender, consumed-args, command-error, command-suggestions, suggestion-request};
+    use %world.{entity, chunk-buffer, generation-phase};
+    use ipc.{plugin-id, ipc-message};
+
+    // --- 宿主提供的导入 ---
+
+    /// 向插件提供日志能力。
+    import logging;
+    /// 提供 GUI 的创建与管理。
+    import gui;
+    /// 提供记分板管理。
+    import scoreboard;
+    /// 提供全局服务器信息与玩家查找。
+    import server;
+    /// 提供文本组件的构建与格式化。
+    import text;
+    /// 提供命令注册与参数解析。
+    import command;
+    /// 提供插件执行上下文。
+    import context;
+    /// 提供国际化与翻译支持。
+    import i18n;
+    /// 提供延迟或重复逻辑的任务调度。
+    import scheduler;
+    /// 提供世界信息与方块操作。
+    import %world;
+    /// 提供实体类型与操作。
+    import entity;
+    /// 提供 Boss 血条的创建与管理。
+    import boss-bar;
+    /// 提供 Java 版对话框。
+    import java-dialogs;
+    /// 提供状态效果类型与实例。
+    import status-effect;
+    /// 提供方块实体类型与实例。
+    import block-entity;
+    /// 提供 1 : 1 的插件间通信
+    import ipc;
+    /// 提供跨插件服务注册表（相当于 ServicesManager）。
+    import services;
+    /// 提供插件消息通道的注册与投递。
+    import messaging;
+    /// 提供插件配置文件管理。
+    import config;
+    /// 提供实体属性类型与修饰符。
+    import attributes;
+    /// 提供玩家管理。
+    import player;
+    /// 提供进度定义与进度类型。
+    import advancement;
+    /// 提供自定义配方的注册与管理。
+    import recipe;
+    /// 提供物品栏的操作与管理。
+    import inventory;
+    /// 提供数据包的查看与管理。
+    import datapack;
+    /// 提供自定义附魔的注册与管理。
+    import enchantments;
+    /// 提供伤害类型。
+    import damage-types;
+    /// 提供战斗追踪器记录类型。
+    import combat;
+    /// 提供标签的修改与查询。
+    import tag;
+    /// 提供自定义注册表条目的注册与查询。
+    import registry;
+    /// 提供 GUI 与容器的界面/窗口类型。
+    import screens;
+    /// 提供玩家统计信息的分类与类型。
+    import statistics;
+    /// 提供展示实体与交互实体。
+    import display;
+    /// 提供游戏规则的定义与查询。
+    import game-rules;
+    /// 提供游戏事件类型。
+    import game-events;
+    /// 提供药水类型。
+    import potions;
+    /// 提供实体状态/动画事件类型。
+    import entity-statuses;
+    /// 提供商人（村民/流浪商人）交易报价管理。
+    import merchant;
+    /// 提供地图创建与自定义地图渲染（MapView）。
+    import %map;
+    /// 提供结构模板的注册与放置。
+    import structure;
+    /// 提供战利品表查询与战利品生成。
+    import loot;
+    /// 提供末影龙战斗（DragonBattle）的查看与控制。
+    import dragon;
+    /// 提供客户端 cookie 存储（相当于 Paper ClientCookie API）。
+    import cookie;
+
+    // --- 插件提供的导出 ---
+
+    /// 由宿主调用一次，用于初始化插件。
+    /// 仅供内部使用；插件应使用 `register_plugin!` 宏。
+    export init-plugin: func();
+
+    /// 插件被加载时调用。
+    /// 用于注册命令、事件并执行初始设置。
+    export on-load: func(context: context) -> result<_, string>;
+
+    /// 加载成功后调用，用于启用插件。
+    /// 启用失败不会卸载插件：插件保持已加载但不活跃的状态（其事件
+    /// 处理器与命令会被注销）。
+    export on-enable: func(context: context) -> result<_, string>;
+
+    /// 卸载与关停期间，在 `on-unload` 之前调用，用于停用一个活跃的
+    /// 插件。用于暂停工作并释放运行时资源。
+    export on-disable: func(context: context) -> result<_, string>;
+
+    /// 插件被卸载时调用。
+    /// 用于保存数据并清理资源。
+    export on-unload: func(context: context) -> result<_, string>;
+
+    /// 向宿主提供插件元数据（名称、版本等）。
+    export metadata;
+
+    /// 把事件派发给插件处理。
+    export handle-event: func(event-id: u32, server: server-instance, event: event) -> event;
+
+    /// 把命令执行派发给插件。
+    export handle-command: func(command-id: u32, sender: command-sender, server: server-instance, args: consumed-args) -> result<s32, command-error>;
+
+    /// 把命令补全建议请求派发给插件。
+    export handle-command-suggestion: func(handler-id: u32, sender: command-sender, server: server-instance, request: suggestion-request) -> command-suggestions;
+
+    /// 把已调度任务的执行派发给插件。
+    export handle-task: func(handler-id: u32, server: server-instance);
+
+    /// 尽可能处理来自其他插件的传入消息，并返回（可能为空的）响应。
+    export handle-ipc-message: func(sender: plugin-id, message: ipc-message) -> result<ipc-message, string>;
+
+    /// 把玩家在本插件通过 messaging 接口注册的通道上发来的插件消息
+    /// 派发给插件。
+    export handle-plugin-message: func(player-uuid: string, channel: string, data: list<u8>);
+
+    export handle-ai-goal-can-start: func(goal-id: u32, server: server-instance, entity: entity) -> bool;
+    export handle-ai-goal-should-continue: func(goal-id: u32, server: server-instance, entity: entity) -> bool;
+    export handle-ai-goal-start: func(goal-id: u32, server: server-instance, entity: entity);
+    export handle-ai-goal-tick: func(goal-id: u32, server: server-instance, entity: entity);
+    export handle-ai-goal-stop: func(goal-id: u32, server: server-instance, entity: entity);
+
+    /// 把区块生成阶段派发给插件。
+    export handle-generate-phase: func(generator-id: u32, phase: generation-phase, chunk: chunk-buffer);
+}

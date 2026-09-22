@@ -1,0 +1,779 @@
+/// 表示连接到 Minecraft 服务器的玩家。
+interface player {
+    use common.{hand, position, game-mode, block-pos};
+    use item-stack.{item-stack};
+    use %world.{%world, entity, ray-trace-block-result, ray-trace-entity-result, teleport-flags};
+    use permission.{permission-level};
+    use text.{text-component};
+    use gui.{gui};
+    use java-dialogs.{dialog};
+    use java-packets.{clientbound-packet as java-packet};
+    use uuid.{uuid};
+    use status-effect.{status-effect-type, status-effect-instance};
+    use scoreboard.{scoreboard};
+    use advancement.{advancement-progress};
+    use damage-types.{damage-type};
+    use statistics.{statistic-category, custom-statistic};
+    use inventory.{inventory, player-inventory};
+    use sounds.{sound, sound-category};
+    use particles.{particle};
+    use entity-statuses.{entity-status};
+
+    /// 表示按玩家覆盖的天气状况。
+    enum player-weather {
+        clear,
+        downfall,
+    }
+
+    /// 玩家可以发射的弹射物类型。
+    enum projectile-type {
+        arrow,
+        snowball,
+        egg,
+        ender-pearl,
+        splash-potion,
+        fireball,
+        small-fireball,
+        trident,
+        wind-charge,
+    }
+
+    /// 客户端方向游戏事件的类型。
+    enum client-game-event {
+        no-respawn-block-available,
+        begin-raining,
+        end-raining,
+        change-game-mode,
+        win-game,
+        demo-event,
+        arrow-hit-player,
+        rain-level-change,
+        thunder-level-change,
+        play-pufferfish-string-sound,
+        play-elder-guardian-mob-appearance,
+        enabled-respawn-screen,
+        limited-crafting,
+        start-waiting-chunks,
+    }
+
+    /// 显示在客户端 Esc 暂停菜单中的内置已知服务器链接类型。
+    enum known-server-link {
+        bug-report,
+        community-guidelines,
+        support,
+        status,
+        feedback,
+        community,
+        website,
+        forums,
+        news,
+        announcements,
+    }
+
+    /// 服务器链接的标签：内置标准链接类型或自定义文本组件。
+    variant server-link-label {
+        known(known-server-link),
+        custom(text-component),
+    }
+
+    /// 表示一条带标签与目标 URL 的服务器链接条目。
+    record server-link {
+        label: server-link-label,
+        url: string,
+    }
+
+    /// 玩家可以拥有的各种能力。
+    record player-abilities {
+        /// 玩家是否免疫伤害。
+        invulnerable:       bool,
+        /// 玩家当前是否正在飞行。
+        flying:             bool,
+        /// 玩家是否被允许飞行。
+        allow-flying:       bool,
+        /// 玩家是否处于创造模式。
+        creative:           bool,
+        /// 玩家是否可以修改世界。
+        allow-modify-world: bool,
+        /// 玩家飞行的速度。
+        fly-speed:          f32,
+        /// 玩家行走的速度。
+        walk-speed:         f32,
+    }
+
+    /// 表示玩家的皮肤纹理与元数据。
+    record player-skin {
+        /// base64 编码的纹理数据（通常是包含皮肤/披风 URL 的 JSON）。
+        value: string,
+        /// 纹理数据的可选签名。
+        signature: option<string>,
+    }
+
+    /// 表示哪些皮肤部位可见。
+    flags skin-parts {
+        cape,
+        jacket,
+        left-sleeve,
+        right-sleeve,
+        left-pants-leg,
+        right-pants-leg,
+        hat,
+    }
+
+    /// 表示 Minecraft Java 版协议的特定版本。
+    enum java-minecraft-version {
+        v-1-7-2,
+        v-1-7-6,
+        v-1-8,
+        v-1-9,
+        v-1-9-1,
+        v-1-9-2,
+        v-1-9-3,
+        v-1-10,
+        v-1-11,
+        v-1-11-1,
+        v-1-12,
+        v-1-12-1,
+        v-1-12-2,
+        v-1-13,
+        v-1-13-1,
+        v-1-13-2,
+        v-1-14,
+        v-1-14-1,
+        v-1-14-2,
+        v-1-14-3,
+        v-1-14-4,
+        v-1-15,
+        v-1-15-1,
+        v-1-15-2,
+        v-1-16,
+        v-1-16-1,
+        v-1-16-2,
+        v-1-16-3,
+        v-1-16-4,
+        v-1-17,
+        v-1-17-1,
+        v-1-18,
+        v-1-18-2,
+        v-1-19,
+        v-1-19-1,
+        v-1-19-3,
+        v-1-19-4,
+        v-1-20,
+        v-1-20-2,
+        v-1-20-3,
+        v-1-20-5,
+        v-1-21,
+        v-1-21-2,
+        v-1-21-4,
+        v-1-21-5,
+        v-1-21-6,
+        v-1-21-7,
+        v-1-21-9,
+        v-1-21-11,
+        v-26-1,
+        v-26-2,
+        v-26-3,
+        unknown,
+    }
+
+    /// 表示 Java 版玩家的设置。
+    record java-player-settings {
+        /// 玩家的首选语言（如 \"en_us\"）。
+        locale: string,
+        /// 区块渲染的最大距离。
+        view-distance: u8,
+        /// 玩家的聊天可见性设置。
+        chat-mode: chat-mode,
+        /// 是否启用聊天颜色。
+        chat-colors: bool,
+        /// 玩家的皮肤配置选项。
+        skin-parts: skin-parts,
+        /// 玩家的惯用手（左手或右手）。
+        main-hand: hand,
+        /// 是否启用文本过滤。
+        text-filtering: bool,
+        /// 玩家是否希望出现在服务器列表中。
+        server-listing: bool,
+    }
+
+    /// 玩家的聊天可见性设置。
+    enum chat-mode {
+        /// 聊天完全启用。
+        enabled,
+        /// 只显示系统消息与命令。
+        commands-only,
+        /// 聊天完全隐藏。
+        hidden,
+    }
+
+    /// 拆除玩家网络连接的策略。
+    enum socket-teardown-policy {
+        /// 发送断开连接数据包并优雅地关闭连接。
+        graceful,
+        /// 发送断开连接数据包并立即关闭套接字。
+        immediate-close,
+        /// 立即终止连接，不发送任何断开连接数据包。
+        drop-connection,
+    }
+
+    /// 断开 Java 版玩家连接的选项。
+    record java-kick-options {
+        /// 显示在 Java 断开连接界面上的格式化文本组件。
+        reason: text-component,
+        /// 是否在服务器控制台记录此次踢出（默认：true）。
+        log-to-console: bool,
+        /// 连接如何关闭（默认：graceful）。
+        teardown-policy: socket-teardown-policy,
+    }
+
+    /// 封禁玩家的选项。
+    record ban-player-options {
+        /// 展示给玩家并存储在封禁列表中的封禁原因。
+        reason: option<text-component>,
+        /// 负责此次封禁的来源或权威机构（默认："Plugin"）。
+        source: option<string>,
+        /// 限时封禁的到期时间，RFC-3339 格式。
+        expires-at-utc: option<string>,
+        /// 限时封禁的时长，从当前起算的秒数。
+        duration-seconds: option<u64>,
+        /// 玩家当前在线时是否立即踢出（默认：true）。
+        kick-if-online: bool,
+        /// 是否在服务器控制台记录此次封禁（默认：true）。
+        log-to-console: bool,
+    }
+
+    /// 封禁 IP 地址的选项。
+    record ban-ip-options {
+        /// 存储在 IP 封禁列表中的封禁原因。
+        reason: option<text-component>,
+        /// 负责此次封禁的来源或权威机构（默认："Plugin"）。
+        source: option<string>,
+        /// 限时封禁的到期时间，RFC-3339 格式。
+        expires-at-utc: option<string>,
+        /// 限时封禁的时长，从当前起算的秒数。
+        duration-seconds: option<u64>,
+        /// 是否立即踢出所有使用此 IP 的在线玩家（默认：true）。
+        kick-matching-players: bool,
+        /// 是否在服务器控制台记录此次 IP 封禁（默认：true）。
+        log-to-console: bool,
+    }
+
+    /// 服务器上某个玩家的句柄。
+    resource player {
+        /// 把玩家作为实体返回。
+        as-entity: func () -> entity;
+        /// 以字符串形式返回玩家的唯一 UUID。
+        get-id: func () -> uuid;
+        /// 返回玩家的用户名。
+        get-name: func () -> string;
+
+        // 基础状态
+
+        /// 返回玩家当前在世界中的位置。
+        get-position: func () -> position;
+        /// 返回玩家当前的偏航角（水平旋转）。
+        get-yaw: func () -> f32;
+        /// 返回玩家当前的俯仰角（垂直旋转）。
+        get-pitch: func () -> f32;
+        /// 返回玩家当前所在的世界。
+        get-world: func () -> %world;
+        /// 返回玩家当前的游戏模式。
+        get-gamemode: func () -> game-mode;
+        /// 修改玩家的游戏模式。成功时返回 true。
+        set-gamemode: func (mode: game-mode) -> bool;
+        /// 返回玩家的语言环境（如 \"en_us\"）。
+        get-locale: func () -> string;
+        /// 返回玩家当前的延迟，单位毫秒。
+        get-ping: func () -> u32;
+
+        // 权限与元数据
+
+        /// 返回玩家的权限等级（0-4）。
+        get-permission-level: func () -> permission-level;
+        /// 设置玩家的权限等级。
+        set-permission-level: func (level: permission-level);
+        /// 授予或拒绝玩家的某个权限节点。
+        set-permission: func(node: string, value: bool);
+        /// 移除玩家身上显式设置的权限节点。
+        unset-permission: func(node: string);
+        /// 已授予返回 `Some(true)`，已拒绝返回 `Some(false)`，未设置返回 `None`。
+        has-permission-set: func (node: string) -> option<bool>;
+        /// 检查玩家是否拥有某个权限节点。
+        has-permission: func (node: string) -> bool;
+        /// 返回玩家的显示名，可能包含格式。
+        get-display-name: func () -> text-component;
+        /// 设置玩家的显示名。
+        set-display-name: func (display-name: text-component);
+        /// 获取玩家的自定义 Tab 列表名称。
+        get-tab-list-name: func () -> option<text-component>;
+        /// 设置玩家的自定义 Tab 列表名称。
+        set-tab-list-name: func (name: option<text-component>);
+
+        // 消息与标题
+
+        /// 向玩家的聊天栏发送一条系统消息。
+        send-system-message: func (text: text-component, overlay: bool);
+        /// 用 256 字节签名从玩家的聊天窗口删除一条已签名的聊天消息。
+        delete-message-by-signature: func (signature: list<u8>);
+        /// 用签名缓存 ID 从玩家的聊天窗口删除一条已签名的聊天消息。
+        delete-message-by-id: func (signature-id: s32);
+        /// 设置玩家 Tab 列表的页眉与页脚。
+        set-tab-list-header-footer: func (header: text-component, footer: text-component);
+
+        /// 设置玩家在 Tab 列表中的排序位置。
+        set-tab-list-order: func (order: s32);
+        /// 设置玩家在 Tab 列表中显示的延迟（ping）。
+        set-tab-list-latency: func (latency: s32);
+        /// 设置玩家是否在 Tab 列表中可见。
+        set-tab-list-listed: func (listed: bool);
+
+        /// 在玩家屏幕上显示大标题。
+
+        show-title: func (text: text-component);
+        /// 在玩家屏幕上显示较小的副标题。
+        show-subtitle: func (text: text-component);
+        /// 在动作栏区域显示一条消息。
+        show-actionbar: func (text: text-component);
+        /// 设置标题的淡入、停留与淡出时间。
+        send-title-animation: func (fade-in: s32, stay: s32, fade-out: s32);
+
+        // 相机与旁观
+
+        /// 把玩家的相机设为从另一个实体的视角观察。
+        /// `entity` 为 `none` 时，相机重置回玩家自身。
+        set-camera: func (entity: option<entity>);
+        /// 把玩家的相机设为从给定实体 ID 的实体视角观察。
+        /// `entity-id` 是玩家自身的实体 ID 时，相机重置回玩家。
+        set-camera-entity-id: func (entity-id: u32);
+        /// 获取玩家相机当前附着实体的实体 ID；相机未被覆盖时为玩家
+        /// 自身的实体 ID。
+        get-camera-entity-id: func () -> u32;
+        /// 把玩家的相机重置回自己的视角。
+        reset-camera: func ();
+
+        // 音频与粒子
+
+        /// 在玩家当前位置为其播放一个音效。
+        play-sound: func(sound: sound, category: sound-category, volume: f32, pitch: f32);
+        /// 在指定位置为玩家播放一个音效。
+        play-sound-at: func(pos: position, sound: sound, category: sound-category, volume: f32, pitch: f32);
+        /// 停止正在为玩家播放的音效。
+        stop-sound: func(sound: option<sound>, category: option<sound-category>);
+
+        /// 在玩家当前位置为其播放一个自定义资源包声音标识符。
+        play-custom-sound: func(sound-name: string, category: sound-category, volume: f32, pitch: f32);
+        /// 在指定位置为玩家播放一个自定义资源包声音标识符。
+        play-custom-sound-at: func(pos: position, sound-name: string, category: sound-category, volume: f32, pitch: f32);
+        /// 停止正在为玩家播放的自定义声音标识符。
+        stop-custom-sound: func(sound-name: option<string>, category: option<sound-category>);
+
+        /// 生成仅对此玩家可见的粒子。
+        spawn-particles: func(particle: particle, pos: position, count: u32, offset: position, max-speed: f32);
+
+        // 视觉与客户端覆盖
+
+        /// 向玩家的客户端发送一次临时的假方块变更，不修改服务器世界。
+        send-block-change: func(pos: block-pos, block-id: u16);
+        /// 通过重新发送该位置的真实世界方块来重置临时的假方块变更。
+        reset-block-change: func(pos: block-pos);
+
+        /// 向玩家的客户端发送受伤/受击倾斜动画（使屏幕朝给定偏航方向
+        /// 抖动）。
+        send-hurt-animation: func(yaw: f32);
+
+        /// 从指定的手为玩家打开成书界面。
+        open-book: func(hand: hand);
+        /// 强制为玩家打开指定告示牌方块位置的告示牌文本编辑器。
+        open-sign-editor: func(pos: block-pos, is-front-text: bool);
+
+        // 速度与物理
+
+        /// 设置玩家的速度/运动向量。
+        set-velocity: func(velocity: position);
+        /// 对玩家施加定向击退冲量。
+        apply-knockback: func(strength: f64, x: f64, z: f64);
+
+        // 移动锁定与冻结
+
+        /// 设置是否锁定玩家的移动（原地冻结），用于过场动画与 NPC 对话。
+        set-movement-locked: func(locked: bool);
+        /// 返回玩家的移动当前是否被锁定。
+        is-movement-locked: func() -> bool;
+
+        /// 设置玩家的冻结刻数（控制细雪/冻伤屏幕暗角）。
+        set-freeze-ticks: func(ticks: s32);
+        /// 返回玩家当前的冻结刻数。
+        get-freeze-ticks: func() -> s32;
+
+        /// 向玩家发送自定义服务器链接（1.21+ 中显示在客户端 Esc 暂停
+        /// 菜单里）。
+        set-server-links: func(links: list<server-link>);
+
+        // 传送与踢出
+
+        /// 把玩家传送到某个世界中的一个位置。
+        teleport: func (position: position, yaw: option<f32>, pitch: option<f32>, %world: %world);
+        /// 把玩家传送到另一个世界的指定位置。
+        teleport-world: func (world-ref: %world, position: position, yaw: option<f32>, pitch: option<f32>);
+        /// 按逐分量相对标志传送玩家（相当于 Papo 的 TeleportFlags）。
+        ///
+        /// `none` 的 yaw/pitch 在同世界传送时保持当前朝向（跨世界传送
+        /// 使用目标世界的出生朝向），并忽略对应的旋转标志。
+        teleport-with-flags: func (position: position, yaw: option<f32>, pitch: option<f32>, %flags: teleport-flags, %world: %world);
+        /// 强制玩家重生。
+        respawn: func ();
+
+        /// 为玩家打开一个 GUI。
+        open-gui: func (gui-ref: gui);
+
+        /// 以指定选项封禁玩家。
+        ban: func (options: ban-player-options);
+        /// 以指定选项封禁玩家的 IP 地址。
+        ban-ip: func (options: ban-ip-options);
+
+        /// 把玩家转移到另一台服务器。
+        transfer: func (host: string, port: u16);
+
+        // 状态效果
+
+        /// 给玩家一个状态效果。
+        add-effect: func(effect: status-effect-instance);
+        /// 移除玩家身上的一个状态效果。
+        remove-effect: func(effect: status-effect-type);
+        /// 清除玩家身上所有生效的状态效果。
+        clear-effects: func();
+        /// 检查玩家当前是否带有某个状态效果。
+        has-effect: func(effect: status-effect-type) -> bool;
+        /// 返回应用于玩家的状态效果实例，如有。
+        get-effect: func(effect: status-effect-type) -> option<status-effect-instance>;
+        /// 返回当前应用于玩家的所有状态效果。
+        get-active-effects: func() -> list<status-effect-instance>;
+
+        // 生命值与伤害
+
+        /// 按指定量治疗玩家。
+        heal: func(amount: f32);
+        /// 按指定量并以指定伤害类型对玩家造成伤害。
+        damage: func(amount: f32, damage-type: damage-type);
+        /// 按伤害类型名称对玩家造成伤害：可以是原版伤害类型
+        /// （"minecraft:arrow" 或 "arrow"），也可以是插件注册的自定义
+        /// 伤害类型（"myplugin:frost"）。名称不是已注册伤害类型时会
+        /// trap。
+        damage-by-name: func(amount: f32, damage-type-name: string);
+        /// 立即杀死玩家。
+        kill: func();
+
+        // 统计信息
+
+        /// 获取此玩家在给定分类与 ID 下的统计值。
+        get-statistic: func(category: statistic-category, stat-id: s32) -> s32;
+        /// 设置此玩家在给定分类与 ID 下的统计值。
+        set-statistic: func(category: statistic-category, stat-id: s32, value: s32);
+        /// 增加此玩家在给定分类与 ID 下的统计值。
+        increment-statistic: func(category: statistic-category, stat-id: s32, amount: s32);
+
+        /// 获取此玩家的自定义统计值。
+        get-custom-statistic: func(stat: custom-statistic) -> s32;
+        /// 设置此玩家的自定义统计值。
+        set-custom-statistic: func(stat: custom-statistic, value: s32);
+        /// 增加此玩家的自定义统计值。
+        increment-custom-statistic: func(stat: custom-statistic, amount: s32);
+
+        /// 向客户端发送玩家更新后的统计数据包。
+        send-stats: func();
+
+        /// 获取此玩家在其当前记分板上所属队伍的名称，如有。
+        get-team: func() -> option<string>;
+
+        // 冷却
+
+        /// 为指定物品组名开始一个物品冷却。
+        start-cooldown: func(group: string, duration-ticks: s32);
+        /// 返回指定物品组的冷却进度（0.0 到 1.0）。
+        get-cooldown: func(group: string) -> f32;
+        /// 检查指定物品组当前是否在冷却中。
+        is-on-cooldown: func(group: string) -> bool;
+
+        // 能力与飞行
+
+        /// 设置玩家是否被允许飞行。
+        set-allow-flight: func(allowed: bool);
+        /// 设置玩家的飞行速度。
+        set-fly-speed: func(speed: f32);
+        /// 设置玩家的行走速度。
+        set-walk-speed: func(speed: f32);
+        /// 设置玩家是否免疫伤害。
+        set-invulnerable: func(invulnerable: bool);
+
+        // 物品栏
+
+        /// 返回玩家的物品栏句柄，用于管理主存储区、盔甲与装备。
+        get-inventory: func () -> player-inventory;
+        /// 返回玩家的末影箱物品栏句柄。
+        get-ender-chest: func () -> inventory;
+
+        /// 返回当前选中的快捷栏槽位索引（0-8）。
+        get-selected-slot: func () -> u8;
+        /// 返回指定手中当前的物品。
+        get-item-in-hand: func (hand: hand) -> option<item-stack>;
+        /// 返回指定物品栏槽位中的物品。
+        get-inventory-item: func (slot: u8) -> option<item-stack>;
+
+        /// 设置指定手中的物品。
+        set-item-in-hand: func (hand: hand, stack: option<item-stack>);
+        /// 设置指定物品栏槽位中的物品。
+        set-inventory-item: func (slot: u8, stack: option<item-stack>);
+
+        // 末影箱物品栏
+
+        /// 返回指定末影箱槽位（0-26）中的物品。
+        get-ender-chest-item: func (slot: u8) -> option<item-stack>;
+        /// 设置指定末影箱槽位（0-26）中的物品。
+        set-ender-chest-item: func (slot: u8, stack: option<item-stack>);
+        /// 清空玩家末影箱中的所有物品。
+        clear-ender-chest: func ();
+        /// 为玩家打开其末影箱物品栏界面。
+        open-ender-chest: func ();
+
+        // 状态
+
+        /// 返回玩家当前的生命值。
+        get-health: func () -> f32;
+        /// 设置玩家当前的生命值。
+        set-health: func (health: f32);
+        /// 返回玩家的最大生命值。
+        get-max-health: func () -> f32;
+        /// 设置玩家的最大生命值。
+        set-max-health: func (max-health: f32);
+        /// 返回玩家的饥饿值（0-20）。
+        get-food-level: func () -> u8;
+        /// 设置玩家的饥饿值。
+        set-food-level: func (food-level: u8);
+        /// 返回玩家的食物饱和度。
+        get-saturation: func () -> f32;
+        /// 设置玩家的食物饱和度。
+        set-saturation: func (saturation: f32);
+        /// 返回玩家的食物消耗度。
+        get-exhaustion: func () -> f32;
+        /// 设置玩家的食物消耗度。
+        set-exhaustion: func (exhaustion: f32);
+        /// 返回玩家当前的伤害吸收值。
+        get-absorption: func () -> f32;
+        /// 设置玩家当前的伤害吸收值。
+        set-absorption: func (absorption: f32);
+
+        /// 返回玩家的总经验等级。
+        get-experience-level:    func() -> s32;
+        /// 返回玩家向下一级前进的进度（0.0 到 1.0）。
+        get-experience-progress: func() -> f32;
+        /// 返回玩家拥有的总经验点数。
+        get-experience-points:   func() -> s32;
+        /// 设置玩家的总经验等级。
+        set-experience-level:    func(level: s32);
+        /// 设置玩家向下一级前进的进度。
+        set-experience-progress: func(progress: f32);
+        /// 设置玩家的总经验点数。
+        set-experience-points:   func(points: s32);
+        /// 给玩家增加经验等级。
+        add-experience-levels:   func(levels: s32);
+        /// 给玩家增加经验点数。
+        add-experience-points:   func(points: s32);
+
+        /// 返回玩家当前是否正在飞行。
+        is-flying:    func() -> bool;
+        /// 设置玩家是否应当处于飞行状态。
+        set-flying:   func(flying: bool);
+
+        /// 返回玩家当前的能力。
+        get-abilities: func() -> player-abilities;
+        /// 更新玩家的能力。
+        set-abilities: func(abilities: player-abilities);
+
+        /// 返回玩家的 IP 地址。
+        get-ip: func() -> string;
+
+        /// 返回玩家当前的皮肤纹理。
+        get-skin: func() -> option<player-skin>;
+
+        /// 更新玩家的皮肤纹理。
+        /// 注意：这只更新字段，不会重新加载皮肤。
+        set-skin: func(skin: player-skin);
+
+        /// 返回哪些皮肤部位可见。
+        get-skin-parts: func() -> skin-parts;
+        /// 设置哪些皮肤部位可见。
+        set-skin-parts: func(parts: skin-parts);
+
+        // 按玩家的环境与覆盖
+
+        /// 覆盖向此玩家显示的昼夜时间。
+        set-player-time: func(time: u64, relative: bool);
+        /// 重置玩家的时间，使其与服务器世界时间同步。
+        reset-player-time: func();
+        /// 返回为此玩家设置的自定义时间，如有。
+        get-player-time: func() -> option<u64>;
+        /// 检查自定义玩家时间是否相对于世界时间。
+        is-player-time-relative: func() -> bool;
+
+        /// 覆盖向此玩家显示的天气状况。
+        set-player-weather: func(weather: player-weather);
+        /// 重置玩家的天气，使其与服务器世界天气一致。
+        reset-player-weather: func();
+        /// 返回为此玩家设置的自定义天气，如有。
+        get-player-weather: func() -> option<player-weather>;
+
+        /// 设置玩家指南针指向的位置。
+        set-compass-target: func(pos: position);
+        /// 返回玩家指南针当前指向的位置。
+        get-compass-target: func() -> position;
+
+        /// 设置玩家的自定义重生/床位置。
+        set-respawn-location: func(pos: position);
+        /// 返回玩家的自定义重生/床位置，如果已设置。
+        get-respawn-location: func() -> option<position>;
+
+        /// 让另一个玩家从此玩家的视野中隐藏（隐身）。
+        hide-player: func(other: player);
+        /// 让先前隐藏的玩家重新对此玩家可见。
+        show-player: func(other: player);
+        /// 检查此玩家是否能看见指定的另一个玩家。
+        can-see: func(other: player) -> bool;
+        /// 检查此玩家是否能看见指定的另一个玩家。
+        can-see-player: func(other: player) -> bool;
+
+        /// 设置 Tab 列表中的 ping/延迟指示，单位毫秒。
+        set-tab-list-ping: func(latency-ms: s32);
+
+        /// 设置一个客户端物品冷却遮罩。
+        set-item-cooldown: func(item-id: string, ticks: s32);
+        /// 返回某物品剩余的冷却刻数，如果在冷却中。
+        get-item-cooldown: func(item-id: string) -> option<s32>;
+        /// 检查某物品当前是否在冷却中。
+        has-item-cooldown: func(item-id: string) -> bool;
+
+        /// 从玩家的眼部位置沿视线方向做射线追踪，找到目标方块。
+        ray-trace-block: func(max-distance: f64, include-fluids: bool) -> option<ray-trace-block-result>;
+
+        /// 从玩家的眼部位置沿视线方向做射线追踪，找到目标实体。
+        ray-trace-entity: func(max-distance: f64) -> option<ray-trace-entity-result>;
+
+        /// 返回在视线方向上、指定距离内当前被瞄准的实体。
+        get-target-entity: func(max-distance: f64) -> option<entity>;
+
+        /// 从玩家眼部做射线检测，找到被瞄准的方块。
+        get-target-block: func(max-distance: u32) -> option<position>;
+
+        /// 从玩家眼部做射线检测，找到被瞄准的精确方块与面。
+        get-target-block-exact: func(max-distance: f64, include-fluids: bool) -> option<ray-trace-block-result>;
+        /// 从玩家眼部沿其视线发射一个弹射物。
+        launch-projectile: func(%type: projectile-type) -> option<entity>;
+
+        // 进度
+
+        /// 返回此玩家在指定进度上的完成情况，如果该进度存在。
+        get-advancement-progress: func(advancement-id: string) -> option<advancement-progress>;
+
+        /// 向玩家授予进度的某个判据。
+        /// 判据成功授予（此前未完成）时返回 true。
+        award-advancement-criterion: func(advancement-id: string, criterion: string) -> bool;
+
+        /// 撤销玩家进度的某个判据。
+        /// 判据成功撤销（此前已完成）时返回 true。
+        revoke-advancement-criterion: func(advancement-id: string, criterion: string) -> bool;
+
+        /// 向玩家授予指定进度的所有判据。
+        /// 有任何判据是新授予的时返回 true。
+        award-advancement: func(advancement-id: string) -> bool;
+
+        /// 撤销玩家指定进度的所有判据。
+        /// 有任何判据是新撤销的时返回 true。
+        revoke-advancement: func(advancement-id: string) -> bool;
+
+        /// 检查玩家是否已完成指定进度。
+        has-advancement: func(advancement-id: string) -> bool;
+
+        /// 返回此玩家已完成的所有进度 ID 的列表。
+        get-completed-advancements: func() -> list<string>;
+
+        /// 返回此玩家当前选中的进度标签页的 ID，如有。
+        get-selected-advancement-tab: func() -> option<string>;
+
+        /// 设置此玩家选中的进度标签页（必须是根进度 ID）。
+        set-selected-advancement-tab: func(tab-id: option<string>);
+
+        /// 如果玩家通过 Java 版连接，返回 Java 特有的玩家句柄。
+        ///
+        /// 这允许访问 Java 独有的特性，例如发送特定数据包或获取客户端
+        /// 品牌。
+        as-java: func() -> option<java-player>;
+
+    }
+
+    /// 表示发送给 Java 版玩家的资源包。
+    record java-resource-pack {
+        /// 资源包的唯一标识符。
+        id: uuid,
+        /// 资源包文件的 URL。
+        url: string,
+        /// 资源包的 SHA1 哈希（40 个字符的十六进制字符串）。
+        hash: string,
+        /// 是否强制玩家接受该资源包。
+        forced: bool,
+        /// 在资源包接受界面显示的可选提示消息。
+        prompt-message: option<text-component>,
+    }
+
+    /// 通过 Java 版连接的玩家的句柄。
+    resource java-player {
+        /// 返回玩家的 Minecraft Java 版版本。
+        get-version: func() -> java-minecraft-version;
+
+        /// 返回玩家客户端的品牌（如 \"vanilla\"、\"fabric\"）。
+        get-brand: func() -> string;
+
+        /// 返回玩家用于连接的服务器地址。
+        get-server-address: func() -> string;
+
+        /// 返回玩家的配置设置。
+        get-settings: func() -> java-player-settings;
+
+        /// 向玩家发送一个 Java 特有的客户端方向数据包。
+        send-packet: func(packet: java-packet);
+
+        /// 向玩家发送一个自定义负载数据包（插件消息）。
+        send-custom-payload: func(channel: string, data: list<u8>);
+
+        /// 向玩家展示一个对话框。
+        show-dialog: func(dialog: dialog);
+
+        /// 清除玩家当前显示的任何对话框。
+        clear-dialog: func();
+
+        /// 返回此玩家的 Java 记分板句柄。
+        get-scoreboard: func() -> scoreboard;
+
+        /// 把玩家的自定义 Java 记分板重置回世界记分板。
+        reset-scoreboard: func();
+
+        /// 向 Java 玩家发送一个资源包。
+        send-resource-pack: func(pack: java-resource-pack);
+
+        /// 按 UUID 为 Java 玩家移除指定资源包。
+        remove-resource-pack: func(id: uuid);
+
+        /// 清除 Java 玩家的所有自定义资源包。
+        clear-resource-packs: func();
+
+        /// 以指定选项踢出 Java 玩家。
+        kick: func(options: java-kick-options);
+
+        /// 向 Java 玩家发送一个客户端方向的 GameEvent 数据包。
+        send-game-event: func(event: client-game-event, value: f32);
+
+        /// 针对指定实体 ID，向 Java 玩家发送实体状态/动画事件数据包。
+        send-entity-status: func(entity-id: s32, status: entity-status);
+    }
+
+    /// 返回指定世界中所有玩家的列表。
+    get-world-players: func(world-ref: %world) -> list<player>;
+}

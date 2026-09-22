@@ -1,0 +1,77 @@
+/// 提供在服务器上调度任务以便稍后执行的功能。
+interface scheduler {
+    /// 调度一个任务，使其在指定刻数之后执行一次。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `delay-ticks`：执行前等待的游戏刻数（20 刻 = 1 秒）。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-delayed-task: func(handler-id: u32, delay-ticks: u64) -> u32;
+
+    /// 调度一个重复执行的任务。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `delay-ticks`：首次执行前等待的游戏刻数。
+    /// * `period-ticks`：后续各次执行之间相隔的游戏刻数。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-repeating-task: func(handler-id: u32, delay-ticks: u64, period-ticks: u64) -> u32;
+
+    /// 调度一个任务，使其经过一段真实时钟延迟后在异步执行器上运行一次。
+    ///
+    /// 与 `schedule-delayed-task` 不同，延迟以真实时间的毫秒计量，不对齐
+    /// 到刻循环（也不受其节流）。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `delay-ms`：执行前的真实时钟延迟，单位毫秒。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-async-delayed-task: func(handler-id: u32, delay-ms: u64) -> u32;
+
+    /// 调度一个任务，使其以真实时钟周期在异步执行器上重复运行。
+    ///
+    /// 与 `schedule-repeating-task` 不同，延迟与周期以真实时间的毫秒
+    /// 计量，不对齐到刻循环（也不受其节流）。任务会一直运行，直到被
+    /// 取消或插件被卸载。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `delay-ms`：首次执行前的真实时钟延迟，单位毫秒。
+    /// * `period-ms`：各次执行之间的真实时钟周期，单位毫秒。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-async-repeating-task: func(handler-id: u32, delay-ms: u64, period-ms: u64) -> u32;
+
+    /// 调度一个绑定到实体生命周期的任务，使其在指定刻数之后执行一次。
+    ///
+    /// 如果任务到期时该实体已不在服务器上，任务会被静默跳过（重复型
+    /// 变体则彻底停止），与 Bukkit 的 `EntityScheduler` 退役行为一致。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `entity-id`：任务绑定的实体 ID（即 `entity.get-id` 的返回值）。
+    /// * `delay-ticks`：执行前等待的游戏刻数。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-entity-delayed-task: func(handler-id: u32, entity-id: u32, delay-ticks: u64) -> u32;
+
+    /// 调度一个绑定到实体生命周期的任务，使其重复执行。
+    ///
+    /// 一旦某次运行到期时该实体已不在服务器上，任务即永久停止。
+    ///
+    /// * `handler-id`：任务执行时要调用的处理器的唯一 ID。
+    /// * `entity-id`：任务绑定的实体 ID（即 `entity.get-id` 的返回值）。
+    /// * `delay-ticks`：首次执行前等待的游戏刻数。
+    /// * `period-ticks`：后续各次执行之间相隔的游戏刻数。
+    ///
+    /// 返回可用于取消该任务的唯一任务 ID。
+    schedule-entity-repeating-task: func(handler-id: u32, entity-id: u32, delay-ticks: u64, period-ticks: u64) -> u32;
+
+    /// 取消一个尚未完成的已调度任务。
+    ///
+    /// 取消是立即生效的：真实时钟（异步）任务会从当前睡眠中被唤醒，
+    /// 而不是留到下一个到期点。任务被取消时，访客侧的处理器注册也随
+    /// 之一并释放（一次性处理器在首次调用后也会自动释放）。禁用或
+    /// 卸载插件会以同样方式取消其所有剩余任务。
+    ///
+    /// * `task-id`：要取消的任务的 ID。
+    cancel-task: func(task-id: u32);
+}

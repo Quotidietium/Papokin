@@ -1,0 +1,30 @@
+package papokin:plugin@0.1.0;
+
+/// 插件可写的注册表：同步注册表的自定义条目。
+interface registry {
+  /// 全局管理器，持有插件注册的自定义注册表条目并分配其网络 id。
+  ///
+  /// 仅在服务器启动期间（插件加载时）可以注册；注册表一旦冻结，
+  /// `register-entry` 即返回错误。
+  resource registry-manager {
+    /// 在 `domain`（如 "damage_type"，不带 "minecraft:" 前缀）下注册一个
+    /// 自定义条目，携带其序列化 NBT 负载（网络格式）。返回该条目在
+    /// domain 内的索引；该条目对某客户端的网络 id 即该客户端的原版条目
+    /// 数量加上此索引。
+    register-entry: func(domain: string, name: string, nbt: list<u8>) -> result<u16, string>;
+
+    /// 自定义条目在服务器原生协议版本下的网络 id：该 domain 的原版条目
+    /// 数量加上条目的注册索引。domain 或名称未知、以及注册表不同步到
+    /// 客户端时返回 none。
+    custom-network-id: func(domain: string, name: string) -> option<u16>;
+
+    /// 注册是否已关闭（插件加载完成）。
+    is-frozen: func() -> bool;
+
+    /// `domain` 下是否注册了此名称的自定义条目。
+    has-entry: func(domain: string, name: string) -> bool;
+
+    /// 某 domain 全部自定义条目的名称，按注册顺序排列。
+    get-entries: func(domain: string) -> list<string>;
+  }
+}

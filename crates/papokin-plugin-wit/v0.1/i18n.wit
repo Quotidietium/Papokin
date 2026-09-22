@@ -1,0 +1,21 @@
+interface i18n {
+    use common.{locale};
+
+    /// 从宿主获取翻译后的字符串。
+    ///
+    /// # 参数
+    /// * `key`：带命名空间的翻译键（例如 `pumpkin:my_key`）。
+    /// * `locale`：目标语言环境。
+    ///
+    /// # 返回值
+    /// 本地化后的字符串，找不到时回退为英文或键本身。
+    translate: func(key: string, locale: locale) -> string;
+
+    /// 从 JSON 字符串加载自定义翻译。
+    ///
+    /// # 参数
+    /// * `namespace`：这些键关联的命名空间。
+    /// * `json`：包含扁平翻译映射的 JSON 字符串。
+    /// * `locale`：这些翻译的目标语言环境。
+    load-translations: func(namespace: string, json: string, locale: locale);
+}
