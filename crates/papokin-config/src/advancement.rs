@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
-/// Configuration for advancements
+/// 进度相关配置
 ///
-/// Controls whether the advancements should be saved and loaded
+/// 控制是否应保存和加载进度
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdvancementConfig {
-    /// Whether saving advancements is enabled.
+    /// 是否启用进度保存。
     pub save_advancements: bool,
 }
 

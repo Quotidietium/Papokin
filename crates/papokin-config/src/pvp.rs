@@ -1,20 +1,20 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for player-versus-player mechanics.
+/// 玩家对战（PvP）机制的配置。
 ///
-/// Controls whether PVP is enabled, combat effects, and player protections.
+/// 控制是否启用 PVP、战斗效果以及玩家保护。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct PVPConfig {
-    /// Whether PVP is enabled on the server.
+    /// 服务器是否启用 PVP。
     pub enabled: bool,
-    /// Whether to show the red hurt animation and FOV bobbing when hit.
+    /// 被击中时是否显示红色受伤动画和 FOV 摆动。
     pub hurt_animation: bool,
-    /// Whether players in creative mode are protected from PVP.
+    /// 创造模式的玩家是否免受 PVP 影响。
     pub protect_creative: bool,
-    /// Whether knockback from attacks is applied.
+    /// 是否应用攻击的击退。
     pub knockback: bool,
-    /// Whether players swing their hand when attacking.
+    /// 玩家攻击时是否挥手。
     pub swing: bool,
 }
 

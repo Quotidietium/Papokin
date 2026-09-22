@@ -1,18 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-/// Telemetry configuration options.
+/// 遥测配置选项。
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct TelemetryConfig {
-    /// Whether anonymous telemetry is enabled. Default is true.
+    /// 是否启用匿名遥测。默认为 true。
     pub enabled: bool,
-    /// Custom telemetry backend ingestion endpoint.
+    /// 自定义遥测后端的接入端点。
     pub endpoint: String,
-    /// Heartbeat interval in seconds (default: 300 seconds / 5 minutes). Minimum 60s.
+    /// 心跳间隔（秒）（默认：300 秒 / 5 分钟）。最小 60 秒。
     pub interval_secs: u64,
-    /// Whether to opt-in to displaying this server in the public community directory.
+    /// 是否选择加入公开社区目录以展示此服务器。
     pub public: bool,
-    /// Public server name displayed on the analytics dashboard if public is true.
+    /// 如果 public 为 true，则在分析仪表板上显示的公开服务器名称。
     pub server_name: Option<String>,
 }
 
@@ -29,7 +29,7 @@ impl Default for TelemetryConfig {
 }
 
 impl TelemetryConfig {
-    /// Validates telemetry configuration options.
+    /// 验证遥测配置选项。
     pub const fn validate(&self) {}
 }
 

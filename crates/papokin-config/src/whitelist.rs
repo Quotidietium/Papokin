@@ -1,23 +1,23 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Represents an entry in the server whitelist.
+/// 表示服务器白名单中的一个条目。
 ///
-/// Stores the player's UUID and username.
+/// 存储玩家的 UUID 和用户名。
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WhitelistEntry {
-    /// The UUID of the whitelisted player.
+    /// 被加入白名单的玩家的 UUID。
     pub uuid: Uuid,
-    /// The username of the whitelisted player.
+    /// 白名单玩家的用户名。
     pub name: String,
 }
 
 impl WhitelistEntry {
-    /// Creates a new whitelist entry with the given UUID and name.
+    /// 使用给定的 UUID 和名称创建一个新的白名单条目。
     ///
     /// # Arguments
-    /// * `uuid` – The UUID of the player.
-    /// * `name` – The username of the player.
+    /// * `uuid` – 玩家的 UUID。
+    /// * `name` – 玩家的用户名。
     #[must_use]
     pub const fn new(uuid: Uuid, name: String) -> Self {
         Self { uuid, name }

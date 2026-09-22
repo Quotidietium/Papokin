@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for packet compression.
+/// 数据包压缩的配置。
 ///
-/// Controls whether network packet compression is enabled and the compression parameters.
+/// 控制是否启用网络数据包压缩以及压缩参数。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct CompressionConfig {
-    /// Whether compression is enabled.
+    /// 是否启用压缩。
     pub enabled: bool,
-    /// Detailed compression settings.
+    /// 详细的压缩设置。
     #[serde(flatten)]
     pub info: CompressionInfo,
 }
@@ -22,17 +22,17 @@ impl Default for CompressionConfig {
     }
 }
 
-/// Detailed information for packet compression settings.
+/// 网络数据包压缩设置的详细信息。
 ///
-/// Can also be used independently of the config.
+/// 也可以独立于配置单独使用。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct CompressionInfo {
-    /// The compression threshold in bytes.
-    /// Packets smaller than this will not be compressed.
+    /// 压缩阈值（以字节为单位）。
+    /// 小于该值的数据包不会被压缩。
     pub threshold: u32,
-    /// Compression level, between `0..9`.
-    /// `1` = optimize for speed, `9` = optimize for size.
+    /// 压缩级别，范围为 `0..9`。
+    /// `1` = 针对速度优化，`9` = 针对大小优化。
     pub level: u32,
 }
 

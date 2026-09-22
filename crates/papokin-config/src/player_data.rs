@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for player data persistence.
+/// 玩家数据持久化的配置。
 ///
-/// Controls whether player data is saved and the save interval.
+/// 控制是否保存玩家数据以及保存间隔。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct PlayerDataConfig {
-    /// Whether saving player data is enabled.
+    /// 是否启用玩家数据保存。
     pub save_player_data: bool,
-    /// Time interval in seconds between automatic player data saves.
+    /// 自动保存玩家数据的时间间隔（秒）。
     pub save_player_cron_interval: u64,
 }
 

@@ -1,28 +1,28 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for server logging behavior.
+/// 服务器日志行为的配置。
 ///
-/// Controls log output, formatting, and file settings.
+/// 控制日志输出、格式和文件设置。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct LoggingConfig {
-    /// Whether logging is enabled.
+    /// 是否启用日志记录。
     pub enabled: bool,
-    /// Minimum log level for console and file output ("trace", "debug", "info", "warn", "error", "off").
+    /// 控制台与文件输出的最低日志级别（"trace"、"debug"、"info"、"warn"、"error"、"off"）。
     pub level: String,
-    /// Whether to include thread names in log output.
+    /// 是否在日志输出中包含线程名称。
     pub threads: bool,
-    /// Whether to include thread IDs in log output.
+    /// 是否在日志输出中包含线程 ID。
     pub thread_ids: bool,
-    /// Whether to include target (module/component path) in log output.
+    /// 是否在日志输出中包含 target（模块/组件路径）。
     pub target: bool,
-    /// Whether to enable coloured log output.
+    /// 是否启用彩色日志输出。
     pub color: bool,
-    /// Whether to include timestamps in log entries.
+    /// 日志条目中是否包含时间戳。
     pub timestamp: bool,
-    /// Format description for timestamps (using `time` format description syntax).
+    /// 时间戳的格式描述（使用 `time` 的格式描述语法）。
     pub timestamp_format: String,
-    /// Path to the log file.
+    /// 日志文件的路径。
     pub file: String,
 }
 

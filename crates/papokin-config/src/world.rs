@@ -2,24 +2,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::{chunk::ChunkConfig, lighting::LightingEngineConfig};
 
-/// Configuration for world and level-specific settings.
+/// 世界与关卡特定设置的配置。
 ///
-/// Currently, it includes chunk-related options; more settings may be added later.
+/// 目前包含与区块相关的选项；之后可能会添加更多设置。
 #[derive(Deserialize, Serialize, Clone)]
 pub struct LevelConfig {
-    /// Configuration for chunk behaviour and management.
+    /// 区块行为与管理的配置。
     pub chunk: ChunkConfig,
-    /// Configuration for lighting engine propagation mode.
+    /// 光照引擎传播模式的配置。
     #[serde(default)]
     pub lighting: LightingEngineConfig,
-    /// Number of ticks between autosave checks. If 0, autosave is disabled.
+    /// 自动保存检查之间的刻数。若为 0，则禁用自动保存。
     #[serde(default = "default_autosave_ticks")]
     pub autosave_ticks: u64,
-    // TODO: More options
+    // TODO: 更多选项
 }
 
 const fn default_autosave_ticks() -> u64 {
-    6000 // Default to 5 minutes at 20 TPS
+    6000 // 按 20 TPS 默认为 5 分钟
 }
 
 impl Default for LevelConfig {

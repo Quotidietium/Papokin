@@ -1,34 +1,34 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Configuration for server-related links.
+/// 服务器相关链接的配置。
 ///
-/// Controls default URLs for bug reports, support, community, and other resources,
-/// as well as allowing custom links.
+/// 控制错误报告、支持、社区及其他资源的默认 URL，
+/// 同时还允许自定义链接。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServerLinksConfig {
-    /// Whether server links are enabled.
+    /// 是否启用服务器链接。
     pub enabled: bool,
-    /// URL for reporting bugs.
+    /// 报告漏洞的 URL。
     pub bug_report: String,
-    /// URL for support resources.
+    /// 支持资源的 URL。
     pub support: String,
-    /// URL for server status.
+    /// 服务器状态的 URL。
     pub status: String,
-    /// URL for player feedback.
+    /// 玩家反馈的 URL。
     pub feedback: String,
-    /// URL for the community page.
+    /// 社区页面的 URL。
     pub community: String,
-    /// URL for the official website.
+    /// 官方网站的 URL。
     pub website: String,
-    /// URL for forums.
+    /// 论坛的 URL。
     pub forums: String,
-    /// URL for news updates.
+    /// 新闻更新的 URL。
     pub news: String,
-    /// URL for announcements.
+    /// 公告的 URL。
     pub announcements: String,
-    /// Custom key-value links.
+    /// 自定义键值链接。
     pub custom: HashMap<String, String>,
 }
 

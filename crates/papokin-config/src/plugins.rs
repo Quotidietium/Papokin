@@ -2,35 +2,35 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Plugin system configuration.
+/// 插件系统配置。
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct PluginsConfig {
-    /// Whether the plugin system is enabled. If false, no plugins will be loaded.
+    /// 插件系统是否启用。若为 false，则不会加载任何插件。
     pub enabled: bool,
-    /// Whether to watch the plugins directory and automatically hot-reload modified plugins.
+    /// 是否监视插件目录并自动热重载被修改的插件。
     pub hot_reload: bool,
-    /// Whether the server asks for confirmation in the console when a plugin requests new permissions.
+    /// 当插件请求新权限时，服务器是否在控制台中要求确认。
     pub ask_permission_confirmation: bool,
-    /// Whether to allow loading unsigned WASM plugins.
+    /// 是否允许加载未签名的 WASM 插件。
     pub allow_unsigned: bool,
-    /// List of permissions that are globally pre-approved for all plugins (bypassing confirmation).
+    /// 全局预先批准给所有插件使用的权限列表（无需确认）。
     pub allowed_permissions: Vec<String>,
-    /// List of permissions that are globally blocked for all plugins.
+    /// 全局禁止所有插件使用的权限列表。
     pub blocked_permissions: Vec<String>,
-    /// Whether host environment variables are inherited into WASI environments by default without explicit permissions.
+    /// 宿主环境变量是否默认无需显式授权即继承到 WASI 环境中。
     pub inherit_env: bool,
-    /// Whether network sockets in plugins are restricted to localhost/loopback by default.
+    /// 插件中的网络套接字是否默认限制为 localhost/loopback。
     pub loopback_only: bool,
-    /// Optional global maximum memory limit in megabytes (MB) per plugin instance.
-    /// If not set, memory is only constrained by the host system's available memory.
+    /// 每个插件实例的可选全局最大内存限制（以 MB 计）。
+    /// 如果未设置，内存仅受宿主系统可用内存的限制。
     pub max_memory_mb: Option<u64>,
-    /// Per-plugin configuration and overrides, keyed by plugin name.
+    /// 每个插件的配置与覆盖项，以插件名称为键。
     ///
-    /// Each entry is named after the plugin it applies to (for example `my_plugin`).
-    /// You only need to list the plugins you actually want to configure or override.
+    /// 每个条目以其适用的插件命名（例如 `my_plugin`）。
+    /// 只需列出你真正想要配置或覆盖的插件即可。
     ///
-    /// Example:
+    /// 示例：
     ///
     /// ```toml
     /// [plugins.overrides.my_plugin]
@@ -45,7 +45,7 @@ pub struct PluginsConfig {
     /// MY_API_KEY = "secret_key"
     /// ```
     pub overrides: HashMap<String, PluginOverride>,
-    /// Whether Pumpkin should verify WASM plugin signatures before loading.
+    /// Pumpkin 是否应在加载前验证 WASM 插件签名。
     pub verify_signatures: bool,
 }
 
@@ -67,25 +67,25 @@ impl Default for PluginsConfig {
     }
 }
 
-/// Settings for a single plugin, letting a server owner turn it off or change
-/// its permissions, unsigned execution policy, memory limit, or environment variables.
+/// 单个插件的设置，允许服务器管理员将其关闭或更改
+/// 其权限、未签名执行策略、内存限制或环境变量。
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct PluginOverride {
-    /// Whether this specific plugin is enabled. If set to `false`, the plugin will be ignored during loading.
+    /// 此特定插件是否启用。若设为 `false`，加载时将忽略该插件。
     pub enabled: bool,
-    /// Override whether this plugin is allowed to run if unsigned.
+    /// 覆盖此插件在未签名的情况下是否允许运行。
     pub allow_unsigned: Option<bool>,
-    /// Optional maximum memory limit in megabytes (MB) for this specific plugin.
-    /// Overrides the global `max_memory_mb` setting if specified.
+    /// 此特定插件的可选最大内存限制（以 MB 计）。
+    /// 如已指定，则覆盖全局 `max_memory_mb` 设置。
     pub max_memory_mb: Option<u64>,
-    /// Permissions pre-approved specifically for this plugin (skips interactive confirmation).
+    /// 专门为此插件预先批准的权限（跳过交互式确认）。
     pub allowed_permissions: Vec<String>,
-    /// Additional permissions blocked specifically for this plugin.
+    /// 专门为此插件阻止的附加权限。
     pub blocked_permissions: Vec<String>,
-    /// Override whether network access is restricted to loopback for this plugin.
+    /// 覆盖此插件的网络访问是否仅限环回（loopback）。
     pub loopback_only: Option<bool>,
-    /// Custom environment variables passed directly to this plugin's WASI environment.
+    /// 直接传递给该插件 WASI 环境的自定义环境变量。
     pub environment: HashMap<String, String>,
 }
 

@@ -1,15 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for in-game chat behaviour.
+/// 游戏内聊天行为的配置。
 ///
-/// Controls chat formatting, display, and anti-spam protection.
+/// 控制聊天格式、显示和防刷屏保护。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct ChatConfig {
-    /// The custom chat format.
-    /// `Note`: it does not apply when secure chat is enabled.
+    /// 自定义聊天格式。
+    /// `Note`：启用安全聊天时不适用。
     pub format: String,
-    /// Anti-spam protection settings for player chat and commands.
+    /// 玩家聊天与命令的防刷屏保护设置。
     pub anti_spam: AntiSpamConfig,
 }
 
@@ -22,45 +22,45 @@ impl Default for ChatConfig {
     }
 }
 
-/// Configuration for chat and command anti-spam protection.
+/// 聊天与命令防刷屏保护的配置。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct AntiSpamConfig {
-    /// Whether anti-spam protection is enabled.
+    /// 是否启用防刷屏保护。
     pub enabled: bool,
-    /// Legacy tick-based spam threshold. Kept for compatibility.
+    /// 旧版基于刻的刷屏阈值。为兼容性而保留。
     pub spam_threshold: u32,
-    /// Chat spam threshold in seconds. Overrides the legacy tick threshold when set.
+    /// 聊天刷屏阈值（秒）。设置后将覆盖旧式的刻阈值。
     #[serde(
         alias = "chat-spam-threshold-seconds",
         alias = "chat_spam_threshold_seconds"
     )]
     pub chat_spam_threshold_seconds: Option<u32>,
-    /// Command spam threshold in seconds. Overrides the legacy tick threshold when set.
+    /// 命令刷屏阈值（秒）。设置后将覆盖旧式的刻阈值。
     #[serde(
         alias = "command-spam-threshold-seconds",
         alias = "command_spam_threshold_seconds"
     )]
     pub command_spam_threshold_seconds: Option<u32>,
-    /// The amount added to the spam counter for each chat message or command sent.
-    /// Vanilla default is 20 ticks.
+    /// 每发送一条聊天消息或命令时累加到刷屏计数器上的量。
+    /// 原版默认为 20 刻。
     pub message_cost: u32,
-    /// The amount decayed from the spam counter per server tick.
-    /// Vanilla default is 1 tick.
+    /// 每个服务器刻从刷屏计数器中衰减的量。
+    /// 原版默认为 1 刻。
     pub decay_per_tick: u32,
-    /// Whether operators/admins bypass the anti-spam check.
+    /// 管理员是否绕过防刷屏检查。
     pub ops_bypass: bool,
 }
 
 impl AntiSpamConfig {
-    /// Resolves the effective chat threshold in ticks.
+    /// 解析生效的聊天阈值（以刻为单位）。
     #[must_use]
     pub fn chat_threshold_ticks(&self) -> u32 {
         self.chat_spam_threshold_seconds
             .map_or(self.spam_threshold, |seconds| seconds.saturating_mul(20))
     }
 
-    /// Resolves the effective command threshold in ticks.
+    /// 解析生效的命令阈值（以刻为单位）。
     #[must_use]
     pub fn command_threshold_ticks(&self) -> u32 {
         self.command_spam_threshold_seconds

@@ -1,22 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 
-/// Configuration for the RCON (Remote Console) service.
+/// RCON（远程控制台）服务的配置。
 ///
-/// Controls whether RCON is enabled, connection settings, authentication, and logging.
+/// 控制是否启用 RCON、连接设置、身份验证和日志记录。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct RCONConfig {
-    /// Whether RCON is enabled.
+    /// 是否启用 RCON。
     pub enabled: bool,
-    /// The network address and port where the RCON server will listen for connections.
+    /// RCON 服务器监听连接的网络地址与端口。
     pub address: SocketAddr,
-    /// The password required for RCON authentication.
+    /// RCON 身份验证所需的密码。
     pub password: String,
-    /// The maximum number of concurrent RCON connections allowed.
-    /// A value of `0` indicates no limit.
+    /// 允许的最大并发 RCON 连接数。
+    /// 值为 `0` 表示没有限制。
     pub max_connections: u32,
-    /// Logging configuration for RCON events.
+    /// RCON 事件的日志配置。
     pub logging: RCONLogging,
 }
 
@@ -32,19 +32,19 @@ impl Default for RCONConfig {
     }
 }
 
-/// Logging settings for RCON.
+/// RCON 的日志设置。
 ///
-/// Controls which RCON events are logged, including login attempts and commands.
+/// 控制记录哪些 RCON 事件，包括登录尝试和命令。
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct RCONLogging {
-    /// Whether successful RCON logins should be logged.
+    /// 是否记录成功的 RCON 登录。
     pub logged_successfully: bool,
-    /// Whether failed RCON login attempts with incorrect passwords should be logged.
+    /// 是否记录密码错误的 RCON 登录尝试。
     pub wrong_password: bool,
-    /// Whether all RCON commands, regardless of success or failure, should be logged.
+    /// 是否记录所有 RCON 命令（无论成败）。
     pub commands: bool,
-    /// Whether RCON quit commands should be logged.
+    /// 是否记录 RCON quit 命令。
     pub quit: bool,
 }
 

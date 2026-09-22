@@ -1,42 +1,42 @@
-use pumpkin_util::ProfileAction;
+use papokin_util::ProfileAction;
 use serde::{Deserialize, Serialize};
 
-/// Configuration for server authentication.
+/// 服务器身份验证的配置。
 ///
-/// Handles Mojang authentication, proxy restrictions, player profiles, and textures.
+/// 处理 Mojang 身份验证、代理限制、玩家资料和皮肤纹理。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct AuthenticationConfig {
-    /// Whether to use Mojang authentication.
+    /// 是否使用 Mojang 身份验证。
     pub enabled: bool,
-    /// Optional custom authentication URL.
+    /// 可选的自定义身份验证 URL。
     pub url: Option<String>,
-    /// Fallback authentication server URLs to use if the primary/official server is down.
+    /// 主服务器/官方服务器宕机时使用的备用认证服务器 URL。
     #[serde(alias = "fallback_urls")]
     pub fallbacks: Vec<String>,
-    /// Optional custom profile lookup by username URL (template parameter `{username}`).
+    /// 可选的按用户名查询档案的自定义 URL（模板参数 `{username}`）。
     pub profile_by_name_url: Option<String>,
-    /// Optional fallback profile lookup by username URLs.
+    /// 可选的按用户名查询档案的回退 URL。
     #[serde(alias = "profile_by_name_fallback_urls")]
     pub profile_by_name_fallbacks: Vec<String>,
-    /// Optional custom profile lookup by UUID URL (template parameter `{uuid}`).
+    /// 可选的按 UUID 查询档案的自定义 URL（模板参数 `{uuid}`）。
     pub profile_by_uuid_url: Option<String>,
-    /// Optional fallback profile lookup by UUID URLs.
+    /// 可选的按 UUID 查询档案的回退 URL。
     #[serde(alias = "profile_by_uuid_fallback_urls")]
     pub profile_by_uuid_fallbacks: Vec<String>,
-    /// Connection timeout in milliseconds.
+    /// 连接超时（毫秒）。
     pub connect_timeout: u32,
-    /// Read timeout in milliseconds.
+    /// 读取超时时间（毫秒）。
     pub read_timeout: u32,
-    /// Whether to prevent connections via proxy.
+    /// 是否阻止通过代理的连接。
     pub prevent_proxy_connections: bool,
-    /// Optional auth URL used when preventing proxy connections.
+    /// 在阻止代理连接时使用的可选身份验证 URL。
     pub prevent_proxy_connection_auth_url: Option<String>,
-    /// Public services URL (used by Drasl and Mojang).
+    /// 公共服务 URL（由 Drasl 和 Mojang 使用）。
     pub services_url: Option<String>,
-    /// Player profile handling.
+    /// 玩家档案处理。
     pub player_profile: PlayerProfileConfig,
-    /// Texture handling configuration.
+    /// 纹理处理配置。
     pub textures: TextureConfig,
 }
 
@@ -61,15 +61,15 @@ impl Default for AuthenticationConfig {
     }
 }
 
-/// Configuration for player profile handling.
+/// 玩家档案处理的配置。
 ///
-/// Controls whether banned players are allowed and which profile actions are permitted.
+/// 控制是否允许被封禁的玩家，以及允许哪些档案操作。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct PlayerProfileConfig {
-    /// Allow players flagged by Mojang (e.g. banned, forced name change).
+    /// 允许被 Mojang 标记的玩家（例如被封禁、被强制改名）。
     pub allow_banned_players: bool,
-    /// Depends on [`PlayerProfileConfig::allow_banned_players`].
+    /// 取决于 [`PlayerProfileConfig::allow_banned_players`]。
     pub allowed_actions: Vec<ProfileAction>,
 }
 
@@ -85,19 +85,19 @@ impl Default for PlayerProfileConfig {
     }
 }
 
-/// Configuration for player textures.
+/// 玩家材质的配置。
 ///
-/// Controls whether textures are applied, allowed URL schemes/domains, and texture types.
+/// 控制是否应用材质、允许的 URL 协议/域名，以及材质类型。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct TextureConfig {
-    /// Whether to use player textures.
+    /// 是否使用玩家材质。
     pub enabled: bool,
-    /// Allowed URL schemes for texture URLs.
+    /// 材质 URL 允许使用的 URL 协议。
     pub allowed_url_schemes: Vec<String>,
-    /// Allowed URL domains for texture URLs.
+    /// 材质 URL 允许使用的 URL 域。
     pub allowed_url_domains: Vec<String>,
-    /// Specific texture types.
+    /// 具体的纹理类型。
     pub types: TextureTypes,
 }
 
@@ -112,15 +112,15 @@ impl Default for TextureConfig {
     }
 }
 
-/// Specifies which player texture types are supported.
+/// 指定支持哪些玩家纹理类型。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct TextureTypes {
-    /// Use player skins.
+    /// 使用玩家皮肤。
     pub skin: bool,
-    /// Use player capes.
+    /// 使用玩家披风。
     pub cape: bool,
-    /// Use player elytras.
+    /// 使用玩家鞘翅。
     pub elytra: bool,
 }
 
@@ -148,8 +148,7 @@ fallbacks = [
     "https://fallback2.auth/hasJoined?username={username}&serverId={server_hash}"
 ]
 "#;
-        let config: AuthenticationConfig =
-            toml::from_str(toml_str).expect("config should deserialize");
+        let config: AuthenticationConfig = toml::from_str(toml_str).expect("配置应当能反序列化");
         assert_eq!(
             config.url.as_deref(),
             Some("https://primary.auth/hasJoined?username={username}&serverId={server_hash}")
@@ -170,7 +169,7 @@ fallback_urls = [
 ]
 "#;
         let config: AuthenticationConfig =
-            toml::from_str(toml_str).expect("config with alias should deserialize");
+            toml::from_str(toml_str).expect("带别名的配置应当能反序列化");
         assert_eq!(config.fallbacks.len(), 1);
         assert_eq!(
             config.fallbacks[0],
@@ -192,7 +191,7 @@ profile_by_uuid_fallback_urls = [
 ]
 "#;
         let config: AuthenticationConfig =
-            toml::from_str(toml_str).expect("profile config should deserialize");
+            toml::from_str(toml_str).expect("profile 配置应当能反序列化");
         assert_eq!(
             config.profile_by_name_url.as_deref(),
             Some("https://custom.auth/users/profiles/minecraft/{username}")

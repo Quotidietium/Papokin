@@ -1,19 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for client packet rate limiting.
+/// 客户端数据包速率限制的配置。
 #[derive(Deserialize, Serialize, Clone, Debug)]
 #[serde(default)]
 pub struct PacketLimiterConfig {
-    /// Whether the packet rate limiter is enabled.
+    /// 是否启用数据包速率限制器。
     pub enabled: bool,
-    /// Maximum number of incoming packets allowed per second per client.
-    /// Values <= 0.0 disable the rate limit.
+    /// 每个客户端每秒允许传入的数据包（网络）最大数量。
+    /// 值 <= 0.0 时禁用速率限制。
     #[serde(alias = "max-packet-rate")]
     pub max_packet_rate: f64,
-    /// Burst allowance capacity for packet rate limiting.
+    /// 数据包限速的突发允许容量。
     #[serde(alias = "burst-capacity")]
     pub burst_capacity: f64,
-    /// Kick message when a client exceeds the packet rate limit.
+    /// 客户端超过数据包速率限制时的踢出消息。
     #[serde(alias = "kick-message")]
     pub kick_message: String,
 }
@@ -24,7 +24,7 @@ impl Default for PacketLimiterConfig {
             enabled: true,
             max_packet_rate: 500.0,
             burst_capacity: 500.0,
-            kick_message: "Kicked for spamming packets".to_string(),
+            kick_message: "因发送数据包过于频繁被踢出".to_string(),
         }
     }
 }

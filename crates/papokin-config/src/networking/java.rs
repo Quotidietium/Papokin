@@ -3,38 +3,38 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::num::NonZero;
 
-/// Configuration for Java Edition client connections.
+/// Java 版客户端连接的配置。
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 pub struct JavaConfig {
-    /// Whether Java Edition Clients are Accepted.
+    /// 是否接受 Java 版客户端。
     pub enabled: bool,
-    /// The address and port to which the Java Edition server will bind.
+    /// Java 版服务器将要绑定的地址和端口。
     pub address: SocketAddr,
-    /// Whether packet encryption is enabled. Required when online mode is enabled.
+    /// 是否启用数据包加密。启用在线模式时必需。
     pub encryption: bool,
-    /// Whether online mode is enabled. Requires valid Minecraft accounts.
+    /// 是否启用在线模式。需要有效的 Minecraft 账户。
     pub online_mode: bool,
-    /// The maximum number of players allowed on the server. Specifying `0` disables the limit.
+    /// 服务器允许的最大玩家数。指定 `0` 可禁用该限制。
     pub max_players: u32,
-    /// The maximum view distance for players.
+    /// 玩家的最大视距。
     pub view_distance: NonZero<u8>,
-    /// The maximum simulated view distance.
+    /// 最大模拟视距。
     pub simulation_distance: NonZero<u8>,
-    /// Time interval in seconds between keep-alive packets sent to Java clients.
+    /// 向 Java 客户端发送保活数据包的时间间隔（秒）。
     #[serde(
         alias = "keep-alive-time",
         alias = "keep_alive_interval",
         alias = "keep-alive-interval"
     )]
     pub keep_alive_time: u64,
-    /// Java Edition packet compression settings.
+    /// Java 版数据包压缩设置。
     pub compression: CompressionConfig,
-    /// Message of the Day; the server's description displayed on the status screen.
+    /// 每日消息（MOTD）；显示在状态界面上的服务器描述。
     pub motd: String,
-    /// Authentication settings for client connections.
+    /// 客户端连接的身份验证设置。
     pub authentication: AuthenticationConfig,
-    /// Packet rate limiting settings.
+    /// 数据包速率限制设置。
     pub packet_limiter: PacketLimiterConfig,
 }
 

@@ -2,15 +2,15 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for the server query protocol (legacy Minecraft query).
+/// 服务器查询协议（旧版 Minecraft query）的配置。
 ///
-/// Controls whether the query service is enabled and which address it binds to.
+/// 控制是否启用查询服务以及绑定到哪个地址。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct QueryConfig {
-    /// Whether the query protocol is enabled.
+    /// 是否启用查询协议。
     pub enabled: bool,
-    /// The address and port the query service binds to.
+    /// 查询服务绑定的地址和端口。
     pub address: SocketAddr,
 }
 

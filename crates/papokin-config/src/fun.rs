@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Let's face it, the only reason we play this game is because of fun. 🙃
+/// 不得不承认，我们玩这个游戏的唯一原因就是乐趣。🙃
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct FunConfig {
-    /// Whether April Fools features are enabled.
+    /// 是否启用愚人节特性。
     pub april_fools: bool,
 }
 

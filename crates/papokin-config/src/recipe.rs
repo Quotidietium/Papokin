@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Recipe-related configuration.
+/// 配方相关配置。
 #[derive(Deserialize, Serialize)]
 #[serde(default)]
 pub struct RecipeConfig {
-    /// Whether recipes are sent to clients, enabling the recipe book.
+    /// 是否向客户端发送配方，从而启用配方书。
     pub send_recipes: bool,
 }
 

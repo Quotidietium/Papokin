@@ -1,4 +1,4 @@
-//! Configuration management and serialization for the Pumpkin Minecraft server.
+//! Pumpkin Minecraft 服务器的配置管理与序列化。
 #![deny(missing_docs)]
 #![deny(clippy::unwrap_used)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -6,8 +6,8 @@
 use fun::FunConfig;
 
 use logging::LoggingConfig;
-use pumpkin_util::world_seed::Seed;
-use pumpkin_util::{Difficulty, GameMode, PermissionLvl, random};
+use papokin_util::world_seed::Seed;
+use papokin_util::{Difficulty, GameMode, PermissionLvl, random};
 use recipe::RecipeConfig;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
@@ -15,24 +15,23 @@ use std::path::PathBuf;
 use std::{fs, num::NonZero, path::Path};
 use tracing::{debug, error, warn};
 
-/// Fun and experimental configuration options.
+/// 趣味性与实验性配置选项。
 pub mod fun;
-/// Server logging configuration options.
+/// 服务器日志配置选项。
 pub mod logging;
-/// Networking and protocol configuration options.
+/// 网络与协议配置选项。
 pub mod networking;
-/// Plugin management configuration options.
+/// 插件管理配置选项。
 pub mod plugins;
-/// Recipe system configuration options.
+/// 配方系统配置选项。
 pub mod recipe;
 
-/// Resource pack configuration options.
+/// 资源包配置选项。
 pub mod resource_pack;
 
 pub use chat::{AntiSpamConfig, ChatConfig};
 pub use commands::{CommandOverride, CommandsConfig};
 pub use networking::auth::AuthenticationConfig;
-pub use networking::bedrock::BedrockConfig;
 pub use networking::compression::CompressionConfig;
 pub use networking::java::JavaConfig;
 pub use networking::lan_broadcast::LANBroadcastConfig;
@@ -43,26 +42,26 @@ pub use pvp::PVPConfig;
 pub use server_links::ServerLinksConfig;
 pub use telemetry::TelemetryConfig;
 
-/// Telemetry configuration options.
+/// 遥测配置选项。
 pub mod telemetry;
 
 mod commands;
 
 mod chat;
-/// Chunk loading and saving configuration options.
+/// 区块加载与保存的配置选项。
 pub mod chunk;
-/// Lighting engine configuration options.
+/// 光照引擎的配置选项。
 pub mod lighting;
-/// Operator permission level configuration options.
+/// 操作员权限等级配置选项。
 pub mod op;
 
 mod advancement;
 mod player_data;
 mod pvp;
 mod server_links;
-/// Whitelist configuration options.
+/// 白名单配置选项。
 pub mod whitelist;
-/// World generation and dimension configuration options.
+/// 世界生成与维度配置选项。
 pub mod world;
 
 use advancement::AdvancementConfig;
@@ -71,24 +70,28 @@ use player_data::PlayerDataConfig;
 use resource_pack::ResourcePackConfig;
 use world::LevelConfig;
 
-/// Root configuration container for Pumpkin server settings.
+/// Pumpkin 服务器设置的根配置容器。
 #[derive(Deserialize, Serialize, Default)]
 #[serde(default)]
-pub struct PumpkinConfig {
-    /// Core basic configuration settings.
+pub struct PapokinConfig {
+    /// 核心基础配置设置。
     #[serde(flatten)]
     pub basic: BasicConfiguration,
-    /// Advanced and feature-specific configuration settings.
+    /// 高级与特定功能的配置设置。
     #[serde(flatten)]
     pub advanced: AdvancedConfiguration,
-    /// Anonymous telemetry configuration settings.
+    /// 匿名遥测配置设置。
     #[serde(default)]
     pub telemetry: TelemetryConfig,
 }
 
-impl LoadConfiguration for PumpkinConfig {
+impl LoadConfiguration for PapokinConfig {
     fn get_path() -> &'static Path {
-        Path::new("pumpkin.toml")
+        Path::new("papokin.toml")
+    }
+
+    fn get_legacy_path() -> Option<&'static Path> {
+        Some(Path::new("pumpkin.toml"))
     }
 
     fn validate(&self) {
@@ -103,125 +106,116 @@ impl LoadConfiguration for PumpkinConfig {
             return;
         };
 
-        // Validate Java
+        // 校验 Java
         assert!(
             self.advanced.networking.java.keep_alive_time > 0,
-            "Java Keep alive time must be greater than 0"
+            "Java 保活时间必须大于 0"
         );
         assert!(
             self.advanced.networking.java.view_distance >= min_vd,
-            "Java View distance must be at least 2"
+            "Java 视距必须至少为 2"
         );
         assert!(
             self.advanced.networking.java.view_distance <= max_vd,
-            "Java View distance must be less than 64"
+            "Java 视距必须小于 64"
         );
         if self.advanced.networking.java.online_mode {
             assert!(
                 self.advanced.networking.java.encryption,
-                "When online mode is enabled, encryption must be enabled"
+                "启用在线模式时必须同时启用加密"
             );
         }
 
-        // Validate Bedrock
-        assert!(
-            self.advanced.networking.bedrock.view_distance >= min_vd,
-            "Bedrock View distance must be at least 2"
-        );
-        assert!(
-            self.advanced.networking.bedrock.view_distance <= max_vd,
-            "Bedrock View distance must be less than 64"
-        );
         if self.basic.allow_chat_reports {
             assert!(
                 self.advanced.networking.java.online_mode,
-                "When allow_chat_reports is enabled, java.online_mode must be enabled"
+                "启用 allow_chat_reports 时必须启用 java.online_mode"
             );
         }
     }
 }
 
-/// Advanced configuration for optional and feature-specific server settings.
+/// 针对可选和特定功能服务器设置的高级配置。
 ///
-/// Allows enabling/disabling features, customizing behaviour, and
-/// tweaking performance or experimental options.
+/// 允许启用/禁用功能、自定义行为，以及
+/// 调整性能或实验性选项。
 ///
-/// `Important`: The configuration should match vanilla by default.
+/// `Important`：配置默认应与原版保持一致。
 #[derive(Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct AdvancedConfiguration {
-    /// Logging-related configuration such as log levels and output behaviour.
+    /// 与日志相关的配置，例如日志级别和输出行为。
     pub logging: LoggingConfig,
-    /// Resource pack configuration, including enforcement and pack metadata.
+    /// 资源包配置，包括强制启用策略与资源包元数据。
     pub resource_pack: ResourcePackConfig,
-    /// World and level-related settings beyond basic configuration.
+    /// 基础配置之外与世界及世界等级相关的设置。
     pub world: LevelConfig,
-    /// Networking-related features such as compression, authentication, and LAN broadcast.
+    /// 网络相关功能，例如压缩、身份验证和 LAN 广播。
     pub networking: NetworkingConfig,
-    /// Command system configuration, including availability and permissions.
+    /// 命令系统配置，包括可用性与权限。
     pub commands: CommandsConfig,
-    /// Chat-related features such as formatting, filtering, and message behaviour.
+    /// 聊天相关功能，例如格式化、过滤和消息行为。
     pub chat: ChatConfig,
-    /// Player-vs-player rules and mechanics.
+    /// 玩家对战（PvP）规则与机制。
     pub pvp: PVPConfig,
-    /// Server links configuration exposed to clients.
+    /// 暴露给客户端的服务器链接配置。
     pub server_links: ServerLinksConfig,
-    /// Persistent player data handling and storage behaviour.
+    /// 玩家持久数据的处理与存储行为。
     pub player_data: PlayerDataConfig,
-    /// Optional fun and experimental features.
+    /// 可选的趣味与实验性功能。
     pub fun: FunConfig,
-    /// Recipe-related configuration.
+    /// 配方相关配置。
     pub recipe: RecipeConfig,
-    /// Plugin-related configuration.
+    /// 插件相关配置。
     pub plugins: PluginsConfig,
-    /// Advancement configuration
+    /// 进度配置
     pub advancement: AdvancementConfig,
 }
 
-/// Basic configuration for core server settings.
+/// 核心服务器设置的基础配置。
 ///
-/// Covers edition support, world, networking, gameplay rules, and security options.
+/// 涵盖版本支持、世界、网络、游戏规则和安全选项。
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 pub struct BasicConfiguration {
-    /// The seed for the world generation.
+    /// 用于世界生成的种子。
     pub seed: Seed,
-    /// The default game difficulty.
+    /// 默认游戏难度。
     pub default_difficulty: Difficulty,
-    /// The op level assigned by the /op command.
+    /// 由 /op 命令分配的 OP 等级。
     pub op_permission_level: PermissionLvl,
-    /// Whether the Nether dimension is enabled.
+    /// 是否启用下界维度。
     pub allow_nether: bool,
-    /// Whether the End dimension is enabled.
+    /// 是否启用末地维度。
     pub allow_end: bool,
-    /// Whether the server is in hardcore mode.
+    /// 服务器是否处于极限模式。
     pub hardcore: bool,
-    /// The server's ticks per second.
+    /// 服务器的每秒刻数（TPS）。
     pub tps: f32,
-    /// The default gamemode for players.
+    /// 玩家的默认游戏模式。
     pub default_gamemode: GameMode,
-    /// If the server forces the gamemode on-join.
+    /// 如果服务器在玩家加入时强制应用游戏模式。
     pub force_gamemode: bool,
-    /// Whether to remove IPs from logs or not.
+    /// 是否从日志中移除 IP。
     pub scrub_ips: bool,
-    /// Whether to use a server favicon.
+    /// 是否使用服务器图标。
     pub use_favicon: bool,
-    /// Path to optional server favicon.
+    /// 可选服务器图标的路径。
     pub favicon_path: Option<String>,
-    /// The default level name
+    /// 默认的世界名称
     pub default_level_name: String,
-    /// Whether chat messages should be signed or not.
+    /// 聊天消息是否需要签名。
     pub allow_chat_reports: bool,
-    /// Whether to enable the whitelist.
+    /// 是否启用白名单。
     pub white_list: bool,
-    /// Whether to enforce the whitelist.
+    /// 是否强制执行白名单。
     pub enforce_whitelist: bool,
-    /// Whether this server accepts incoming transfers from other servers.
+    /// 此服务器是否接受来自其他服务器的转移连接。
     #[serde(alias = "accepts-transfers", alias = "accepts_transfers")]
     pub accepts_transfers: bool,
-    /// The radius of the spawn protection area around the world spawn point.
-    /// Players without operator privileges cannot break or place blocks within this radius.
-    /// Set to 0 to disable spawn protection.
+    /// 世界出生点周围出生保护区域的半径。
+    /// 没有管理员权限的玩家不能在此半径内破坏或放置方块。
+    /// 设为 0 可禁用出生点保护。
     pub spawn_protection: u32,
 }
 
@@ -251,54 +245,64 @@ impl Default for BasicConfiguration {
 }
 
 impl BasicConfiguration {
-    /// Returns the path to the server's default world folder.
+    /// 返回服务器默认世界文件夹的路径。
     #[must_use]
     pub fn get_world_path(&self) -> PathBuf {
         PathBuf::from(&self.default_level_name)
     }
 
-    /// Validates basic configuration options.
+    /// 验证基础配置选项。
     pub const fn validate(&self) {}
 }
 
 impl AdvancedConfiguration {
-    /// Validates advanced configuration options.
+    /// 验证高级配置选项。
     pub const fn validate(&self) {
         //self.resource_pack.validate();
     }
 }
 
-/// Trait for loading and validating configuration from a TOML file.
+/// 用于从 TOML 文件加载并校验配置的 trait。
 ///
-/// Provides default implementations for loading, merging with defaults,
-/// and writing missing values back to disk. Also requires validation logic.
+/// 提供加载、与默认值合并等的默认实现，
+/// 并把缺失的值写回磁盘。还需要验证逻辑。
 pub trait LoadConfiguration {
-    /// Load configuration from the given directory.
+    /// 从给定目录加载配置。
     ///
-    /// Creates the directory if it doesn't exist, reads the TOML file,
-    /// merges it with defaults, writes missing fields, and validates the result.
+    /// 如果目录不存在则创建目录，然后读取 TOML 文件，
+    /// 与默认值合并，写入缺失字段，并校验结果。
     #[must_use]
-    // NOTE: Logger may not be ready.
+    // NOTE: 日志记录器可能尚未就绪。
     #[expect(clippy::print_stdout)]
     fn load(config_dir: &Path) -> Self
     where
         Self: Sized + Default + Serialize + DeserializeOwned,
     {
         if !config_dir.exists() {
-            debug!("creating new config root folder");
+            debug!("正在创建新的配置根目录");
             let _ = fs::create_dir(config_dir);
         }
 
-        let path = config_dir.join(Self::get_path());
+        let mut path = config_dir.join(Self::get_path());
+        if !path.exists()
+            && let Some(legacy) = Self::get_legacy_path()
+        {
+            let legacy_path = config_dir.join(legacy);
+            if legacy_path.exists() {
+                println!(
+                    "正在加载旧版配置文件 {}；建议将其重命名为 {}。",
+                    legacy_path.display(),
+                    path.display()
+                );
+                path = legacy_path;
+            }
+        }
 
         let config = if path.exists() {
             let file_content = match fs::read_to_string(&path) {
                 Ok(content) => content,
                 Err(err) => {
-                    error!(
-                        "Couldn't read configuration file at {}: {err}",
-                        path.display()
-                    );
+                    error!("无法读取配置文件 {}：{err}", path.display());
                     return Self::default();
                 }
             };
@@ -307,7 +311,7 @@ pub trait LoadConfiguration {
                 Ok(val) => val,
                 Err(err) => {
                     error!(
-                        "Couldn't parse TOML at {}. Reason: {err}. Using default config.",
+                        "无法解析 TOML 文件 {}，原因：{err}。将使用默认配置。",
                         path.display()
                     );
                     return Self::default();
@@ -321,25 +325,15 @@ pub trait LoadConfiguration {
                     || path.display().to_string(),
                     |f| f.to_string_lossy().into_owned(),
                 );
-                println!(
-                    "{file_name} changed because values were missing. The missing values were filled with default values."
-                );
+                println!("{file_name} 因缺少配置项已变更，缺失的值已用默认值补齐。");
                 match toml::to_string(&merged_config) {
                     Ok(toml_str) => {
                         if let Err(err) = fs::write(&path, toml_str) {
-                            warn!(
-                                "Couldn't write merged config to {}. Reason: {}",
-                                path.display(),
-                                err
-                            );
+                            warn!("无法将合并后的配置写入 {}，原因：{}", path.display(), err);
                         }
                     }
                     Err(err) => {
-                        warn!(
-                            "Couldn't serialize merged config for {}. Reason: {}",
-                            path.display(),
-                            err
-                        );
+                        warn!("无法序列化 {} 的合并配置，原因：{}", path.display(), err);
                     }
                 }
             }
@@ -350,19 +344,11 @@ pub trait LoadConfiguration {
             match toml::to_string(&content) {
                 Ok(toml_str) => {
                     if let Err(err) = fs::write(&path, toml_str) {
-                        warn!(
-                            "Couldn't write default config to {:?}. Reason: {}",
-                            path.display(),
-                            err
-                        );
+                        warn!("无法将默认配置写入 {:?}，原因：{}", path.display(), err);
                     }
                 }
                 Err(err) => {
-                    warn!(
-                        "Couldn't serialize default config for {:?}. Reason: {}",
-                        path.display(),
-                        err
-                    );
+                    warn!("无法序列化 {:?} 的默认配置，原因：{}", path.display(), err);
                 }
             }
 
@@ -373,9 +359,9 @@ pub trait LoadConfiguration {
         config
     }
 
-    /// Merge a parsed TOML value with the default configuration.
+    /// 将解析后的 TOML 值与默认配置合并。
     ///
-    /// Returns the merged configuration and a flag indicating if any values were filled.
+    /// 返回合并后的配置，以及指示是否有值被填充的标志。
     #[must_use]
     fn merge_with_default_toml(parsed_toml: toml::Value) -> (Self, bool)
     where
@@ -394,9 +380,9 @@ pub trait LoadConfiguration {
         (config, changed)
     }
 
-    /// Merge two TOML values recursively.
+    /// 递归合并两个 TOML 值。
     ///
-    /// Base is treated as default; overlay overwrites values.
+    /// 基础层作为默认值；覆盖层会覆写其中的值。
     #[must_use]
     fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> (toml::Value, bool) {
         match (base, overlay) {
@@ -428,10 +414,17 @@ pub trait LoadConfiguration {
         }
     }
 
-    /// Returns the path to the configuration file relative to the config directory.
+    /// 返回配置文件相对于配置目录的路径。
     fn get_path() -> &'static Path;
 
-    /// Validates the configuration after loading or merging.
+    /// 主配置文件缺失时回退使用的旧版配置文件名
+    /// (重命名迁移)。默认不设回退。
+    #[must_use]
+    fn get_legacy_path() -> Option<&'static Path> {
+        None
+    }
+
+    /// 在加载或合并后验证配置。
     fn validate(&self);
 }
 
