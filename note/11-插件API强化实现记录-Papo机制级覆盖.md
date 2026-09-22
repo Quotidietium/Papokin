@@ -176,3 +176,31 @@ width/height/x_offset/y_offset Opt<VarInt> · colors Opt<[i32LE]>
 2. cookie：config 阶段发包路径未暴露（Player 资源 play 相位才存在）；请求-响应无事务关联（同 Paper）；无响应到达事件。
 3. 脑记忆只读（无 set 面）；结构放置不含实体；区块快照不含光照/高度图；强加载票据不落盘；`damage-by-name` 事件数据尚不回传自定义伤害类型名。
 4. `list-loot-tables` 需 pumpkin-data 先提供枚举 API；Bedrock 登录期 validate/whitelist 事件待协议面成熟。
+
+## 十、基岩版支持整体移除（2026-09-21）
+
+目标：清理项目基岩版（Bedrock）相关代码，服务器回归纯 Java 版（§9.5 第 4 条"Bedrock 登录期事件"随之作废）。验证标准不变：fmt/clippy 0 错误、test 全绿、e2e wasm 无头实跑 40 标记零失败类。版本号 `0.2.0+1.21.11-26.51` → **`0.3.0+1.21.11`**（弃版本方案中的 bedrock 段）。
+
+### 10.1 拆除面
+
+- **协议/网络层**：`ClientPlatform`/`DisconnectReason` 枚举删除；`Player.client` 定型 `Arc<JavaClient>`；bedrock 网络模块树（NetherNet/WebRTC 信令、OIDC 密钥拉取、server_guid、登录链校验）全删。
+- **世界广播塌缩**：`*_editioned` / `*_bedrock` 双版本函数族统一为 Java 单版（`broadcast_editioned`→`broadcast_packet_all` 等）；`spawn_bedrock_player`（约 590 行）、`play_bedrock_level_sound`、`component_to_bedrock_text`、`bedrock_block_breaking_rate` 删除；`send_entity_status` 塌缩为 2 参；`BlockBreakingProgress` 摘除仅供 Bedrock 的 speed 字段。
+- **命令错误塌缩**：`CommandErrorType::new` 双翻译键（java+bedrock）→ 单 java 键；241 调用点 + 28 常量定义经 tokenizer 感知 Python codemod 一次推平（尾逗号陷阱：按顶层逗号切片计数而非数逗号）；unknown-command 测试期望回归 java vanilla 文案。
+- **pumpkin-data 代码生成**：bedrock_biome/bedrock_creative/wit::bedrock_packet 生成器删除；block/item/biome 生成器的 Bedrock 排放面（geyser 映射、`STATE_ID_TO_BEDROCK`、`be_network_id` 等）全删；全量重生成后 translation.rs 减 46612 行（Bedrock 翻译模块）；`serde_repr` 依赖移除。codegen 增加 stem 过滤器：`cargo run -- <stem>` 只跑匹配 .rs 生成器（wit+sdk 恒跑）。
+- **WIT 契约**：forms.wit、bedrock-packets.wit 删除；player.wit 摘除 13 个 Bedrock 块（bedrock-player 资源、8 枚举、4 record、as-bedrock）；event.wit 摘除 Bedrock 表单响应事件；scoreboard.wit 摘除 bedrock-scoreboard 资源与 Bedrock 显示槽；text.wit 摘除 translate-cross。契约规模：58→**56 文件**、997→**975 函数**、事件 368→**367**（实测）。`PLUGIN_API_VERSION` **4→5**。
+- **插件宿主/SDK**：host 侧 BedrockPlayer/Scoreboard 资源、generated_packets Bedrock 段、v0_1 player/server Bedrock impl 删除；SDK forms.rs、bedrock_form_response.rs 删除及 re-export 清理。
+- **杂项**：区块调色板 Bedrock 序列化（`convert_be_network`/`BeNetworkSerialization` 等）删除；方块实体 `bedrock_block_actor_data` 钩子删除；serializer 的 Bedrock NBT 写入删除；CI reviewers.yml / README / NOTICE 同步去 Bedrock。
+
+### 10.2 过程要点（复用价值）
+
+- **大规模并行重构编排**：13 个子代理分两波按目录划界并行。第一波 7 个因供应商认证失败中途死亡留下半成品——救局手法：`git status` 盘点残局 → 以 `cargo check` 报错的 `-->` 位置限定各代理职责范围重新派发；跨目录接缝（签名漂移、调用点 arity、`address()`→字段、`closed()`→`is_closed()`）由主线在波次间统一收口（23 错→0）。
+- **WIT 半再生事故**：死亡代理留下截断的代码生成器，全量 codegen 据此再生成出一批残缺 WIT（damage-types.wit 丢了被手写 server.wit 引用的资源）。恢复：`git checkout HEAD -- 契约目录` → 重删两个目标文件 → 用过滤器只跑 wit+sdk（`cargo run -- __no_such_stem__`）→ 手写 WIT 手工摘除 Bedrock 块。教训：**生成器处于半改状态时绝不跑全量再生成**。
+- **e2e wasm 判别式漂移**：WIT variant 变更会移动组件判别式，checked-in `.wasm` 必须按新契约重编（32.77s）再部署 `plugins/` 与 `target/e2e-run/plugins/`，否则宿主校验即失败。
+- **误判自纠**：`end_gateway` 的 `allow_bedrock` 参数险些被当恒 false 常量塌缩，grep 发现第二调用点传 true（exit-portal 搜索语义）→ 改名 `exit_portal` 保留。常量塌缩前必须数清全部调用点。
+
+### 10.3 门禁与 e2e 终版（2026-09-21）
+
+- `cargo fmt --all -- --check` 清洁；`cargo clippy --workspace --tests -- -Dwarnings` **debug 与 release 均 0 错误**（塌缩衍生的 17 个 redundant-clone/dead-code/stale-expect 类警告清零）。
+- `cargo test --workspace`：**968 通过 / 0 失败**（较第三轮 1059 下降为 Bedrock 测试同步删除所致）。
+- e2e 无头实跑（`target/e2e-run`，新编服务端 + 按新 WIT 重编 wasm）：**40 个 E2E 标记、零失败类**，机制标记与 §9.4 清单一致（registry-\* ×5、recipe-\* ×4、loot/combat/map/chunk/structure/merchant/dragon/cookie/brain/snapshot/spawn-category 全绿）。
+- 磁盘纪律：构建后 `rm -rf target/debug/incremental`（AGENTS.md 新规）；本轮构建后 target 33G。

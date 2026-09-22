@@ -3,6 +3,12 @@
 > 生成时间：2026-09-19 · 工具：codebase-analyzer 技能（采样深度分析模式）
 > 范围：`F:\Github\repo\Papokin` 全仓库，**排除 `REF/` 参考资料目录**（用户指定）
 > 规模：20 个 workspace 成员 · 2718 个 Rust 文件 · 约 150 万行 · 978 个测试
+>
+> **现状注记（2026-09-21）**：基岩版（Bedrock）支持已整体移除，服务器回归纯 Java 版，版本号 `0.3.0+1.21.11`，实施记录见 [11 §十](11-插件API强化实现记录-Papo机制级覆盖.md)；下文"项目一句话"与 01–06 中的双版本描述为成文时点快照。插件 API 现状以 [12](12-插件API文档.md) 为准。
+>
+> **改名注记（2026-09-22）**：项目由 Pumpkin 改名 **Papokin**：crate 目录 `crates/pumpkin*` → `crates/papokin-*`、二进制 `pumpkin` → `papokin`、WIT 命名空间 `pumpkin:plugin@0.1.0` → `papokin:plugin@0.1.0`、`PLUGIN_API_VERSION` 5→6、配置文件主名 `papokin.toml`（旧 `pumpkin.toml` 自动回退读取）、`/papokin` 命令（原 `/pumpkin`）。01–11 及下文快照中的 `pumpkin(-|_)` 字样均按此映射理解。
+>
+> **汉化注记（2026-09-22）**：全仓 Rust 源码注释与运行时文本已汉化（19006 条译文 / 1197 条保留英文，1826 文件 18494 处替换），门禁全绿（968 测试 / e2e 42 行标记 0 失败类），实施记录见 [14](14-全仓汉化实现记录.md)，规范见仓库根 `tmp_i18n_guide.md`。01–13 快照中引用的英文注释/日志在当前源码中已对应中文。
 
 ## 项目一句话
 
@@ -23,8 +29,9 @@
 | [09-存档系统重写实现记录.md](09-存档系统重写实现记录.md) | 实现记录：MC 版本切至 1.21.11；Papo 兼容 RegionFile（255 扩展/.mcc/oversized/头自愈/原子写/扇区溢出防护）、区块 NBT 全字段保留、玩家/level.dat/POI 原子写、保存管线防丢；230 测试全绿 | — |
 | [10-插件系统对比-Pumpkin-vs-Papo.md](10-插件系统对比-Pumpkin-vs-Papo.md) | 与 REF/Papo（Paper fork）的插件系统逐维对比：WASM 能力沙箱 vs JVM 信任模型、加载/生命周期/类加载、事件分发、权限双语义、命令/调度/IPC、沙箱与供应链、配置面、互鉴清单（成文时点快照；清单 6 项当日已落地，见 11） | 双侧架构对比图、事件分发对比图 |
 | [11-插件API强化实现记录-Papo机制级覆盖.md](11-插件API强化实现记录-Papo机制级覆盖.md) | 实现记录：EventPriority+ignoreCancelled 分发、异步任务、依赖分级、ServicesManager、插件消息通道、config 深合并、命令 fallback 前缀、permissions.toml、Startup 引导阶段、事件 fire 点补缺 47 处（含不可接线清单）；API 版本 2→3；e2e wasm 插件 7 标记全绿；§七为后续两轮代码审计的稳定性修复清单 | — |
-| [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署/热重载）、生命周期与依赖、事件系统（273 类型/优先级/取消语义）、调度器（含 EntityScheduler 与即时取消语义）、命令、双层权限、配置（原子写）、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（内建 + AiGoalManager 自定义注册）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
+| [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署/热重载）、生命周期与依赖、事件系统（367 类型/优先级/取消语义）、调度器（含 EntityScheduler 与即时取消语义）、命令、双层权限、配置（原子写）、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（内建 + AiGoalManager 自定义注册）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
 | [13-插件API覆盖复核-当前代码vs-Papo.md](13-插件API覆盖复核-当前代码vs-Papo.md) | 覆盖复核（锚定 b6af9b3c7）：11 的 12 项机制逐项验证属实；拉宽到 Papo 全 API 面的子系统覆盖矩阵（org.bukkit 1268 文件 + Paper 扩展）；896 WIT 函数/273 事件/288 fire 点实测；剩余缺口排序（Registry/Tag 体系最大）；勘误：world.spawn-entity/get-entities 存在，EntityScheduler 可无头 e2e | — |
+| [14-全仓汉化实现记录.md](14-全仓汉化实现记录.md) | 实现记录：全仓 Rust 源码注释+运行时文本汉化（2026-09-22）；范围/规则/管线、应用统计（20203 单元译 19006）、门禁全绿、引出的 clippy/fmt/断言同步坑与修复清单 | — |
 
 ## 核心发现（十件事）
 

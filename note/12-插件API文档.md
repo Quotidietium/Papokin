@@ -1,7 +1,7 @@
 # Papokin 插件 API 文档
 
-> 版本：`pumpkin:plugin@0.1.0`（WIT 契约）· `PLUGIN_API_VERSION = 3` · 适用 MC Java **1.21.11**
-> SDK：`crates/pumpkin-plugin-api` · 契约：`crates/pumpkin-plugin-wit/v0.1`（51 个 WIT 文件）
+> 版本：`papokin:plugin@0.1.0`（WIT 契约）· `PLUGIN_API_VERSION = 6` · 适用 MC Java **1.21.11**
+> SDK：`crates/papokin-plugin-api` · 契约：`crates/papokin-plugin-wit/v0.1`（56 个 WIT 文件）
 > 实施背景见 [11-插件API强化实现记录](11-插件API强化实现记录-Papo机制级覆盖.md)；本文是插件开发者的**参考文档**。
 > 文中示例均取自/对齐已实跑验证的 `examples/e2e-plugin`（7 个日志标记基线）。
 
@@ -35,10 +35,10 @@ Papokin 插件是 **WASM 组件（Component Model）**，不是 JVM 字节码。
 ```
 ┌────────────────────────────────────────────────────┐
 │ 你的插件（Rust → wasm32-wasip2 组件，0x1000d）        │
-│  依赖 pumpkin-plugin-api（SDK，对 WIT 的安全封装）     │
+│  依赖 papokin-plugin-api（SDK，对 WIT 的安全封装）     │
 ├────────────────────────────────────────────────────┤
-│ WIT 契约 pumpkin:plugin@0.1.0                       │
-│  宿主→插件：imports（scheduler/services/world…51 接口）│
+│ WIT 契约 papokin:plugin@0.1.0                       │
+│  宿主→插件：imports（scheduler/services/world…43 接口）│
 │  插件→宿主：exports（on-load / handle-event …）       │
 ├────────────────────────────────────────────────────┤
 │ 服务器宿主（wasmtime），事件分发 / 调度 / 权限 / 沙箱    │
@@ -47,7 +47,7 @@ Papokin 插件是 **WASM 组件（Component Model）**，不是 JVM 字节码。
 
 - 插件运行在 **WASI 沙箱**内：默认无文件系统、无网络、无环境变量；一切能力通过声明式权限申请（见 §七、§十五）。
 - SDK 只是 WIT 绑定 + 便利封装：你在 SDK 里看到的每个类型，背后都是一次宿主调用。
-- WIT 变更（加接口/函数）会自动传导：SDK 用 `wit_bindgen::generate!`、宿主用 `wasmtime::component::bindgen!`，都从 `crates/pumpkin-plugin-wit/v0.1` 即时生成。
+- WIT 变更（加接口/函数）会自动传导：SDK 用 `wit_bindgen::generate!`、宿主用 `wasmtime::component::bindgen!`，都从 `crates/papokin-plugin-wit/v0.1` 即时生成。
 
 ---
 
@@ -56,7 +56,7 @@ Papokin 插件是 **WASM 组件（Component Model）**，不是 JVM 字节码。
 ### 2.1 最小插件
 
 ```rust
-use pumpkin_plugin_api::{Context, LoadOrder, Plugin, PluginMetadata, Result, register_plugin};
+use papokin_plugin_api::{Context, LoadOrder, Plugin, PluginMetadata, Result, register_plugin};
 
 struct MyPlugin;
 
@@ -102,7 +102,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-pumpkin-plugin-api = { path = "<papokin>/crates/pumpkin-plugin-api" }
+papokin-plugin-api = { path = "<papokin>/crates/papokin-plugin-api" }
 tracing = "0.1"
 ```
 
@@ -172,13 +172,13 @@ context.get_marketplace_metadata() -> Option<MarketplaceMetadata>
 ### 4.1 注册 handler
 
 ```rust
-use pumpkin_plugin_api::events::{EventHandler, EventData, EventPriority, PlayerJoinEvent};
+use papokin_plugin_api::events::{EventHandler, EventData, EventPriority, PlayerJoinEvent};
 
 type JoinData = EventData<PlayerJoinEvent>;   // EventData<E> = E 的数据 record
 
 struct JoinAnnouncer;
 impl EventHandler<PlayerJoinEvent> for JoinAnnouncer {
-    fn handle(&self, server: pumpkin_plugin_api::Server, event: JoinData) -> JoinData {
+    fn handle(&self, server: papokin_plugin_api::Server, event: JoinData) -> JoinData {
         // event.player / event.join_message / event.cancelled …
         event                                  // 原样返回 = 不修改事件
     }
@@ -202,7 +202,7 @@ context.register_event_handler(
 
 ### 4.3 事件目录
 
-WIT `event.wit` 的 `event` variant 定义了 **368 种事件类型**，覆盖：
+WIT `event.wit` 的 `event` variant 定义了 **367 种事件类型**，覆盖：
 
 | 域 | 示例 |
 |---|---|
@@ -236,7 +236,7 @@ WIT `scheduler` 接口（7 个函数）。SDK 两条入口：
 | `cancel_task(task_id)` | — | 取消任意以上任务（**立即生效**，见下） |
 
 ```rust
-use pumpkin_plugin_api::scheduler::{SchedulerExt, cancel_task};
+use papokin_plugin_api::scheduler::{SchedulerExt, cancel_task};
 
 // 1 秒后在主 tick 循环执行
 let id = context.schedule_delayed_task(20, |server| {
@@ -253,7 +253,7 @@ context.schedule_async_delayed_task(300, |_server| {
 实体绑定任务（Bukkit EntityScheduler 语义）：
 
 ```rust
-use pumpkin_plugin_api::scheduler::EntitySchedulerExt;
+use papokin_plugin_api::scheduler::EntitySchedulerExt;
 
 // event.entity 是事件里拿到的 Entity 资源
 entity.schedule_entity_repeating_task(10, 10, |_server| {
@@ -278,8 +278,8 @@ entity.schedule_entity_repeating_task(10, 10, |_server| {
 命令 = 名字（首名为主命令，其余为别名）+ 参数树（Brigadier 风格 `CommandNode`）+ 执行/建议 handler：
 
 ```rust
-use pumpkin_plugin_api::command::{Command, CommandNode};
-use pumpkin_plugin_api::commands::{CommandHandler, CommandSuggestionHandler};
+use papokin_plugin_api::command::{Command, CommandNode};
+use papokin_plugin_api::commands::{CommandHandler, CommandSuggestionHandler};
 
 struct GreetHandler;
 impl CommandHandler for GreetHandler {
@@ -332,7 +332,7 @@ impl CommandSuggestionHandler for TabCompleter {
 声明在 `PluginMetadata.permissions`，控制**插件自身**能做什么（WASI 能力模型）：
 
 ```rust
-use pumpkin_plugin_api::permissions;
+use papokin_plugin_api::permissions;
 
 permissions: vec![
     permissions::FS_READ_DATA.into(),   // 读私有数据文件夹
@@ -401,7 +401,7 @@ assert!(config.contains("hello") && config.contains("[bonus]"));
 ### 9.1 服务注册与发现
 
 ```rust
-use pumpkin_plugin_api::services::ServiceProvider;
+use papokin_plugin_api::services::ServiceProvider;
 
 context.register_service("my-plugin:economy", 5)?;   // service 名 + 优先级
 if let Some(ServiceProvider { plugin, priority, .. }) = context.get_service_provider("my-plugin:economy") {
@@ -417,7 +417,7 @@ context.unregister_service("my-plugin:economy");
 ### 9.2 IPC（同步调用另一插件）
 
 ```rust
-use pumpkin_plugin_api::ipc;
+use papokin_plugin_api::ipc;
 
 // payload 自定义编码（如 JSON/bincode）；调用同步返回
 let reply: Vec<u8> = ipc::send_ipc_message("other-plugin", payload)??;
@@ -436,8 +436,8 @@ fn handle_ipc_message(&self, sender: PluginId, message: IpcMessage)
 ### 9.3 插件消息通道（客户端联动）
 
 ```rust
-context.register_incoming_channel("pumpkin:e2e")?;   // minecraft:* 为保留前缀，注册会报错
-context.send_plugin_message(player_uuid, "pumpkin:e2e", b"payload".to_vec())?; // 仅 Java 版玩家
+context.register_incoming_channel("papokin:e2e")?;   // minecraft:* 为保留前缀，注册会报错
+context.send_plugin_message(player_uuid, "papokin:e2e", b"payload".to_vec())?; // 仅 Java 版玩家
 ```
 
 玩家在注册过的频道上发来消息时回调：
@@ -468,7 +468,7 @@ fn on_load(&self, context: Context) -> Result<()> {
 对实体 / 玩家 / 方块实体 / 区块 / 世界 / 物品栈挂**自定义 NBT 数据**，随存档自动持久化。实现 `PersistentDataHolder` trait 的类型（`ItemStack / Entity / BlockEntity / Chunk / World / Player`）：
 
 ```rust
-use pumpkin_plugin_api::persistent_data::PersistentDataHolder;
+use papokin_plugin_api::persistent_data::PersistentDataHolder;
 
 entity.set_string("myplugin", "title", "屠龙者");     // 类型化便捷方法
 entity.set_int("myplugin", "killcount", 42);
@@ -485,7 +485,7 @@ entity.has_custom_data("myplugin", "title");          // bool
 
 ## 十一、世界 / 实体 / 玩家操作
 
-WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 120 · `item-stack` 28 · `inventory` 28 · `server` 70）。
+WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 107 · `item-stack` 28 · `inventory` 28 · `server` 70）。
 
 ### 11.1 Server（70 个方法）
 
@@ -519,7 +519,7 @@ WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 �
 
 ### 11.4 Player
 
-120 个方法：物品栏/末影箱（`PlayerEnderChestExt`）、冷却（`PlayerCooldownExt`）、计分板队伍（`PlayerTeamExt`）、属性（attributes）、药水/状态效果、表单/对话框（forms / java-dialogs）、声音/粒子、传送、权限检查、**客户端 cookie**（`cookie.rs`：`store_cookie / request_cookie / get_cookie / clear_cookie`，Bedrock 安全降级）等。
+107 个方法：物品栏/末影箱（`PlayerEnderChestExt`）、冷却（`PlayerCooldownExt`）、计分板队伍（`PlayerTeamExt`）、属性（attributes）、药水/状态效果、对话框（java-dialogs）、声音/粒子、传送、权限检查、**客户端 cookie**（`cookie.rs`：`store_cookie / request_cookie / get_cookie / clear_cookie`）等。
 
 ### 11.5 方块与物品
 
@@ -532,13 +532,13 @@ WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 �
 ### 11.6 注册表 / 标签 / 伤害类型（运行时扩展面）
 
 - **`RegistryManager`**（`registry.rs`）：`register(domain, name, nbt)` 在冻结窗口（世界加载完成前）向 vanilla 同步注册表注入自定义条目，登录/配置阶段随 known-packs 同步给客户端；`custom_network_id = vanilla_count + index`
-- **`TagManager`**（`tag.rs`）：名称址标签叠加层（与静态表合并快照）；`add_to_tag / get_values / is_in_tag`；自定义注册表条目经 `custom_network_id` 直接入标签。Bedrock 无标签推送机制（协议层 N/A，非缺口）
+- **`TagManager`**（`tag.rs`）：名称址标签叠加层（与静态表合并快照）；`add_to_tag / get_values / is_in_tag`；自定义注册表条目经 `custom_network_id` 直接入标签。
 - **`DamageTypeManager`**（`damage_type.rs`）：`DamageTypeBuilder` 注册自定义伤害类型（network_id=51+index），`LivingEntity::damage_by_name` 直接消费；50 处 vanilla 伤害调用点零改动
 - **`EnchantmentManager`**（`enchantment.rs`）：自定义魔咒经 intern 表获得网络 id（43+index），物品堆 codec 桥 `set_custom_ids / custom_id / custom_name`
 
 ### 11.7 MapView 地图渲染（`map.rs`）
 
-`world.create_map(x, z, scale)` 或 `get_map(id)` 取得 `MapView`：`set_pixel / get_pixel`（`0xAARRGGBB`，宿主量化到地图调色板）、`set_colors_data / get_colors_data`（原始索引面）、`render_terrain`（无玩家上下文全幅地形渲染）、`lock / unlock`（锁定后地形管线不再覆盖插件绘制）、游标（`MapCursor` + `cursor_types` 35 常量）。**双版本**：Java 收 `CMapItemData`；Bedrock 收镜像的 `ClientboundMapItemData`（画布转 ABGR 像素、游标映射 Bedrock 装饰图，无 Bedrock 图的新类型回落白标）。
+`world.create_map(x, z, scale)` 或 `get_map(id)` 取得 `MapView`：`set_pixel / get_pixel`（`0xAARRGGBB`，宿主量化到地图调色板）、`set_colors_data / get_colors_data`（原始索引面）、`render_terrain`（无玩家上下文全幅地形渲染）、`lock / unlock`（锁定后地形管线不再覆盖插件绘制）、游标（`MapCursor` + `cursor_types` 35 常量）。Java 客户端收 `CMapItemData`。
 
 ### 11.8 战利品（`loot.rs`）
 
@@ -562,7 +562,7 @@ mob.clear_ai_goals();                          // 清空
 **自定义目标**：实现 SDK 的 `AiGoal` trait（`ai.rs`），用 `AiGoalManager::register` 注册得到 `goal_id`，再挂到 Mob。回调均以共享引用调用（可重入，可变状态用内部可变性）：
 
 ```rust
-use pumpkin_plugin_api::ai::{AiGoal, AiGoalManager};
+use papokin_plugin_api::ai::{AiGoal, AiGoalManager};
 
 struct MyGoal;
 impl AiGoal for MyGoal {
@@ -584,7 +584,7 @@ mob.add_custom_ai_goal(priority_u8, goal_id);   // 挂载自定义目标
 ## 十三、自定义世界生成
 
 ```rust
-use pumpkin_plugin_api::worldgen::{ChunkGenerator, ChunkBuffer, GeneratorManager};
+use papokin_plugin_api::worldgen::{ChunkGenerator, ChunkBuffer, GeneratorManager};
 
 struct FlatWorld;
 impl ChunkGenerator for FlatWorld {
@@ -615,7 +615,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | `team.rs` | 计分板队伍：`Team / TeamSettingsBuilder / PlayerTeamExt / ScoreboardTeamExt` |
 | `scoreboard`（WIT，28 函数） | 目标/分数/显示槽 |
 | `boss-bar`（14 函数） | Boss 血条创建与更新 |
-| `forms` / `java-dialogs` | 表单 UI（含 Bedrock 表单）与 1.21.6+ Java 对话框 |
+| `java-dialogs` | 1.21.6+ Java 对话框 |
 | `display.rs` | 展示实体（text display 等）builder |
 | `gui`（11 函数） | 界面相关 |
 | `inventory.rs` | `Inventory / PlayerInventory` 抽象 |
@@ -625,7 +625,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | `i18n` | 服务端翻译键（**按客户端版本翻译**） |
 | `text.rs` | `TextComponent` 构建器（chainable methods） |
 | `mobs.rs` | 生物特化数据 + `MobCast` 下转型 + `memory_keys` 脑记忆常量 |
-| `map.rs`（17 函数） | MapView 地图渲染（§11.7，双版本） |
+| `map.rs`（17 函数） | MapView 地图渲染（§11.7） |
 | `structure.rs` | 运行时结构模板注册/查询/放置（§11.2） |
 | `loot.rs` | 战利品表查询/生成/填容器（§11.8） |
 | `dragon.rs`（14 函数） | 龙战状态与重生控制（§11.9） |
@@ -634,7 +634,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | `cookie.rs` | 客户端 cookie 存取（§11.4） |
 | `registry.rs` / `tag.rs` / `damage_type.rs` | 运行时注册表/标签/伤害类型管理器（§11.6） |
 | `chunk.rs` | 区块快照/持久化/异步加载/强加载（§11.2） |
-| `bedrock-packets` / `java-packets` | 底层包访问（高级用法） |
+| `java-packets` | 底层包访问（高级用法） |
 | `game-rules` / `game-events` / `biomes` / `entity-types` / `attributes` | 各 vanilla 查询面 |
 
 ---
@@ -654,7 +654,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 插件内正常使用 `tracing`（`info!`/`warn!`/…）。宿主把它转发到服务器日志并自动附加来源字段：
 
 ```
-INFO E2E on_load ok  plugin.target=pumpkin_e2e_plugin  plugin.module=pumpkin_e2e_plugin  src\lib.rs:95
+INFO E2E on_load ok  plugin.target=papokin_e2e_plugin  plugin.module=papokin_e2e_plugin  src\lib.rs:95
 ```
 
 ---
@@ -664,8 +664,8 @@ INFO E2E on_load ok  plugin.target=pumpkin_e2e_plugin  plugin.module=pumpkin_e2e
 ### 16.1 WIT 接口函数数（当前 0.1.0）
 
 ```
-world 282 · block-entity 172 · player 120 · server 70 · display 62
-text 28 · scoreboard 28 · item-stack 28 · inventory 28 · command 25
+world 282 · block-entity 172 · player 107 · server 70 · display 62
+text 28 · item-stack 28 · inventory 28 · command 25 · scoreboard 19
 plugin(exports) 17 · map 17 · dragon 14 · boss-bar 14 · gui 11
 datapack 9 · scheduler 7 · recipe 7 · context 6 · registry 5
 tag 4 · structure 4 · services 4 · messaging 4 · merchant 4 · loot 4
@@ -673,17 +673,17 @@ enchantments 4 · damage-types 4 · cookie 4 · uuid 3
 log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余为类型/枚举定义接口
 ```
 
-（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-21 复核，共 58 个 .wit 文件、997 个函数。战斗六查询为 world 接口 living-entity 资源方法，计入 world。）
+（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-21 基岩版移除后复核，共 56 个 .wit 文件、975 个函数。战斗六查询为 world 接口 living-entity 资源方法，计入 world。）
 
 ### 16.2 版本与兼容策略
 
-- `PLUGIN_API_VERSION = 4`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：本轮 WIT 大扩面 + 事件布局变更。）
+- `PLUGIN_API_VERSION = 6`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：第三轮 WIT 大扩面 + 事件布局变更；4→5：基岩版移除——forms/bedrock-packets 接口删除，player/event/scoreboard/text 的 Bedrock 成员摘除。）
 - WIT 采用 **v0.1 直接演进**：允许破坏性变更（用户决策记录于 note/11）；新增函数对旧组件向后兼容（组件只导入其所需子集）。
-- 服务端版本：`0.1.0+1.21.11-26.51`；i18n 翻译按客户端版本执行。
+- 服务端版本：`0.3.0+1.21.11`；i18n 翻译按客户端版本执行。
 
 ### 16.3 端到端验证基线
 
-`examples/e2e-plugin` 实跑，无头起跑日志 40 个 `E2E` 标记、零失败类（`*-broken/-failed/-mismatch` 等）即 API 链路健康。机制标记（新增于本轮）：
+`examples/e2e-plugin` 实跑，无头起跑日志 **41 个去重 `E2E` 标记（2026-09-22 实测；`dragon-fight-none` 按世界发射，单世界配置下日志 42 行）**、零失败类（`*-broken/-failed/-mismatch` 等）即 API 链路健康。机制标记（新增于本轮）：
 
 ```
 E2E registry-summary damage-type=true tag=true entry=true   ← 三管理器
@@ -711,4 +711,4 @@ E2E paper-events-registered / recipe-*-registered ×4 / registry-* ×5
 - **cookie**：config 阶段发包路径未暴露（Player 资源 play 相位才存在）；请求-响应无事务关联（同 Paper）；无响应到达事件（可后补）。
 - EntityScheduler 可经 `World::spawn_entity` 无头验证（2026-09-20 复核修正，见 note/13 §七.2）；join/chat 优先级实机排序仍需真实玩家。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
 - **脑记忆为只读**：`set` 路径未暴露（Bukkit MemoryKey 写面需 brain 机制写侧设计）。结构放置不放置实体（仅方块）。区块快照不含光照/高度图。强加载票据不落盘（重启失效）。
-- ChunkSave 事件低于插件边界（保存决策在 `pumpkin-world` 内部）。
+- ChunkSave 事件低于插件边界（保存决策在 `papokin-world` 内部）。
