@@ -1,0 +1,134 @@
+use std::{collections::BTreeMap, fs};
+
+use papokin_util::DoublePerlinNoiseParametersCodec;
+use proc_macro2::TokenStream;
+use quote::{format_ident, quote};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct NoiseParameterJson {
+    #[serde(rename = "firstOctave")]
+    first_octave: Option<i32>,
+    amplitudes: Option<Vec<f64>>,
+    amplitude_modifiers: Option<Vec<f64>>,
+    base_octave: Option<i32>,
+    octave_count: Option<usize>,
+}
+
+impl From<NoiseParameterJson> for DoublePerlinNoiseParametersCodec {
+    fn from(raw: NoiseParameterJson) -> Self {
+        Self {
+            first_octave: raw.first_octave.or(raw.base_octave).unwrap_or(-7),
+            amplitudes: raw
+                .amplitudes
+                .or(raw.amplitude_modifiers)
+                .or_else(|| raw.octave_count.map(|n| vec![1.0; n.max(1)]))
+                .unwrap_or_else(|| vec![1.0]),
+        }
+    }
+}
+
+fn collect_noise_files(
+    base: &std::path::Path,
+    dir: &std::path::Path,
+    result: &mut BTreeMap<String, DoublePerlinNoiseParametersCodec>,
+) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_noise_files(base, &path, result);
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            let rel = path.strip_prefix(base).unwrap();
+            let rel_str = rel
+                .with_extension("")
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let key = format!("minecraft:{rel_str}");
+            let content = fs::read_to_string(&path).expect("读取噪声文件失败");
+            let param: DoublePerlinNoiseParametersCodec =
+                serde_json::from_str::<NoiseParameterJson>(&content)
+                    .expect("解析噪声参数 JSON 失败")
+                    .into();
+            result.insert(key, param);
+        }
+    }
+}
+
+pub fn build() -> TokenStream {
+    let dir = std::path::Path::new("../../assets/datapacks/26_3/data/minecraft/worldgen/noise");
+    let mut json: BTreeMap<String, DoublePerlinNoiseParametersCodec> = BTreeMap::new();
+    collect_noise_files(dir, dir, &mut json);
+
+    let mut variants = TokenStream::new();
+    let mut match_variants = TokenStream::new();
+
+    for (i, (raw_name, parameter)) in json.iter().enumerate() {
+        let name = raw_name
+            .strip_prefix("minecraft:")
+            .unwrap()
+            .replace("/", "_");
+        let name_ident = format_ident!("{}", name.to_uppercase());
+
+        // 1. MD5 预计算
+        let hash = md5::compute(raw_name.as_bytes());
+        let lo = u64::from_be_bytes(hash[0..8].try_into().unwrap());
+        let hi = u64::from_be_bytes(hash[8..16].try_into().unwrap());
+
+        let amplitudes = &parameter.amplitudes;
+        let first_octave = parameter.first_octave;
+
+        variants.extend([quote! {
+            pub const #name_ident: DoublePerlinNoiseParameters = DoublePerlinNoiseParameters::new(
+                #i,
+                #first_octave,
+                &[#(#amplitudes),*],
+                #lo,
+                #hi
+            );
+        }]);
+
+        match_variants.extend([quote! {
+            #name => &Self::#name_ident,
+        }]);
+    }
+    let count = json.len();
+
+    quote! {
+        pub struct DoublePerlinNoiseParameters {
+            pub id: usize,
+            pub first_octave: i32,
+            pub amplitudes: &'static [f64],
+            pub lo: u64,
+            pub hi: u64,
+        }
+
+        impl DoublePerlinNoiseParameters {
+            pub const COUNT: usize = #count;
+
+            pub const fn new(
+                id: usize,
+                first_octave: i32,
+                amplitudes: &'static [f64],
+                lo: u64,
+                hi: u64,
+            ) -> Self {
+                Self { id, first_octave, amplitudes, lo, hi }
+            }
+
+            pub fn id_to_parameters(id: &str) -> Option<&'static DoublePerlinNoiseParameters> {
+                let id = id.strip_prefix("minecraft:").unwrap_or(id).replace("/", "_");
+                Some(match id.as_str() {
+                    #match_variants
+                    _ => return None,
+                })
+            }
+
+            #variants
+        }
+    }
+}
