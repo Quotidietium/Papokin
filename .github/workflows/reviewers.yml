@@ -23,31 +23,27 @@ jobs:
         with:
           script: |
             const rules = [
-              { pattern: 'crates/pumpkin-protocol/', reviewers: ['Snowiiii', 'xRookieFight'] },
-              { pattern: 'crates/pumpkin/src/net/', reviewers: ['Snowiiii', 'xRookieFight'] },
+              { pattern: 'crates/papokin-protocol/', reviewers: ['Snowiiii', 'xRookieFight'] },
+              { pattern: 'crates/papokin/src/net/', reviewers: ['Snowiiii', 'xRookieFight'] },
 
-              { pattern: 'assets/bedrock/', reviewers: ['ZlordHUN', 'xRookieFight'] },
-              { pattern: 'crates/pumpkin-protocol/src/bedrock/', reviewers: ['ZlordHUN', 'xRookieFight', 'QuantumSegfault'] },
-              { pattern: 'crates/pumpkin/src/net/bedrock/', reviewers: ['ZlordHUN', 'xRookieFight', 'QuantumSegfault'] },
+              { pattern: 'crates/papokin/src/command/', reviewers: ['aure31'] },
 
-              { pattern: 'crates/pumpkin/src/command/', reviewers: ['aure31'] },
-
-              { pattern: 'crates/pumpkin-plugin-api/', reviewers: ['vyPal', 'yunuservices'] },
-              { pattern: 'crates/pumpkin-plugin-wit/', reviewers: ['vyPal', 'yunuservices', 'QuantumSegfault'] },
-              { pattern: 'crates/pumpkin-api-macros/', reviewers: ['vyPal', 'yunuservices'] },
-              { pattern: 'crates/pumpkin/src/plugin/', reviewers: ['vyPal', 'yunuservices', 'QuantumSegfault'] },
+              { pattern: 'crates/papokin-plugin-api/', reviewers: ['vyPal', 'yunuservices'] },
+              { pattern: 'crates/papokin-plugin-wit/', reviewers: ['vyPal', 'yunuservices', 'QuantumSegfault'] },
+              { pattern: 'crates/papokin-api-macros/', reviewers: ['vyPal', 'yunuservices'] },
+              { pattern: 'crates/papokin/src/plugin/', reviewers: ['vyPal', 'yunuservices', 'QuantumSegfault'] },
 
               { pattern: '*.md', reviewers: ['Q2297045667'] },
               { pattern: 'docs/', reviewers: ['Q2297045667'] },
 
-              { pattern: 'crates/pumpkin/src/entity/mob/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
-              { pattern: 'crates/pumpkin/src/entity/projectile/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
+              { pattern: 'crates/papokin/src/entity/mob/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
+              { pattern: 'crates/papokin/src/entity/projectile/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
 
-              { pattern: 'crates/pumpkin/src/block/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
-              { pattern: 'crates/pumpkin/src/item/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
+              { pattern: 'crates/papokin/src/block/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
+              { pattern: 'crates/papokin/src/item/', reviewers: ['Snowiiii', 'RoosterBooster007'] },
 
-              { pattern: 'crates/pumpkin-world/src/generation/feature/', reviewers: ['Snowiiii', 'RoosterBooster007', 'MegalithOfficial'] },
-              { pattern: 'crates/pumpkin-world/src/generation/noise/', reviewers: ['Snowiiii', 'RoosterBooster007', 'MegalithOfficial'] },
+              { pattern: 'crates/papokin-world/src/generation/feature/', reviewers: ['Snowiiii', 'RoosterBooster007', 'MegalithOfficial'] },
+              { pattern: 'crates/papokin-world/src/generation/noise/', reviewers: ['Snowiiii', 'RoosterBooster007', 'MegalithOfficial'] },
             ];
 
             const matches = (path, pattern) => {
@@ -82,7 +78,7 @@ jobs:
             }
 
             const mentionList = [...reviewers].sort().map((reviewer) => `@${reviewer}`);
-            const marker = '<!-- pumpkin-reviewers -->';
+            const marker = '<!-- papokin-reviewers -->';
             const body = [
               marker,
               'Review requested from:',

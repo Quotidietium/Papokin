@@ -13,7 +13,7 @@ on:
 
 jobs:
   docker-build-deploy:
-    if: github.repository == 'Pumpkin-MC/Pumpkin'
+    if: github.repository == 'Quotidietium/Papokin'
     permissions:
       contents: read
       packages: write
@@ -86,7 +86,7 @@ jobs:
           retention-days: 1
 
   merge:
-    if: github.repository == 'Pumpkin-MC/Pumpkin'
+    if: github.repository == 'Quotidietium/Papokin'
     permissions:
       contents: read
       packages: write
@@ -116,7 +116,7 @@ jobs:
         id: versions
         run: |
           VERSION=$(awk -F '"' '/^version/ {print $2}' Cargo.toml)
-          echo "PUMPKIN_VERSION=$(echo $VERSION | cut -d '+' -f 1)" >> $GITHUB_ENV
+          echo "PAPOKIN_VERSION=$(echo $VERSION | cut -d '+' -f 1)" >> $GITHUB_ENV
           echo "MC_VERSION=$(echo $VERSION | cut -d '+' -f 2)" >> $GITHUB_ENV
 
       - name: Login to GitHub CR
@@ -139,8 +139,8 @@ jobs:
             type=raw,value=latest
             type=sha
             type=raw,value=mc${{ env.MC_VERSION }}
-            type=raw,value=${{ env.PUMPKIN_VERSION }}
-            type=raw,value=mc${{ env.MC_VERSION }}-${{ env.PUMPKIN_VERSION }}
+            type=raw,value=${{ env.PAPOKIN_VERSION }}
+            type=raw,value=mc${{ env.MC_VERSION }}-${{ env.PAPOKIN_VERSION }}
 
       - name: Create manifest list and push
         working-directory: ${{ runner.temp }}/digests

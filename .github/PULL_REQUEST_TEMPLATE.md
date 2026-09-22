@@ -1,8 +1,8 @@
-<!-- Follow the Conventional Commits spec: <https://www.conventionalcommits.org/en/v1.0.0/> -->
-<!-- Empty or bad descriptions are not welcome. Don't waste my time -->
+<!-- 请遵循 Conventional Commits 规范：<https://www.conventionalcommits.org/en/v1.0.0/> -->
+<!-- 空洞或敷衍的描述不受欢迎，请不要浪费大家的时间 -->
 
-## Description
+## 描述
 
-## Testing
+## 测试
 
-Please follow our [Coding Guidelines](https://github.com/Pumpkin-MC/Pumpkin/blob/master/CONTRIBUTING.md#coding-guidelines)
+请遵循我们的[编码规范](/CONTRIBUTING.md#coding-guidelines)

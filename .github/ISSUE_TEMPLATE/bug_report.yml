@@ -1,61 +1,59 @@
-name: "Bug Report"
-description: "File a bug report to help us improve"
+name: "缺陷报告"
+description: "提交缺陷报告以帮助我们改进"
 labels: ["bug"]
 assignees: ["Snowiiii"]
 body:
   - type: checkboxes
     id: duplicate
     attributes:
-      label: "Before Submitting"
+      label: "提交前须知"
       options:
-        - label: "I have searched existing issues and confirmed this is not a duplicate."
+        - label: "我已搜索现有议题，确认这不是重复报告。"
           required: true
 
   - type: dropdown
     id: edition
     attributes:
-      label: "Minecraft Edition"
-      description: "Which edition of Minecraft does this bug affect?"
+      label: "Minecraft 版本"
+      description: "该缺陷影响哪个版本的 Minecraft？"
       options:
-        - "Java Edition"
-        - "Bedrock Edition"
-        - "Both / Crossplay"
+        - "Java 版"
     validations:
       required: true
 
   - type: input
     id: version
     attributes:
-      label: "Server Version / Commit"
-      description: "Provide your server version (Tip: Run `/pumpkin`)."
-      placeholder: "e.g., 1.0.0/39b4cb3"
+      label: "服务器版本 / 提交号"
+      description: "提供你的服务器版本（提示：运行 `/papokin` 查看）。"
+      placeholder: "例如：1.0.0/39b4cb3"
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: "Operating System"
-      placeholder: "e.g., Windows 11, Ubuntu 22.04, macOS"
+      label: "操作系统"
+      placeholder: "例如：Windows 11、Ubuntu 22.04、macOS"
     validations:
       required: true
 
   - type: textarea
     id: description
     attributes:
-      label: "Bug Description & Expected Behavior"
-      description: "What is currently happening, and what did you expect to happen instead?"
+      label: "缺陷描述与期望行为"
+      description: "目前实际发生了什么？你期望的行为是什么？"
     validations:
       required: true
 
   - type: textarea
     id: to-reproduce
     attributes:
-      label: "Steps to Reproduce"
-      description: "Please provide a clear, step-by-step list to replicate the issue."
+      label: "复现步骤"
+      description: "请提供清晰、逐步的复现操作列表。"
       placeholder: |
-        1. Go to...
-        2. Click on...
-        3. See error...
+        1. 进入……
+        2. 点击……
+        3. 出现错误……
     validations:
       required: true

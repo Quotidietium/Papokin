@@ -7,7 +7,7 @@ on:
       - master
     paths:
       - ".github/workflows/sync-wit.yml"
-      - "crates/pumpkin-plugin-wit/**"
+      - "crates/papokin-plugin-wit/**"
 
 concurrency:
   group: sync-wit-to-mirror
@@ -30,12 +30,12 @@ jobs:
         with:
           client-id: ${{ vars.BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
-          owner: Pumpkin-MC
-          repositories: pumpkin-plugin-wit
+          owner: Quotidietium
+          repositories: papokin-plugin-wit
 
       - name: Push changes to mirror
         run: |
           git subtree push \
-            --prefix=crates/pumpkin-plugin-wit \
-            https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/Pumpkin-MC/pumpkin-plugin-wit.git \
+            --prefix=crates/papokin-plugin-wit \
+            https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/Quotidietium/papokin-plugin-wit.git \
             master

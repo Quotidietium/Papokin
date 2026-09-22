@@ -1,27 +1,27 @@
-name: Feature request
-description: Suggest an idea for this project
+name: 功能建议
+description: 为这个项目提出一个想法
 labels: ["enhancement"]
 assignees: Snowiiii
 body:
   - type: checkboxes
     id: duplicate
     attributes:
-      label: I've searched existing issues and couldn't find a duplicate.
-      description: I confirm this is not a duplicate.
+      label: 我已搜索现有议题，未找到重复内容。
+      description: 我确认这不是重复建议。
       options:
-        - label: I confirm this is not a duplicate.
+        - label: 我确认这不是重复建议。
           required: true
   - type: textarea
     id: problem
     attributes:
-      label: Is your feature request related to a problem? Please describe.
-      description: A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+      label: 你的功能建议是否与某个问题相关？请描述。
+      description: 清晰简洁地描述该问题。例如：每当 [……] 时我都很困扰
     validations:
       required: true
   - type: textarea
     id: solution
     attributes:
-      label: Describe the solution you'd like
-      description: A clear and concise description of what you want to happen.
+      label: 描述你期望的解决方案
+      description: 清晰简洁地描述你希望发生什么。
     validations:
       required: true
