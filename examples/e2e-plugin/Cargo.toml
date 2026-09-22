@@ -1,5 +1,5 @@
 [package]
-name = "pumpkin-e2e-plugin"
+name = "papokin-e2e-plugin"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -13,7 +13,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-pumpkin-plugin-api = { path = "../../crates/pumpkin-plugin-api" }
+papokin-plugin-api = { path = "../../crates/papokin-plugin-api" }
 tracing = "0.1.44"
 
 [profile.dev]

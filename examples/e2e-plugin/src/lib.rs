@@ -8,23 +8,23 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use pumpkin_plugin_api::damage_type::{DamageEffects, DamageScaling, DamageTypeBuilder};
-use pumpkin_plugin_api::events::player::{
+use papokin_plugin_api::damage_type::{DamageEffects, DamageScaling, DamageTypeBuilder};
+use papokin_plugin_api::events::player::{
     AsyncTabCompleteEvent, PlayerHandshakeEvent, PlayerItemCooldownEvent, PlayerJumpEvent,
     PlayerPurchaseEvent, PlayerTrackEntityEvent, PlayerTradeEvent,
 };
-use pumpkin_plugin_api::events::{
+use papokin_plugin_api::events::{
     EventData, EventHandler, EventPriority, PlayerJoinEvent, ServerTickStartEvent,
 };
-use pumpkin_plugin_api::merchant::TradeOfferBuilder;
-use pumpkin_plugin_api::recipe::{
+use papokin_plugin_api::merchant::TradeOfferBuilder;
+use papokin_plugin_api::recipe::{
     BrewingRecipeBuilder, SmithingTransformRecipeBuilder, SmithingTrimRecipeBuilder,
     StonecuttingRecipeBuilder,
 };
-use pumpkin_plugin_api::scheduler::SchedulerExt;
-use pumpkin_plugin_api::services::ServiceProvider;
-use pumpkin_plugin_api::structure::{BlockPos as StructurePos, WorldStructureExt};
-use pumpkin_plugin_api::{
+use papokin_plugin_api::scheduler::SchedulerExt;
+use papokin_plugin_api::services::ServiceProvider;
+use papokin_plugin_api::structure::{BlockPos as StructurePos, WorldStructureExt};
+use papokin_plugin_api::{
     Context, ItemStack, LoadOrder, Plugin, PluginMetadata, Result, TeleportFlags, register_plugin,
 };
 
@@ -69,7 +69,7 @@ struct JoinAnnouncerLowest;
 impl EventHandler<PlayerJoinEvent> for JoinAnnouncerLowest {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerJoinEventData,
     ) -> PlayerJoinEventData {
         let n = JOIN_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -83,7 +83,7 @@ struct JoinAnnouncerHighest;
 impl EventHandler<PlayerJoinEvent> for JoinAnnouncerHighest {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerJoinEventData,
     ) -> PlayerJoinEventData {
         let n = JOIN_COUNT.load(Ordering::Relaxed);
@@ -95,10 +95,10 @@ impl EventHandler<PlayerJoinEvent> for JoinAnnouncerHighest {
         // deal one generic hit so the entry mapping, kill-credit, combat-state
         // and damage-type-name queries all flow through the host boundary.
         if !COMBAT_CHECKED.swap(true, Ordering::Relaxed) {
-            use pumpkin_plugin_api::PlayerCombatExt;
+            use papokin_plugin_api::PlayerCombatExt;
             let player = &event.player;
             let before = player.get_combat_entries().len();
-            player.damage(1.0, pumpkin_plugin_api::DamageType::Generic);
+            player.damage(1.0, papokin_plugin_api::DamageType::Generic);
             let entries = player.get_combat_entries();
             let killer = player.get_killer();
             let in_combat = player.is_in_combat();
@@ -121,8 +121,8 @@ impl EventHandler<PlayerJoinEvent> for JoinAnnouncerHighest {
         // EntitySnapshot (NBT serialize/rebuild), and read-only brain memory
         // (Bukkit MemoryKey) queries. Runs once on the first join.
         if !ENTITY_API_CHECKED.swap(true, Ordering::Relaxed) {
-            use pumpkin_plugin_api::mobs::memory_keys;
-            use pumpkin_plugin_api::{EntityType, SpawnCategory};
+            use papokin_plugin_api::mobs::memory_keys;
+            use papokin_plugin_api::{EntityType, SpawnCategory};
 
             let player = &event.player;
             let entity = player.as_entity();
@@ -204,7 +204,7 @@ struct TickWatcher;
 impl EventHandler<ServerTickStartEvent> for TickWatcher {
     fn handle(
         &self,
-        server: pumpkin_plugin_api::Server,
+        server: papokin_plugin_api::Server,
         event: ServerTickStartEventData,
     ) -> ServerTickStartEventData {
         let n = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -222,7 +222,7 @@ impl EventHandler<ServerTickStartEvent> for TickWatcher {
 // chunk snapshots. Driven from the tick event because headless e2e has no
 // players: no chunk is loaded until load-chunk/forced tickets trigger the
 // asynchronous generation pipeline.
-fn chunk_api_demo_start(server: &pumpkin_plugin_api::Server) {
+fn chunk_api_demo_start(server: &papokin_plugin_api::Server) {
     let Some(world) = server.get_all_worlds().into_iter().next() else {
         tracing::info!("E2E chunk-demo-no-world");
         return;
@@ -244,7 +244,7 @@ fn chunk_api_demo_start(server: &pumpkin_plugin_api::Server) {
     CHUNK_DEMO_ARMED.store(true, Ordering::Relaxed);
 }
 
-fn chunk_api_demo_poll(server: &pumpkin_plugin_api::Server) {
+fn chunk_api_demo_poll(server: &papokin_plugin_api::Server) {
     if !CHUNK_DEMO_ARMED.load(Ordering::Relaxed) || CHUNK_DEMO_DONE.load(Ordering::Relaxed) {
         return;
     }
@@ -305,7 +305,7 @@ struct JumpWatcher;
 impl EventHandler<PlayerJumpEvent> for JumpWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerJumpEventData,
     ) -> PlayerJumpEventData {
         if !JUMP_SEEN.swap(true, Ordering::Relaxed) {
@@ -320,7 +320,7 @@ struct ItemCooldownWatcher;
 impl EventHandler<PlayerItemCooldownEvent> for ItemCooldownWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerItemCooldownEventData,
     ) -> PlayerItemCooldownEventData {
         if !ITEM_COOLDOWN_SEEN.swap(true, Ordering::Relaxed) {
@@ -335,7 +335,7 @@ struct TrackWatcher;
 impl EventHandler<PlayerTrackEntityEvent> for TrackWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerTrackEntityEventData,
     ) -> PlayerTrackEntityEventData {
         if !TRACK_SEEN.swap(true, Ordering::Relaxed) {
@@ -350,7 +350,7 @@ struct TabCompleteWatcher;
 impl EventHandler<AsyncTabCompleteEvent> for TabCompleteWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: AsyncTabCompleteEventData,
     ) -> AsyncTabCompleteEventData {
         if !TAB_COMPLETE_SEEN.swap(true, Ordering::Relaxed) {
@@ -365,7 +365,7 @@ struct HandshakeWatcher;
 impl EventHandler<PlayerHandshakeEvent> for HandshakeWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerHandshakeEventData,
     ) -> PlayerHandshakeEventData {
         if !HANDSHAKE_SEEN.swap(true, Ordering::Relaxed) {
@@ -380,7 +380,7 @@ struct PurchaseWatcher;
 impl EventHandler<PlayerPurchaseEvent> for PurchaseWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerPurchaseEventData,
     ) -> PlayerPurchaseEventData {
         if !PURCHASE_SEEN.swap(true, Ordering::Relaxed) {
@@ -395,7 +395,7 @@ struct TradeWatcher;
 impl EventHandler<PlayerTradeEvent> for TradeWatcher {
     fn handle(
         &self,
-        _server: pumpkin_plugin_api::Server,
+        _server: papokin_plugin_api::Server,
         event: PlayerTradeEventData,
     ) -> PlayerTradeEventData {
         if !TRADE_SEEN.swap(true, Ordering::Relaxed) {
@@ -415,14 +415,14 @@ struct MapWatcher;
 impl EventHandler<ServerTickStartEvent> for MapWatcher {
     fn handle(
         &self,
-        server: pumpkin_plugin_api::Server,
+        server: papokin_plugin_api::Server,
         event: ServerTickStartEventData,
     ) -> ServerTickStartEventData {
         let n = MAP_TICKS.fetch_add(1, Ordering::Relaxed);
         if n < 20 || MAP_CHECKED.swap(true, Ordering::Relaxed) {
             return event;
         }
-        use pumpkin_plugin_api::map::{MapCursor, WorldMapExt, cursor_types, rgb};
+        use papokin_plugin_api::map::{MapCursor, WorldMapExt, cursor_types, rgb};
 
         let Some(world) = server.get_all_worlds().into_iter().next() else {
             tracing::info!("E2E map-view-skipped no-world");
@@ -440,7 +440,7 @@ impl EventHandler<ServerTickStartEvent> for MapWatcher {
             display_name: Some("e2e".to_string()),
         });
         map.lock();
-        let roundtrip = pumpkin_plugin_api::map::get_map(map_id).is_some_and(|view| {
+        let roundtrip = papokin_plugin_api::map::get_map(map_id).is_some_and(|view| {
             view.get_id() == map_id && view.get_pixel(127, 127) != 0 && view.is_locked()
         });
         tracing::info!(
@@ -521,9 +521,9 @@ impl Plugin for E2ePlugin {
         }
 
         // Player plugin-message channel registry (new mechanism).
-        context.register_incoming_channel("pumpkin:e2e")?;
+        context.register_incoming_channel("papokin:e2e")?;
         let channels = context.get_incoming_channels();
-        if channels.contains(&"pumpkin:e2e".to_string()) {
+        if channels.contains(&"papokin:e2e".to_string()) {
             tracing::info!("E2E channel-registered channels={channels:?}");
         } else {
             tracing::info!("E2E channel-missed {channels:?}");
@@ -733,13 +733,13 @@ impl Plugin for E2ePlugin {
         // from gzipped NBT into the server's template cache (the same one the
         // `/place template` command resolves against), query it back through
         // has/list, then place it into a world.
-        match pumpkin_plugin_api::structure::register_structure("e2e:mono_block", E2E_TEMPLATE_NBT)
+        match papokin_plugin_api::structure::register_structure("e2e:mono_block", E2E_TEMPLATE_NBT)
         {
             Ok(()) => {
-                let registered = pumpkin_plugin_api::structure::has_structure("e2e:mono_block");
+                let registered = papokin_plugin_api::structure::has_structure("e2e:mono_block");
                 // Embedded vanilla templates resolve through the same cache.
-                let embedded = pumpkin_plugin_api::structure::has_structure("minecraft:igloo/top");
-                let listed = pumpkin_plugin_api::structure::list_structures()
+                let embedded = papokin_plugin_api::structure::has_structure("minecraft:igloo/top");
+                let listed = papokin_plugin_api::structure::list_structures()
                     .iter()
                     .any(|name| name == "e2e:mono_block");
                 if registered && embedded && listed {
@@ -771,13 +771,13 @@ impl Plugin for E2ePlugin {
         // Loot table API (new mechanism): pure-data generation against the
         // static datapack tables, so it runs headless with no world or player
         // context; a fixed seed makes every roll deterministic.
-        match pumpkin_plugin_api::loot::generate_loot("minecraft:chests/simple_dungeon", 0x5EED) {
+        match papokin_plugin_api::loot::generate_loot("minecraft:chests/simple_dungeon", 0x5EED) {
             Ok(stacks) => {
                 let total: u32 = stacks.iter().map(|s| u32::from(s.get_count())).sum();
-                let context = pumpkin_plugin_api::loot::LootContext::new()
+                let context = papokin_plugin_api::loot::LootContext::new()
                     .killed_by_player(true)
                     .tool(ItemStack::new("minecraft:diamond_sword", 1));
-                let zombie_drops = pumpkin_plugin_api::loot::generate_loot_with_context(
+                let zombie_drops = papokin_plugin_api::loot::generate_loot_with_context(
                     "minecraft:entities/zombie",
                     0x5EED,
                     context,
@@ -790,8 +790,8 @@ impl Plugin for E2ePlugin {
             }
             Err(err) => tracing::info!("E2E loot-generate-failed {err}"),
         }
-        let known = pumpkin_plugin_api::loot::has_loot_table("minecraft:chests/simple_dungeon");
-        let unknown = pumpkin_plugin_api::loot::has_loot_table("minecraft:e2e/no_such_table");
+        let known = papokin_plugin_api::loot::has_loot_table("minecraft:chests/simple_dungeon");
+        let unknown = papokin_plugin_api::loot::has_loot_table("minecraft:e2e/no_such_table");
         if known && !unknown {
             tracing::info!("E2E loot-has-table true-and-false-paths-ok");
         } else {
@@ -803,12 +803,12 @@ impl Plugin for E2ePlugin {
         // Exercise the startup-safe surface instead (guest-side key
         // validation mirroring the host, plus the payload limit constant) and
         // mark the API as linked.
-        let valid = pumpkin_plugin_api::cookie::is_valid_cookie_key("e2e:session");
-        let invalid = pumpkin_plugin_api::cookie::is_valid_cookie_key("E2E:Bad Key");
+        let valid = papokin_plugin_api::cookie::is_valid_cookie_key("e2e:session");
+        let invalid = papokin_plugin_api::cookie::is_valid_cookie_key("E2E:Bad Key");
         if valid && !invalid {
             tracing::info!(
                 "E2E cookie-api-ready max_payload={}",
-                pumpkin_plugin_api::cookie::MAX_COOKIE_PAYLOAD
+                papokin_plugin_api::cookie::MAX_COOKIE_PAYLOAD
             );
         } else {
             tracing::info!("E2E cookie-api-broken valid={valid} invalid={invalid}");
@@ -821,7 +821,7 @@ impl Plugin for E2ePlugin {
         // no respawn sequence is running, so the headless run with no players
         // and no dragon spawned stays safe).
         {
-            use pumpkin_plugin_api::dragon::{DragonRespawnStage, WorldDragonFightExt};
+            use papokin_plugin_api::dragon::{DragonRespawnStage, WorldDragonFightExt};
 
             let worlds = context.get_server().get_all_worlds();
             if worlds.is_empty() {
@@ -858,8 +858,8 @@ impl Plugin for E2ePlugin {
         // client. The join handler keeps the player-specific halves
         // (player=MISC category, player snapshot rejection).
         {
-            use pumpkin_plugin_api::mobs::memory_keys;
-            use pumpkin_plugin_api::{EntityType, SpawnCategory};
+            use papokin_plugin_api::mobs::memory_keys;
+            use papokin_plugin_api::{EntityType, SpawnCategory};
 
             let worlds = context.get_server().get_all_worlds();
             if let Some(world) = worlds.first() {
