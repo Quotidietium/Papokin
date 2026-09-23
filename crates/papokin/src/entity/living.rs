@@ -20,7 +20,7 @@ use std::sync::atomic::{
 use tracing::warn;
 
 use super::experience_orb::ExperienceOrbEntity;
-use super::{Entity, EntityBase, NBTStorageInit};
+use super::{Entity, EntityBase, NBTStorageInit, finite_f32_or};
 use crate::block::OnLandedUponArgs;
 use crate::entity::NBTStorage;
 use crate::entity::ageable::AgeableMob;
@@ -2774,7 +2774,11 @@ impl LivingEntity {
     }
 
     pub fn read_living_nbt_non_mut(&self, nbt: &NbtCompound) {
-        self.health.store(nbt.get_float("Health").unwrap_or(20.0));
+        // 拒绝非有限血量并钳制到 [0, 最大生命]，防止 NaN/Inf
+        // 经伤害算术污染实体状态（例如产生无法杀死的实体）。
+        let stored_health = finite_f32_or(nbt.get_float("Health").unwrap_or(20.0), 20.0);
+        self.health
+            .store(stored_health.max(0.0).min(self.get_max_health()));
 
         if let Some(equipment) = nbt.get_compound("equipment") {
             let mut guard = self
@@ -2798,14 +2802,15 @@ impl LivingEntity {
         self.absorption.store(clamped_abs);
 
         // 加载摔落距离，但如果该实体当前被标记为死亡，确保不恢复
-        // 一个会在生成时立即再次致死的致命坠落距离。
+        // 一个会在生成时立即再次致死的致命坠落距离。非有限值直接
+        // 忽略，避免 NaN 经坠落伤害算术污染血量。
         let fd = nbt
             .get_float("FallDistance")
             .or_else(|| nbt.get_float("fall_distance"))
-            .unwrap_or(0.0);
+            .filter(|value| value.is_finite());
         if self.dead.load(Relaxed) {
             self.fall_distance.store(0.0);
-        } else {
+        } else if let Some(fd) = fd {
             self.fall_distance.store(fd);
         }
         if let Some(hurt_time) = nbt.get_short("HurtTime") {
