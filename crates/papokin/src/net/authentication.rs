@@ -71,9 +71,29 @@ fn create_client(auth_config: &AuthenticationConfig) -> reqwest::Client {
         .unwrap_or_default()
 }
 
+/// 百分号编码用户名（RFC 3986 非保留字符集之外全部转义）。
+///
+/// 玩家名来自不可信的登录包，可能包含 `&`/`?`/`#`/`/` 等
+/// URL 结构字符；直接替换进模板会污染认证服务器的查询串
+/// 甚至路径，因此必须先编码（查询串与路径位置均安全）。
+fn percent_encode_username(username: &str) -> String {
+    let mut encoded = String::with_capacity(username.len());
+    for byte in username.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(char::from(byte));
+            }
+            _ => {
+                let _ = std::fmt::Write::write_fmt(&mut encoded, format_args!("%{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
 fn format_auth_url(url_template: &str, username: &str, server_hash: &str, ip: &IpAddr) -> String {
     url_template
-        .replace("{username}", username)
+        .replace("{username}", &percent_encode_username(username))
         .replace("{server_hash}", server_hash)
         .replace("{ip}", &ip.to_string())
 }
@@ -272,7 +292,7 @@ pub async fn lookup_profile_by_name(
     let mut last_unknown_status = None;
 
     for url_template in candidate_urls {
-        let address = url_template.replace("{username}", name);
+        let address = url_template.replace("{username}", &percent_encode_username(name));
 
         let response = match client.get(&address).send().await {
             Ok(resp) => resp,
@@ -515,6 +535,16 @@ mod tests {
             formatted,
             "https://auth.example.com/hasJoined?username=Player1&serverId=hash123&ip=127.0.0.1"
         );
+    }
+
+    #[test]
+    fn url_encodes_structural_characters_in_username() {
+        // 结构字符必须转义，玩家名不能污染查询串或路径。
+        assert_eq!(super::percent_encode_username("a&b=c"), "a%26b%3Dc");
+        assert_eq!(super::percent_encode_username("a?b#c"), "a%3Fb%23c");
+        assert_eq!(super::percent_encode_username("a/b d"), "a%2Fb%20d");
+        assert_eq!(super::percent_encode_username("Steve_99"), "Steve_99");
+        assert_eq!(super::percent_encode_username("玩家"), "%E7%8E%A9%E5%AE%B6");
     }
 
     #[test]
