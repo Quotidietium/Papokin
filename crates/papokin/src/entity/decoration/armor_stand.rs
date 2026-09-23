@@ -1,6 +1,8 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, AtomicI64, AtomicU8, Ordering};
 
-use crate::entity::{Entity, EntityBase, living::LivingEntity};
+use crate::entity::mob::equipment::get_equipment_slot_for_item;
+use crate::entity::{Entity, EntityBase, living::LivingEntity, player::Player};
 use crossbeam::atomic::AtomicCell;
 use papokin_data::item_stack::ItemStack;
 use papokin_data::{
@@ -185,12 +187,53 @@ impl ArmorStandEntity {
         self.rotation.store(packed.to_owned());
     }
 
+    /// 原版空手取下的槽位扫描顺序（`EquipmentSlot.values()` 中的手与护甲槽）。
+    const INTERACT_SLOTS: &[EquipmentSlot] = &[
+        EquipmentSlot::MAIN_HAND,
+        EquipmentSlot::OFF_HAND,
+        EquipmentSlot::FEET,
+        EquipmentSlot::LEGS,
+        EquipmentSlot::CHEST,
+        EquipmentSlot::HEAD,
+    ];
+
+    /// 空手右键时取下：按原版顺序扫描第一个非空且可用的槽位。
+    fn find_first_occupied_slot(&self) -> Option<EquipmentSlot> {
+        let equipment = self
+            .living_entity
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::INTERACT_SLOTS
+            .iter()
+            .find(|slot| self.can_use_slot(slot) && !equipment.get(slot).is_empty())
+            .cloned()
+    }
+
+    /// 破坏时掉落存放的全部装备与手持物品。
+    fn drop_all_equipment(&self) {
+        let entity = self.get_entity();
+        let world = entity.world.load();
+        let mut equipment = self
+            .living_entity
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for stack in equipment.equipment.values() {
+            if !stack.is_empty() {
+                world.drop_stack(&entity.block_pos.load(), stack.clone());
+            }
+        }
+        equipment.equipment.clear();
+    }
+
     fn break_and_drop_items(&self) {
         let entity = self.get_entity();
         //let name = entity.custom_name.unwrap_or(entity.get_name());
 
         //TODO: 我真笨！let armor_stand_item = ItemStack::new_with_component(1, &Item::ARMOR_STAND, vec![(DataComponent::CustomName, self.get_custom_name())]);
         let armor_stand_item = ItemStack::new(1, &Item::ARMOR_STAND);
+        self.drop_all_equipment();
         entity
             .world
             .load()
@@ -206,8 +249,6 @@ impl ArmorStandEntity {
             SoundCategory::Neutral,
             &entity.pos.load(),
         );
-
-        // TODO: 实现装备槽，并让它们掉落其中存放的所有物品。
     }
 
     /// 在盔甲架的位置生成破坏粒子。
@@ -244,6 +285,42 @@ impl EntityBase for ArmorStandEntity {
         }
 
         nbt.put("Pose", self.pack_rotation());
+
+        // 原版格式：ArmorItems=[靴、腿、胸、头]，HandItems=[主手、副手]；
+        // 空槽位写空复合标签
+        let equipment = self
+            .living_entity
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let to_compound = |slot: &EquipmentSlot| {
+            let mut compound = NbtCompound::new();
+            equipment.get(slot).write_item_stack(&mut compound);
+            NbtTag::Compound(compound)
+        };
+        nbt.put(
+            "ArmorItems",
+            NbtTag::List(
+                [
+                    EquipmentSlot::FEET,
+                    EquipmentSlot::LEGS,
+                    EquipmentSlot::CHEST,
+                    EquipmentSlot::HEAD,
+                ]
+                .iter()
+                .map(to_compound)
+                .collect(),
+            ),
+        );
+        nbt.put(
+            "HandItems",
+            NbtTag::List(
+                [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND]
+                    .iter()
+                    .map(to_compound)
+                    .collect(),
+            ),
+        );
     }
 
     fn read_custom_nbt(&self, nbt: &NbtCompound) {
@@ -292,6 +369,48 @@ impl EntityBase for ArmorStandEntity {
             let packed: PackedRotation = pose_tag.clone().into();
             self.unpack_rotation(&packed);
         }
+
+        // 原版格式：ArmorItems=[靴、腿、胸、头]，HandItems=[主手、副手]
+        {
+            let mut equipment = self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let armor_slots = [
+                EquipmentSlot::FEET,
+                EquipmentSlot::LEGS,
+                EquipmentSlot::CHEST,
+                EquipmentSlot::HEAD,
+            ];
+            if let Some(list) = nbt.get_list("ArmorItems") {
+                for (index, tag) in list.iter().enumerate() {
+                    let Some(slot) = armor_slots.get(index) else {
+                        break;
+                    };
+                    if let Some(compound) = tag.extract_compound()
+                        && let Some(stack) = ItemStack::read_item_stack(&compound.clone())
+                        && !stack.is_empty()
+                    {
+                        equipment.put(slot, stack);
+                    }
+                }
+            }
+            let hand_slots = [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND];
+            if let Some(list) = nbt.get_list("HandItems") {
+                for (index, tag) in list.iter().enumerate() {
+                    let Some(slot) = hand_slots.get(index) else {
+                        break;
+                    };
+                    if let Some(compound) = tag.extract_compound()
+                        && let Some(stack) = ItemStack::read_item_stack(&compound.clone())
+                        && !stack.is_empty()
+                    {
+                        equipment.put(slot, stack);
+                    }
+                }
+            }
+        }
     }
 
     fn get_entity(&self) -> &Entity {
@@ -300,6 +419,84 @@ impl EntityBase for ArmorStandEntity {
 
     fn get_living_entity(&self) -> Option<&LivingEntity> {
         Some(&self.living_entity)
+    }
+
+    /// 玩家右键盔甲架：手持装备则穿到对应槽位（原有装备回到手中），
+    /// 空手则按原版顺序取下第一件装备。返回 true 表示交互已处理。
+    fn interact(&self, player: &Arc<Player>, item_stack: &mut ItemStack) -> bool {
+        if self.is_marker() {
+            return false;
+        }
+
+        // 目标槽位：空手取下第一个非空槽位；手持物品按其装备类型推断槽位
+        let slot = if item_stack.is_empty() {
+            self.find_first_occupied_slot()
+        } else {
+            let slot = get_equipment_slot_for_item(item_stack);
+            self.can_use_slot(&slot).then_some(slot)
+        };
+        let Some(slot) = slot else {
+            return false;
+        };
+
+        // 盔甲架操作事件，取消则本次操作无效
+        let mut event = crate::plugin::api::events::player::player_armor_stand_manipulate::PlayerArmorStandManipulateEvent {
+            player: player.clone(),
+            armor_stand_id: self.get_entity().entity_id,
+            slot: slot.get_offset_entity_slot_id(0) as u8,
+            cancelled: false,
+        };
+        let world = self.get_entity().world.load();
+        if let Some(server) = world.server.upgrade() {
+            server.plugin_manager.fire_blocking(&server, &mut event);
+            if event.cancelled {
+                return true;
+            }
+        }
+
+        let current = {
+            let mut equipment = self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = equipment.get(&slot);
+            if item_stack.is_empty() {
+                // 取下：槽位清空
+                equipment.put(&slot, ItemStack::EMPTY.clone());
+            } else {
+                // 放置：放入一份；数量大于 1 时仅消耗 1 个，否则与原有装备交换
+                equipment.put(&slot, item_stack.copy_with_count(1));
+            }
+            current
+        };
+
+        // 非创造模式才更新玩家手持：取下/交换时装备进入手中，放置时消耗
+        if !player.is_creative() {
+            if item_stack.is_empty() || item_stack.item_count == 1 {
+                *item_stack = current;
+            } else {
+                item_stack.set_count(item_stack.item_count - 1);
+            }
+        }
+
+        // 同步装备变化到客户端
+        let new_stack = {
+            let equipment = self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            equipment.get(&slot)
+        };
+        self.living_entity
+            .send_equipment_changes(&[(slot, new_stack)]);
+        world.play_sound(
+            Sound::ItemArmorEquipGeneric,
+            SoundCategory::Neutral,
+            &self.get_entity().pos.load(),
+        );
+        true
     }
 
     fn kill(&self, _caller: &dyn EntityBase) {
@@ -350,6 +547,7 @@ impl EntityBase for ArmorStandEntity {
             || damage_type == DamageType::BAD_RESPAWN_POINT;
 
         if is_explosion {
+            self.drop_all_equipment();
             Self::on_break(entity);
             entity.remove();
             return false;
