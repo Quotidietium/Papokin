@@ -499,10 +499,76 @@ include!("../../../../papokin-data/src/generated/configured_features_generated.r
 #[cfg(test)]
 mod tests {
     use super::{BONE_MEAL_FEATURES, CONFIGURED_FEATURES, ConfiguredFeature};
+    use crate::chunk_system::chunk_state::StagedChunkEnum;
+    use crate::generation::{
+        generator::WorldGenerator,
+        get_world_gen,
+        proto_chunk::{GenerationCache, ProtoChunk},
+    };
+    use crate::world::WorldPortalExt;
+    use papokin_data::{
+        Block, BlockState, BlockStateId, Mirror, Rotation,
+        configured_feature::ConfiguredFeature as FeatureId, dimension::Dimension,
+    };
+    use papokin_util::world_seed::Seed;
     use papokin_util::{
         math::position::BlockPos,
         random::{RandomGenerator, xoroshiro128::Xoroshiro},
     };
+
+    /// 测试用 `WorldPortalExt` 桩：允许任意方块放置，镜像/旋转直接委托给方块定义。
+    struct Registry;
+
+    impl WorldPortalExt for Registry {
+        fn can_place_at(
+            &self,
+            _block: &Block,
+            _state: &BlockState,
+            _block_accessor: &dyn crate::world::BlockAccessor,
+            _block_pos: &BlockPos,
+        ) -> bool {
+            true
+        }
+
+        fn mirror(
+            &self,
+            block: &Block,
+            state_id: BlockStateId,
+            mirror: Mirror,
+        ) -> &'static BlockState {
+            block.mirror(state_id, mirror)
+        }
+
+        fn rotate(
+            &self,
+            block: &Block,
+            state_id: BlockStateId,
+            rotation: Rotation,
+        ) -> &'static BlockState {
+            block.rotate(state_id, rotation)
+        }
+
+        fn spawn_mobs_for_chunk_generation(
+            &self,
+            _cache: &mut dyn GenerationCache,
+            _biome: &'static papokin_data::chunk::Biome,
+            _chunk_x: i32,
+            _chunk_z: i32,
+        ) {
+        }
+    }
+
+    /// 推进一个主世界 (0,0) 区块到噪声阶段，供特性求值使用。
+    fn step_noise_stage(
+        world_gen: &WorldGenerator,
+        generator: &crate::generation::generator::VanillaGenerator,
+    ) -> ProtoChunk {
+        let mut chunk = ProtoChunk::new(0, 0, world_gen);
+        chunk.step_to_biomes(generator);
+        chunk.stage = StagedChunkEnum::StructureReferences;
+        chunk.step_to_noise(generator);
+        chunk
+    }
 
     #[test]
     fn bonemeal_feature_tag_resolves_to_placeable_blocks() {
@@ -532,5 +598,109 @@ mod tests {
         assert_eq!(values.len(), 8);
         assert!(values.contains(&"flower_default"));
         assert!(values.contains(&"wildflower"));
+    }
+
+    /// 回归测试：树木的 `below_trunk_provider` 曾被代码生成固定为 AIR
+    /// （26.3 数据把提供器抽成了 `block_state_provider` 注册表资源，
+    /// 特性 JSON 里以 id 字符串引用，当时的生成器不识别字符串引用，
+    /// 静默回退成 AIR），导致每棵树的树干最下方一格被写成空气。
+    /// 修复后规则提供器在任何基面（含被挖空的空气位）上都不得产出空气。
+    #[test]
+    fn tree_below_trunk_provider_never_yields_air() {
+        let world_gen = get_world_gen(
+            Seed(42),
+            Dimension::OVERWORLD,
+            false,
+            Vec::new(),
+            String::new(),
+        );
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        let mut chunk = step_noise_stage(&world_gen, generator);
+
+        let registry = Registry;
+        let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(0));
+        let pos = BlockPos::new(8, 100, 8);
+        let trees: Vec<&super::super::features::tree::TreeFeature> = CONFIGURED_FEATURES
+            .values()
+            .filter_map(|feature| match feature {
+                ConfiguredFeature::Tree(tree) => Some(tree.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            trees.len() >= 40,
+            "树木特性数量异常：{}（低于预期，数据是否退化？）",
+            trees.len()
+        );
+
+        for (block, scenario) in [
+            (Block::GRASS_BLOCK, "草方块"),
+            (Block::DIRT, "泥土"),
+            (Block::AIR, "空气位"),
+            (Block::SAND, "沙子"),
+        ] {
+            chunk.set_block_state(pos.0.x, pos.0.y, pos.0.z, block.default_state);
+            for tree in &trees {
+                assert!(
+                    tree.below_trunk_provider
+                        .get_optional(&registry, &chunk, &mut random, pos)
+                        .is_none_or(|state| !state.is_air()),
+                    "树木下方提供器在{scenario}上产出了空气"
+                );
+            }
+        }
+    }
+
+    /// Oak 的精确语义抽查：非土壤基面（草方块、沙子、空气位）替换为泥土，
+    /// 土壤基面（`cannot_replace_below_tree_trunk` 标签，如泥土）保持原样。
+    #[test]
+    fn oak_below_trunk_provider_replaces_non_soil_with_dirt() {
+        let world_gen = get_world_gen(
+            Seed(42),
+            Dimension::OVERWORLD,
+            false,
+            Vec::new(),
+            String::new(),
+        );
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        let mut chunk = step_noise_stage(&world_gen, generator);
+
+        let registry = Registry;
+        let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(0));
+        let pos = BlockPos::new(8, 100, 8);
+        let Some(ConfiguredFeature::Tree(oak)) = CONFIGURED_FEATURES.get(&FeatureId::Oak) else {
+            panic!("Oak 特性缺失");
+        };
+        for (block, expected, message) in [
+            (
+                Block::GRASS_BLOCK,
+                Some(Block::DIRT.default_state.id),
+                "Oak 应把树干下方的草方块替换为泥土",
+            ),
+            (Block::DIRT, None, "Oak 的下方提供器不应改写泥土"),
+            (
+                Block::SAND,
+                Some(Block::DIRT.default_state.id),
+                "Oak 应把树干下方的沙子替换为泥土",
+            ),
+            (
+                Block::AIR,
+                Some(Block::DIRT.default_state.id),
+                "Oak 应把树干下方的空气位补为泥土",
+            ),
+        ] {
+            chunk.set_block_state(pos.0.x, pos.0.y, pos.0.z, block.default_state);
+            assert_eq!(
+                oak.below_trunk_provider
+                    .get_optional(&registry, &chunk, &mut random, pos)
+                    .map(|state| state.id),
+                expected,
+                "{message}"
+            );
+        }
     }
 }

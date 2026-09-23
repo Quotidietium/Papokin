@@ -1067,6 +1067,18 @@ pub fn value_to_configured_feature(v: &Value) -> TokenStream {
 /// # Returns
 /// 一个对应相应 `BlockStateProvider` 变体的 `TokenStream`；类型无法识别时默认为使用空气的 `BlockStateProvider::Simple`。
 fn value_to_block_state_provider(v: &Value) -> TokenStream {
+    // 26.x 起状态提供器可注册为 worldgen 资源，feature JSON 里以 id 字符串引用。
+    if let Some(id) = v.as_str() {
+        let name = id.strip_prefix("minecraft:").unwrap_or(id);
+        let path =
+            Path::new("../../assets/datapacks/26_3/data/minecraft/worldgen/block_state_provider")
+                .join(format!("{name}.json"));
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("未知的方块状态提供器引用 {id}：{e}"));
+        let referenced: Value = serde_json::from_str(&content)
+            .unwrap_or_else(|e| panic!("解析方块状态提供器 {id} 失败：{e}"));
+        return value_to_block_state_provider(&referenced);
+    }
     if v.get("type").is_none() && (v.get("id").is_some() || v.get("Name").is_some()) {
         let state = value_to_block_state(v);
         return quote! { BlockStateProvider::Simple(SimpleStateProvider { state: #state }) };
