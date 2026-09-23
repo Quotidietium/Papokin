@@ -86,6 +86,25 @@ impl JavaClient {
             Self::clamp_horizontal(position.z),
         );
 
+        // 原版 moved too quickly：单包平方位移超过阈值（飞行 300，普通
+        // 100）时驳回并拉回，否则改过包的客户端可以任意距离瞬移
+        let previous_pos = player.get_entity().pos.load();
+        let flying = player
+            .abilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flying;
+        let max_delta_squared = if flying { 300.0 } else { 100.0 };
+        if previous_pos.squared_distance_to_vec(&position) > max_delta_squared {
+            warn!(
+                "玩家 {} 移动过快（单包 {} 格），已驳回并拉回",
+                player.gameprofile.name,
+                previous_pos.squared_distance_to_vec(&position).sqrt()
+            );
+            self.force_tp(player, previous_pos);
+            return;
+        }
+
         send_cancellable_blocking! {{
             server;
             PlayerMoveEvent {
@@ -220,6 +239,24 @@ impl JavaClient {
             Self::clamp_vertical(position.y),
             Self::clamp_horizontal(position.z),
         );
+
+        // 原版 moved too quickly：阈值与不带旋转的分支一致
+        let previous_pos = player.get_entity().pos.load();
+        let flying = player
+            .abilities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flying;
+        let max_delta_squared = if flying { 300.0 } else { 100.0 };
+        if previous_pos.squared_distance_to_vec(&position) > max_delta_squared {
+            warn!(
+                "玩家 {} 移动过快（单包 {} 格），已驳回并拉回",
+                player.gameprofile.name,
+                previous_pos.squared_distance_to_vec(&position).sqrt()
+            );
+            self.force_tp(player, previous_pos);
+            return;
+        }
 
         send_cancellable_blocking! {{
             server;
