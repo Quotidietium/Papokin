@@ -51,6 +51,8 @@ log 2 · i18n 2 · config 2 · metadata 1 · ipc 1
 
 **结论：笔记 11 §五的门禁声称（fmt/clippy 0 错误/992 测试/e2e 7 标记）与机制清单，在当前 HEAD 上未发现回退。**
 
+> **2026-09-23 批注**：§三 ⑪ 行「9 个不可接线事件当前业务引用仍为 0」已过时：SculkBloom、BellResonate、EntityBlockForm、ExpBottle、PlayerArmorStandManipulate 五个事件已随对应机制（幽匿催发蔓延、钟共振、冰霜行者/雪傀儡留痕、经验瓶投掷物、盔甲架装备槽）接线 fire 点，`LootGenerateEvent` 死代码亦已汇聚四处真实生成路径。剩余 VaultDisplayItem、EntityTargetBlock、HorseJump、ArrowBodyCountChange 仍为架构性缺口。详见 note/11 §十一。
+
 ## 四、子系统覆盖矩阵（镜头拉宽到 Papo 全 API 面）
 
 图例：✅ 覆盖（含等价不同形） · ◐ 部分覆盖 · ❌ Papo 有而 Papokin 无 · ★ Papokin 独有

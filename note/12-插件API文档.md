@@ -212,9 +212,9 @@ WIT `event.wit` 的 `event` variant 定义了 **367 种事件类型**，覆盖�
 | 交互 | HangingBreak/ByEntity、ItemMerge、PlayerInteract 系、Inventory* 系 |
 | 服务端 | ServerTickStart、GameEvent、Raid*、Vehicle* |
 
-（* LootGenerate 已注册分发但 vanilla 生成路径未汇聚，见 §16.4。）
+（* LootGenerate 已在实体掉落、箱子首次打开、运输矿车、钓鱼收线四处真实生成路径接线（2026-09-23），取消即无战利品，见 §16.4。）
 
-已知**不可接线**的 9 个事件（底层 vanilla 机制缺失，见 note/11 §三）：SculkBloom、BellResonate、VaultDisplayItem、EntityBlockForm、EntityTargetBlock、ExpBottle、HorseJump、ArrowBodyCountChange、PlayerArmorStandManipulate。
+已知**不可接线**事件已从 9 个收敛到 4 个（2026-09-23 机制补齐，见 note/11 §十一）：SculkBloom、BellResonate、EntityBlockForm、ExpBottle、PlayerArmorStandManipulate 五个已随对应 vanilla 机制（幽匿催发蔓延、钟共振高亮、冰霜行者/雪傀儡留痕、经验瓶投掷物、盔甲架装备槽）落地接线；剩余 VaultDisplayItem（vault 机制缺失）、EntityTargetBlock（无 mob 方块目标语义）、HorseJump（客户端权威移动）、ArrowBodyCountChange（无中箭计数状态）仍缺底层机制。
 
 ---
 
@@ -542,7 +542,7 @@ WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 �
 
 ### 11.8 战利品（`loot.rs`）
 
-`generate_loot(key, seed)` 纯数据生成（无头安全）；`generate_loot_with_context` 接受 `LootContext`（`luck / killed_by_player / explosion_radius / tool`——只暴露生成管线真实消费的字段）；`fill_inventory(key, seed, inventory)` 填 Generic 容器（箱/桶/运输矿车）；`has_loot_table(key)`。`LootGenerateEvent` 存在但 vanilla 生成路径未汇聚（见 §16.4）。
+`generate_loot(key, seed)` 纯数据生成（无头安全）；`generate_loot_with_context` 接受 `LootContext`（`luck / killed_by_player / explosion_radius / tool`——只暴露生成管线真实消费的字段）；`fill_inventory(key, seed, inventory)` 填 Generic 容器（箱/桶/运输矿车）；`has_loot_table(key)`。`LootGenerateEvent` 已在实体掉落、箱子、运输矿车、钓鱼四处生成路径接线（2026-09-23，见 §16.4）。
 
 ### 11.9 龙战（`dragon.rs`）
 
@@ -706,8 +706,8 @@ E2E paper-events-registered / recipe-*-registered ×4 / registry-* ×5
 
 ### 16.4 已知边界（诚实清单）
 
-- **9 个事件无 fire 点**（vanilla 机制缺失）：见 §4.3 与 note/11 §三；当前代码业务引用仍为 0（note/13 §三逐事件复核）。
-- **`LootGenerateEvent` 事实死代码**：fire 点挂在 `World::generate_loot`，但该入口全 workspace 零调用者；箱子/掉落/钓鱼等 10+ 真实生成路径全部绕过（payload 与生成签名不匹配，汇聚需跨模块设计，另案处理）。钓鱼本身未接战利品表（源码 TODO）。
+- **4 个事件无 fire 点**（vanilla 机制缺失；2026-09-23 由 9 个收敛：SculkBloom、BellResonate、EntityBlockForm、ExpBottle、PlayerArmorStandManipulate 已随机制落地）：见 §4.3 与 note/11 §三、§十一。
+- **`LootGenerateEvent` 已接线（2026-09-23，此前为事实死代码）**：`World::generate_loot(&str) -> bool` 现已在实体掉落（`drop_loot`）、箱子首次打开、运输矿车 `unpack_loot`、钓鱼收线四处接入，取消即跳过战利品产出。钓鱼也已接入战利品表（三表加权/开放水域/饵钓/物品飞向玩家，见 note/11 §十一）。
 - **cookie**：config 阶段发包路径未暴露（Player 资源 play 相位才存在）；请求-响应无事务关联（同 Paper）；无响应到达事件（可后补）。
 - EntityScheduler 可经 `World::spawn_entity` 无头验证（2026-09-20 复核修正，见 note/13 §七.2）；join/chat 优先级实机排序仍需真实玩家。任务处理器表：一次性任务触发后即移除、`cancel_task` 会连带清理 guest 侧处理器；但实体任务因实体消失而被宿主静默跳过/终止时没有 WIT 回调通知 guest，其处理器表项会残留（仅内存占位，不再执行）。
 - **脑记忆为只读**：`set` 路径未暴露（Bukkit MemoryKey 写面需 brain 机制写侧设计）。结构放置不放置实体（仅方块）。区块快照不含光照/高度图。强加载票据不落盘（重启失效）。

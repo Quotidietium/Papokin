@@ -204,3 +204,42 @@ width/height/x_offset/y_offset Opt<VarInt> · colors Opt<[i32LE]>
 - `cargo test --workspace`：**968 通过 / 0 失败**（较第三轮 1059 下降为 Bedrock 测试同步删除所致）。
 - e2e 无头实跑（`target/e2e-run`，新编服务端 + 按新 WIT 重编 wasm）：**40 个 E2E 标记、零失败类**，机制标记与 §9.4 清单一致（registry-\* ×5、recipe-\* ×4、loot/combat/map/chunk/structure/merchant/dragon/cookie/brain/snapshot/spawn-category 全绿）。
 - 磁盘纪律：构建后 `rm -rf target/debug/incremental`（AGENTS.md 新规）；本轮构建后 target 33G。
+
+## 十一、体验对齐 Papo：机制级缺口清空（2026-09-23）
+
+目标：所有玩家可见体验与 Papo（参考实现）一致——只要求 UX 一致，不要求实现方法一致。两轮落地后，§三「不可接线清单」从 9 个事件收敛到 4 个（全部为架构性缺口），`LootGenerateEvent` 死代码清零。
+
+### 11.1 玩法机制补齐（第一轮）
+
+1. **钓鱼战利品**（`entity/projectile/fishing_bobber.rs`）：收线产出真实战利品——鱼 85−海之眷顾 / 垃圾 10−2×等级 / 宝藏 5+2×等级 三表加权，宝藏需开放水域（5×4×5 空气/液体/荷叶），饵钓缩短等待，物品从浮漂飞向玩家（原版弹道），1..=6 经验，收竿损耗 1 耐久。此前钓鱼任何东西都不产出。
+2. **雪傀儡**（`entity/passive/snow_golem.rs`）：寒冷群系（温度 < 0.8）脚下留雪层（受 mob_griefing 约束）；炎热群系（基础温度 ≥ 0.95 近似 snow_golem_melts 标签）每刻 1 点火焰伤害。
+3. **经验瓶投掷物**（新 `entity/projectile/experience_bottle.rs`）：真实抛射实体（重力 0.03、初速 0.7），落地碎裂释放 3+rand(5)+rand(5)=3..=13 经验；此前是使用瞬间在眼前凭空生成经验球。
+4. **冰霜行者**（`entity/living.rs` `tick_frost_walker`）：半径 2+附魔等级（上限 16）内仅冻结上方为空气的水源（level=0）为霜冰，60-120 刻后由霜冰计划刻自然融化。**坑：玩家是客户端权威不走 `tick_movement`，玩家与生物两条 tick 路径需各挂一次**。
+
+### 11.2 玩法机制补齐（第二轮）与 bug 修复
+
+5. **钟共振**（`block/entities/bell.rs`）：`raiders_hear_bell()` 实装——响铃瞬间捕获 32 格内 `#minecraft:raiders` 生物；共振 40 刻内每刻给 48 格内存活袭击者上 GLOWING 60 刻（无粒子）；`activate` 增加 world 参数。**顺带修掉隐藏 bug：共振结束 `resonate_time` 不清零导致同一口钟永远无法再次共振**。
+6. **幽匿催化体蔓延**（`block/blocks/sculk/sculk_catalyst.rs`）：玩家击杀且死亡位置 8 格内有催化体时，经验被吸收（不生成经验球）并作为充能（min(xp,1000)）在 `#sculk_replaceable` 方块上催发幽匿块（上方须空气/液体，最多 64 落点）；充能 ≥10 时 1% 催发尖叫体（can_summon=false，不召唤监守者）+1% 传感器。简化说明：直接随机落点，未实现幽匿脉充能路径，玩家可见结果一致。
+7. **盔甲架装备槽**（`entity/decoration/armor_stand.rs`）：手持装备右键穿入对应槽位（>1 消耗 1 个、=1 与原装备交换；创造不消耗）；空手按 主手→副手→脚→腿→胸→头 取下第一件；槽位禁用/手臂隐藏沿用 `can_use_slot`/`is_slot_disabled`；破坏与爆炸掉落全部装备；NBT 按原版 `ArmorItems`/`HandItems` 持久化；装备变化经 `send_equipment_changes` 同步客户端。
+8. **粘性活塞推动方块消失**（本轮较早）：根因为活塞方块实体缺 `blockState` NBT 字段（客户端渲染/落块唯一依据）；补 `BlockState::to_state_string/from_state_string` 全量序列化（约 2.7 万状态往返测试）、tick 空气分支与缩回头部补 `NOTIFY_LISTENERS`。
+9. **树下空气洞**（本轮最早，世界生成）：26.3 状态提供器注册表字符串引用是根因，codegen 静默回退 AIR；修复见世界生成管线。
+
+### 11.3 事件接线（§三 挂账清单 9 → 4）
+
+| 事件 | fire 点 |
+|---|---|
+| `SculkBloom` | 幽匿催化体每个催发点（取消则放弃该格） |
+| `BellResonate` | 共振启动（取消则本次不高亮袭击者） |
+| `EntityBlockForm` | 冰霜行者冻结、雪傀儡留雪（取消则不放置） |
+| `ExpBottle` | 经验瓶落地碎裂（取消则不碎裂不给经验，经验数量可改写） |
+| `PlayerArmorStandManipulate` | 盔甲架装备操作（取消则本次操作无效） |
+| `LootGenerateEvent`（死代码清零） | `World::generate_loot(&str) -> bool` 接入四处真实生成路径：实体 `drop_loot`、箱子首次打开、运输矿车 `unpack_loot`、钓鱼收线；取消即无战利品 |
+
+**剩余 4 个不可接线事件**（需先补底层机制，另案）：VaultDisplayItem（vault 机制整体缺失）、EntityTargetBlock（无 mob 方块目标语义）、HorseJump（客户端权威移动，服务端无跳跃时机）、ArrowBodyCountChange（无中箭计数状态）。
+
+### 11.4 门禁（2026-09-23 实测）
+
+- `cargo fmt --all -- --check`：清洁。
+- `cargo clippy --workspace --all-targets`：**0 错误**。
+- `cargo test --workspace`：**974 通过 / 0 失败**（较汉化轮 968 基线增加，为本轮新机制的回归测试）。
+- 汉化约定延续：新增代码注释与用户可见文本全部简体中文。
