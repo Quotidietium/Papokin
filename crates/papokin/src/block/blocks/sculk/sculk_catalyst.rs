@@ -59,13 +59,19 @@ impl SculkCatalystBlock {
                 Self::place_feature_block(
                     world,
                     catalyst,
+                    charge as i32,
                     props.to_state_id(&Block::SCULK_SHRIEKER),
                 );
             }
             // 小概率催发传感器（原版 1%）
             if rng.random_range(0..100) < 1 {
                 let props = SculkSensorLikeProperties::default(&Block::SCULK_SENSOR);
-                Self::place_feature_block(world, catalyst, props.to_state_id(&Block::SCULK_SENSOR));
+                Self::place_feature_block(
+                    world,
+                    catalyst,
+                    charge as i32,
+                    props.to_state_id(&Block::SCULK_SENSOR),
+                );
             }
         }
 
@@ -104,8 +110,14 @@ impl SculkCatalystBlock {
         true
     }
 
-    /// 在催化体周围找一个可替换位置放置特色方块（尖叫体/传感器）。
-    fn place_feature_block(world: &Arc<World>, catalyst: BlockPos, state: BlockStateId) {
+    /// 在催化体周围找一个可替换位置放置特色方块（尖叫体/传感器），
+    /// 放置前同样触发 `SculkBloom` 事件，取消则放弃该候选位置。
+    fn place_feature_block(
+        world: &Arc<World>,
+        catalyst: BlockPos,
+        charge: i32,
+        state: BlockStateId,
+    ) {
         let mut rng = rand::rng();
         for _ in 0..8 {
             let target = BlockPos::new(
@@ -120,6 +132,17 @@ impl SculkCatalystBlock {
             let above_state = world.get_block_state(&target.up());
             if !(above_state.is_air() || above_state.is_liquid()) {
                 continue;
+            }
+            let mut event = crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent::new(
+                target,
+                world.clone(),
+                charge,
+            );
+            if let Some(server) = world.server.upgrade() {
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                if event.cancelled {
+                    continue;
+                }
             }
             world.set_block_state(&target, state, BlockFlags::NOTIFY_ALL);
             return;
