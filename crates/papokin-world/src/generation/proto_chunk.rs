@@ -582,11 +582,15 @@ impl ProtoChunk {
     #[inline]
     #[must_use]
     pub fn get_biome_id(&self, x: i32, y: i32, z: i32) -> u8 {
-        let index = self.local_biome_pos_to_biome_index(
-            x & 3,
-            y - biome_coords::from_block(self.bottom_y() as i32),
-            z & 3,
-        );
+        // saturating 减法：极端 y（如 i32::MIN）与 bottom_y 相减在
+        // debug 构建下会因溢出 panic，先于下方钳制发生。
+        let biome_y = y.saturating_sub(biome_coords::from_block(self.bottom_y() as i32));
+        // 特征/结构可能以世界高度边界之外的 y 查询群系（如树冠、
+        // 雕削器路径）；钳制到有效区间，避免索引越界 panic 导致
+        // 区块生成线程失败、区块永久无法加载。
+        let biome_height = self.height() as i32 >> 2;
+        let clamped_y = biome_y.clamp(0, biome_height - 1);
+        let index = self.local_biome_pos_to_biome_index(x & 3, clamped_y, z & 3);
         self.flat_biome_map[index]
     }
 
@@ -1674,5 +1678,32 @@ impl GenerationCache for ProtoChunk {
     }
     fn get_sea_level(&self) -> i32 {
         Self::get_sea_level(self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProtoChunk;
+    use crate::generation::GlobalRandomConfig;
+    use crate::generation::generator::{GeneratorInit, VanillaGenerator, WorldGenerator};
+    use papokin_data::dimension::Dimension;
+    use papokin_util::world_seed::Seed;
+
+    /// 越界 y 的群系查询必须钳制而非 panic：特征与结构
+    /// 可能以世界高度边界之外的 y 查询群系，越界会令
+    /// 生成工作线程失败、区块永久无法加载。
+    #[test]
+    fn biome_lookup_outside_world_height_is_clamped() {
+        let random_config = GlobalRandomConfig::new(12345, false);
+        let world_gen = WorldGenerator::Noise(Box::new(VanillaGenerator::new(
+            Seed(random_config.seed),
+            Dimension::OVERWORLD,
+        )));
+        let chunk = ProtoChunk::new(0, 0, &world_gen);
+
+        let _ = chunk.get_biome_id(0, i32::MAX, 0);
+        let _ = chunk.get_biome_id(0, i32::MIN, 0);
+        let _ = chunk.get_biome_id(0, -100, 15);
+        let _ = chunk.get_biome_id(15, 400, 3);
     }
 }
