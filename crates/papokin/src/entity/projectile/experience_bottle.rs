@@ -7,6 +7,7 @@ use crate::server::Server;
 use papokin_data::entity::EntityStatus;
 use papokin_util::math::position::BlockPos;
 use papokin_util::math::vector3::Vector3;
+use rand::RngExt;
 
 const GRAVITY: f64 = 0.03;
 
@@ -56,9 +57,8 @@ impl EntityBase for ExperienceBottleEntity {
         let world = self.get_entity().world.load();
         let pos = self.get_entity().pos.load();
         // 原版数量：3 + rand(5) + rand(5)，即 3..=13 点经验
-        let amount = 3
-            + u32::from(rand::random::<u8>().rem_euclid(5))
-            + u32::from(rand::random::<u8>().rem_euclid(5));
+        let mut rng = rand::rng();
+        let amount = 3 + rng.random_range(0..5) + rng.random_range(0..5);
 
         // 经验瓶破裂事件，取消则瓶子不破裂也不释放经验
         let mut event = crate::plugin::api::events::entity::exp_bottle::ExpBottleEvent::new(
@@ -78,9 +78,10 @@ impl EntityBase for ExperienceBottleEntity {
             }
         }
 
-        // 播放玻璃瓶碎裂粒子
+        // 播放玻璃瓶碎裂粒子；经验钳到合理上限，
+        // 防止插件写入异常大值时海量生成经验球阻塞 tick
         world.send_entity_status(self.get_entity(), EntityStatus::Death);
-        ExperienceOrbEntity::spawn(&world, pos, event.experience.max(0) as u32);
+        ExperienceOrbEntity::spawn(&world, pos, event.experience.clamp(0, 1000) as u32);
     }
 
     fn cast_any(&self) -> &dyn std::any::Any {
