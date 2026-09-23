@@ -370,10 +370,11 @@ fn move_piston(
 ) -> bool {
     let extended_pos = block_pos.offset(dir.to_offset());
     if !extend && world.get_block(&extended_pos) == &Block::PISTON_HEAD {
+        // 缺 NOTIFY_LISTENERS 时客户端会残留一个永远隐形的活塞头
         world.set_block_state(
             &extended_pos,
             Block::AIR.default_state.id,
-            BlockFlags::FORCE_STATE,
+            BlockFlags::NOTIFY_LISTENERS | BlockFlags::FORCE_STATE,
         );
     }
     let mut handler = PistonHandler::new(world, *block_pos, dir, extend);

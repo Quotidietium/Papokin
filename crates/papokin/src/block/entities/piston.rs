@@ -212,6 +212,7 @@ const FACING: &str = "facing";
 const LAST_PROGRESS: &str = "progress";
 const EXTENDING: &str = "extending";
 const SOURCE: &str = "source";
+const BLOCK_STATE: &str = "blockState";
 
 impl BlockEntity for PistonBlockEntity {
     fn resource_location(&self) -> &'static str {
@@ -230,10 +231,12 @@ impl BlockEntity for PistonBlockEntity {
             world.remove_block_entity(&pos);
             if world.get_block(&pos) == &Block::MOVING_PISTON {
                 if self.pushed_block_state.is_air() {
+                    // 必须通知客户端，否则 moving_piston 会残留在客户端
+                    // 永远隐形（客户端不渲染没有方块实体的 moving_piston）
                     world.set_block_state(
                         &pos,
                         self.pushed_block_state.id,
-                        BlockFlags::FORCE_STATE | BlockFlags::MOVED,
+                        BlockFlags::NOTIFY_ALL | BlockFlags::FORCE_STATE | BlockFlags::MOVED,
                     );
                 } else {
                     let updated_state =
@@ -257,8 +260,11 @@ impl BlockEntity for PistonBlockEntity {
     where
         Self: Sized,
     {
-        // TODO
-        let pushed_block_state = Block::AIR.default_state;
+        // 不带命名空间的老存档/残缺数据一律回退为空气
+        let pushed_block_state = nbt
+            .get_string(BLOCK_STATE)
+            .and_then(BlockState::from_state_string)
+            .unwrap_or(Block::AIR.default_state);
         let facing = nbt.get_byte(FACING).unwrap_or(0);
         let last_progress = nbt.get_float(LAST_PROGRESS).unwrap_or(0.0);
         let extending = nbt.get_bool(EXTENDING).unwrap_or(false);
@@ -275,7 +281,7 @@ impl BlockEntity for PistonBlockEntity {
     }
 
     fn write_nbt(&self, nbt: &mut NbtCompound) {
-        // TODO: pushed_block_state
+        nbt.put_string(BLOCK_STATE, self.pushed_block_state.to_state_string());
         nbt.put_byte(FACING, self.facing.to_index() as i8);
         nbt.put_float(LAST_PROGRESS, self.last_progress.load());
         nbt.put_bool(EXTENDING, self.extending);
@@ -284,7 +290,9 @@ impl BlockEntity for PistonBlockEntity {
 
     fn chunk_data_nbt(&self) -> Option<NbtCompound> {
         let mut nbt = NbtCompound::new();
-        // TODO: pushed_block_state
+        // 客户端的移动动画与最终落块都依赖 blockState；缺失时客户端
+        // 把被移动方块当作空气渲染，动画结束还会把目标位置覆盖成空气
+        nbt.put_string(BLOCK_STATE, self.pushed_block_state.to_state_string());
         nbt.put_byte(FACING, self.facing.to_index() as i8);
         nbt.put_float(LAST_PROGRESS, self.last_progress.load());
         nbt.put_bool(EXTENDING, self.extending);
@@ -295,5 +303,74 @@ impl BlockEntity for PistonBlockEntity {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PistonBlockEntity;
+    use crate::block::entities::BlockEntity;
+    use papokin_data::{Block, BlockDirection};
+    use papokin_nbt::compound::NbtCompound;
+    use papokin_util::math::position::BlockPos;
+
+    /// `blockState` 字段是客户端渲染移动方块、动画结束落块的依据；
+    /// 此前该字段缺失（恒为空气），粘性活塞推动的方块会在客户端
+    /// 消失不显示。序列化与反序列化都必须保真。
+    #[test]
+    fn piston_entity_nbt_preserves_pushed_block_state() {
+        let entity = PistonBlockEntity {
+            position: BlockPos::new(1, 64, 2),
+            pushed_block_state: Block::REDSTONE_BLOCK.default_state,
+            facing: BlockDirection::North,
+            current_progress: 0.5.into(),
+            last_progress: 0.5.into(),
+            extending: true,
+            source: false,
+        };
+
+        let mut nbt = NbtCompound::new();
+        entity.write_nbt(&mut nbt);
+        assert_eq!(
+            nbt.get_string("blockState"),
+            Some("minecraft:redstone_block"),
+            "blockState 字段缺失会导致客户端把方块当作空气"
+        );
+
+        let restored = PistonBlockEntity::from_nbt(&nbt, BlockPos::new(1, 64, 2));
+        assert_eq!(
+            restored.pushed_block_state,
+            Block::REDSTONE_BLOCK.default_state
+        );
+        assert_eq!(restored.facing, BlockDirection::North);
+        assert!(restored.extending);
+    }
+
+    /// 带属性的方块（如粘性活塞头）也必须完整往返。
+    #[test]
+    fn piston_entity_nbt_round_trips_property_heavy_states() {
+        for block in [
+            Block::STICKY_PISTON,
+            Block::OAK_STAIRS,
+            Block::CHORUS_FLOWER,
+        ] {
+            let entity = PistonBlockEntity {
+                position: BlockPos::new(0, 64, 0),
+                pushed_block_state: block.default_state,
+                facing: BlockDirection::Up,
+                current_progress: 0.0.into(),
+                last_progress: 0.0.into(),
+                extending: false,
+                source: true,
+            };
+            let mut nbt = NbtCompound::new();
+            entity.write_nbt(&mut nbt);
+            let restored = PistonBlockEntity::from_nbt(&nbt, BlockPos::new(0, 64, 0));
+            assert_eq!(
+                restored.pushed_block_state, block.default_state,
+                "{} 的状态经 NBT 往返后改变",
+                block.name
+            );
+        }
     }
 }

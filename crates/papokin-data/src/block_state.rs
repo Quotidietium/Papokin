@@ -1,6 +1,6 @@
 use papokin_util::math::{boundingbox::BoundingBox, position::BlockPos, vector3::Vector3};
 
-use crate::block_properties::{COLLISION_SHAPES, NoteblockInstrument};
+use crate::block_properties::{BlockProperties, COLLISION_SHAPES, NoteblockInstrument};
 use crate::{Block, BlockDirection, BlockId};
 
 /// 表示方块的某个特定状态，包括其属性和物理行为。
@@ -171,6 +171,57 @@ impl BlockState {
     #[must_use]
     pub fn is_waterlogged(&self) -> bool {
         self.id.is_waterlogged()
+    }
+
+    /// 转为原版的方块状态字符串（1.20.3+ 的 NBT 存储形式），
+    /// 例如 `minecraft:oak_stairs[facing=east,waterlogged=false]`；
+    /// 无属性的方块输出裸名称，如 `minecraft:redstone_block`。
+    ///
+    /// 活塞方块实体把被移动方块的该字符串写入 `blockState` 字段，
+    /// 客户端靠它渲染移动动画并把方块落到最终位置——缺失时客户端
+    /// 会当作空气，动画结束把目标位置覆盖成空气（方块“消失”）。
+    #[must_use]
+    pub fn to_state_string(&self) -> String {
+        let block = Block::from_state_id(self.id);
+        let mut result = format!("minecraft:{}", block.name);
+        let Some(props) = block.properties(self.id) else {
+            return result;
+        };
+        let entries = props.to_props();
+        if entries.is_empty() {
+            return result;
+        }
+        result.push('[');
+        result.push_str(
+            &entries
+                .iter()
+                .map(|(name, value)| format!("{name}={value}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        result.push(']');
+        result
+    }
+
+    /// 解析 [`Self::to_state_string`] 生成的方块状态字符串（逆操作）。
+    /// 未指定的属性取方块默认值，无法识别的属性键被忽略。
+    #[must_use]
+    pub fn from_state_string(string: &str) -> Option<&'static Self> {
+        let raw = string.strip_prefix("minecraft:").unwrap_or(string);
+        let (name, properties) = match raw.split_once('[') {
+            Some((name, rest)) => (name, rest.strip_suffix(']')?),
+            None => (raw, ""),
+        };
+        let block = Block::from_registry_key(name)?;
+        if properties.is_empty() {
+            return Some(block.default_state);
+        }
+        let entries: Vec<(&str, &str)> = properties
+            .split(',')
+            .map(|pair| pair.split_once('='))
+            .collect::<Option<_>>()?;
+        let state_id = block.from_properties(&entries).to_state_id(block);
+        Some(state_id.to_state())
     }
 
     /// 生成一个除含水属性外与 `self` 完全相同的新状态
@@ -376,7 +427,9 @@ const UP_CENTER_SOLID: u8 = 1 << 7;
 
 #[cfg(test)]
 mod tests {
-    use crate::{Block, BlockStateId, block_state_remap::remap_block_state_for_version};
+    use crate::{
+        Block, BlockState, BlockStateId, block_state_remap::remap_block_state_for_version,
+    };
     use papokin_util::{math::position::BlockPos, version::JavaMinecraftVersion};
 
     fn assert_close(actual: f64, expected: f64) {
@@ -429,6 +482,38 @@ mod tests {
                     block.name
                 );
             }
+        }
+    }
+
+    /// 无属性方块输出裸名称；这是活塞方块实体 `blockState` 字段的
+    /// 线上格式（1.20.3+），客户端渲染移动中的方块依赖它。
+    #[test]
+    fn propertyless_block_states_serialize_to_bare_names() {
+        assert_eq!(
+            Block::REDSTONE_BLOCK.default_state.to_state_string(),
+            "minecraft:redstone_block"
+        );
+        assert_eq!(
+            BlockState::from_state_string("minecraft:redstone_block"),
+            Some(Block::REDSTONE_BLOCK.default_state)
+        );
+    }
+
+    /// 全量往返：每个方块状态的字符串形式必须能无损解析回原状态。
+    #[test]
+    fn all_block_state_strings_round_trip() {
+        for raw in 0..BlockStateId::COUNT {
+            let Some(state_id) = BlockStateId::new(raw) else {
+                continue;
+            };
+            let state = state_id.to_state();
+            let parsed = BlockState::from_state_string(&state.to_state_string());
+            assert_eq!(
+                parsed.map(|parsed| parsed.id),
+                Some(state.id),
+                "状态 id {raw}（{}）往返失败",
+                Block::from_state_id(state.id).name
+            );
         }
     }
 }
