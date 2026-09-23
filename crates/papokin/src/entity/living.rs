@@ -2323,10 +2323,15 @@ impl LivingEntity {
         let resource_name = self.get_entity().entity_type.resource_name;
         let key = format!("minecraft:entities/{resource_name}");
         if let Some(loot_table) = papokin_data::loot_table::get_loot_table(&key) {
+            let world = self.entity.world.load();
+            // 战利品生成事件，取消则实体不掉落战利品
+            if !world.generate_loot(&key) {
+                return;
+            }
             let seed: i64 = rand::random();
             let pos = self.entity.block_pos.load();
             for stack in crate::world::loot::generate_loot_with_context(loot_table, seed, params) {
-                self.entity.world.load().drop_stack(&pos, stack);
+                world.drop_stack(&pos, stack);
             }
         }
     }

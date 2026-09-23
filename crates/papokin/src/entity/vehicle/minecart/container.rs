@@ -89,7 +89,7 @@ impl MinecartInventory {
             .is_some()
     }
 
-    pub(super) fn unpack_loot(self: &Arc<Self>) {
+    pub(super) fn unpack_loot(self: &Arc<Self>, world: Option<&Arc<crate::world::World>>) {
         let loot_table = self
             .loot_table
             .lock()
@@ -105,6 +105,13 @@ impl MinecartInventory {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((loot_table, seed));
             return;
         };
+
+        // 战利品生成事件，取消则不填充（战利品表已消费）
+        if let Some(world) = world
+            && !world.generate_loot(&loot_table)
+        {
+            return;
+        }
 
         let inventory: Arc<dyn Inventory> = self.clone();
         fill_chest_inventory(&inventory, table, seed);
@@ -209,7 +216,7 @@ pub(super) fn open(
         return false;
     }
     if !player.is_spectator() {
-        inventory.unpack_loot();
+        inventory.unpack_loot(Some(&player.world()));
     }
 
     player
@@ -296,7 +303,7 @@ mod tests {
         assert_eq!(deferred.get_long("LootTableSeed"), Some(1234));
         assert!(deferred.get_list("Items").is_none());
 
-        inventory.unpack_loot();
+        inventory.unpack_loot(None);
         assert!(!inventory.is_empty());
 
         let mut unpacked = NbtCompound::new();

@@ -179,12 +179,17 @@ fn get_chest_screen_handler_factory(
     };
 
     let unpack = |entity: &Arc<dyn BlockEntity>| {
-        if let Some((loot_key, seed)) = entity.take_loot_table()
-            && let Some(table) = get_loot_table(&loot_key)
-            && let Some(inv) = entity.clone().get_inventory()
-        {
-            fill_chest_inventory(&inv, table, seed);
-            inv.mark_dirty();
+        if let Some((loot_key, seed)) = entity.take_loot_table() {
+            // 战利品生成事件，取消则箱子保持为空（战利品表已消费）
+            if !args.world.generate_loot(&loot_key) {
+                return;
+            }
+            if let Some(table) = get_loot_table(&loot_key)
+                && let Some(inv) = entity.clone().get_inventory()
+            {
+                fill_chest_inventory(&inv, table, seed);
+                inv.mark_dirty();
+            }
         }
     };
 

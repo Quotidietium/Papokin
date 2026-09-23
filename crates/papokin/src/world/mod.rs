@@ -5932,14 +5932,21 @@ impl World {
         }
     }
 
-    pub fn generate_loot(&self, loot_table: String) {
+    /// 战利品生成事件。返回 false 表示插件已取消本次生成，调用方应跳过战利品产出。
+    pub fn generate_loot(&self, loot_table: &str) -> bool {
         let mut loot_event =
-            crate::plugin::api::events::world::loot_generate::LootGenerateEvent::new(loot_table);
+            crate::plugin::api::events::world::loot_generate::LootGenerateEvent::new(
+                loot_table.to_string(),
+            );
         if let Some(server) = self.server.upgrade() {
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut loot_event);
+            if loot_event.cancelled {
+                return false;
+            }
         }
+        true
     }
 
     pub fn skip_time(&self, skip_amount: i64) {
