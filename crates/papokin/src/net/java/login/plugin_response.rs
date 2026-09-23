@@ -8,6 +8,8 @@ impl PendingConnection {
         plugin_response: SLoginPluginResponse,
     ) -> Option<PacketHandlerResult> {
         debug!("正在处理插件响应");
+        // 事务 id 一次性取出：响应必须与发出的登录插件请求配对。
+        let expected_message_id = self.login_plugin_message_id.take();
         let proxy_config = &server.advanced_config.networking.proxy;
         if proxy_config.vine.enabled {
             let expected_challenge = self.vine_challenge.take();
@@ -16,6 +18,7 @@ impl PendingConnection {
                 &proxy_config.vine,
                 plugin_response,
                 expected_challenge,
+                expected_message_id,
             ) {
                 Ok((profile, new_address)) => {
                     self.gameprofile = Some(profile.clone());
@@ -32,6 +35,7 @@ impl PendingConnection {
                 self.address.port(),
                 &proxy_config.velocity,
                 plugin_response,
+                expected_message_id,
             ) {
                 Ok((profile, new_address)) => {
                     self.gameprofile = Some(profile.clone());

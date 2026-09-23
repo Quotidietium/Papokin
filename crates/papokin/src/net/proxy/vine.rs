@@ -25,6 +25,8 @@ pub const MAX_TIMESTAMP_DRIFT_SECS: i64 = 30;
 pub enum VineError {
     #[error("No response data received")]
     NoData,
+    #[error("Unexpected login plugin response (no request pending)")]
+    UnexpectedResponse,
     #[error("Vine response data too short (minimum 89 bytes)")]
     DataTooShort,
     #[error("No public key or secret configured for Vine proxy")]
@@ -61,11 +63,13 @@ pub async fn vine_login(connection: &mut PendingConnection) {
     let message_id: i32 = rand::random();
     let challenge: [u8; 16] = rand::random();
 
+    // 绑定事务 id：响应包必须携带相同 id 才会被当作转发数据。
+    connection.login_plugin_message_id = Some(message_id);
+    connection.vine_challenge = Some(challenge);
+
     let mut buf = BytesMut::with_capacity(17);
     buf.put_u8(VINE_FORWARDING_VERSION as u8);
     buf.put_slice(&challenge);
-
-    connection.vine_challenge = Some(challenge);
 
     connection
         .send_packet_now(&CLoginPluginRequest::new(
@@ -145,9 +149,14 @@ pub fn receive_vine_plugin_response(
     config: &VineConfig,
     response: SLoginPluginResponse,
     expected_challenge: Option<[u8; 16]>,
+    expected_message_id: Option<i32>,
 ) -> Result<(GameProfile, SocketAddr), VineError> {
     debug!("已收到 Vine 插件响应");
     let expected_challenge = expected_challenge.ok_or(VineError::MissingChallenge)?;
+    // 一次性匹配：id 不存在（重复响应）或不一致都直接拒绝。
+    if expected_message_id.is_none_or(|expected| response.message_id.0 != expected) {
+        return Err(VineError::UnexpectedResponse);
+    }
 
     if let Some(data) = response.data {
         // 最小大小：64（Ed25519 签名）+ 1（VarInt 版本）+ 8（u64 时间戳）+ 16（质询）
@@ -290,7 +299,8 @@ mod tests {
             data: Some(full_packet_data.into_boxed_slice()),
         };
 
-        let result = receive_vine_plugin_response(25565, &config, response, Some(challenge));
+        let result =
+            receive_vine_plugin_response(25565, &config, response, Some(challenge), Some(1));
         assert!(result.is_ok());
         let (profile, addr) = result.unwrap();
         assert_eq!(profile.name, "Steve");
@@ -339,7 +349,8 @@ mod tests {
             data: Some(full_packet_data.into_boxed_slice()),
         };
 
-        let result = receive_vine_plugin_response(25565, &config, response, Some(wrong_challenge));
+        let result =
+            receive_vine_plugin_response(25565, &config, response, Some(wrong_challenge), Some(1));
         assert!(matches!(result, Err(VineError::ChallengeMismatch)));
     }
 }

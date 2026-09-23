@@ -74,6 +74,12 @@ pub struct PendingConnection {
     /// 登录与配置阶段。当发生转移时迁移到 `JavaClient` 上
     /// 连接进入游戏阶段。
     pub cookies: CookieStore,
+    /// 已请求、等待客户端回报的 cookie 键；用于拒绝未请求的
+    /// cookie 响应（防止伪造键无界增长缓存）。
+    pub pending_cookie_requests: super::cookie::PendingCookieRequests,
+    /// 代理现代转发（Velocity/Vine）插件请求的事务 id；
+    /// 响应必须匹配，防止其他/重放的插件响应被当作转发数据。
+    pub login_plugin_message_id: Option<i32>,
 }
 
 impl PendingConnection {
@@ -101,6 +107,8 @@ impl PendingConnection {
             verify_token: None,
             vine_challenge: None,
             cookies: super::cookie::new_cookie_store(),
+            pending_cookie_requests: super::cookie::new_pending_requests(),
+            login_plugin_message_id: None,
         }
     }
 
@@ -576,6 +584,11 @@ impl PendingConnection {
             packet.key,
             packet.payload.as_ref().map(|p| p.len())
         );
-        super::cookie::apply_cookie_response(&self.cookies, packet.key, packet.payload);
+        super::cookie::apply_cookie_response(
+            &self.cookies,
+            &self.pending_cookie_requests,
+            packet.key,
+            packet.payload,
+        );
     }
 }

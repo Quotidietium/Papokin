@@ -30,6 +30,8 @@ const PLAYER_INFO_CHANNEL: &str = "velocity:player_info";
 pub enum VelocityError {
     #[error("No response data received")]
     NoData,
+    #[error("Unexpected login plugin response (no request pending)")]
+    UnexpectedResponse,
     #[error("Unable to verify player details")]
     FailedVerifyIntegrity,
     #[error("Failed to read forward version")]
@@ -49,8 +51,10 @@ pub enum VelocityError {
 }
 
 pub async fn velocity_login(connection: &mut PendingConnection) {
-    // TODO: 用它校验插件响应中的数据包事务 id
     let velocity_message_id: i32 = rand::rng().random();
+    // 绑定事务 id：响应包必须携带相同 id 才会被当作转发数据，
+    // 防止无关/重放的登录插件响应混入。
+    connection.login_plugin_message_id = Some(velocity_message_id);
 
     let mut buf = BytesMut::new();
     buf.put_u8(MAX_SUPPORTED_FORWARDING_VERSION);
@@ -113,8 +117,13 @@ pub fn receive_velocity_plugin_response(
     port: u16,
     config: &VelocityConfig,
     response: SLoginPluginResponse,
+    expected_message_id: Option<i32>,
 ) -> Result<(GameProfile, SocketAddr), VelocityError> {
     debug!("已收到 velocity 响应");
+    // 一次性匹配：id 不存在（重复响应）或不一致都直接拒绝。
+    if expected_message_id.is_none_or(|expected| response.message_id.0 != expected) {
+        return Err(VelocityError::UnexpectedResponse);
+    }
     if let Some(data) = response.data {
         if data.len() < 32 {
             return Err(VelocityError::FailedVerifyIntegrity);
