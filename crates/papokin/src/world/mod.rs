@@ -3759,7 +3759,7 @@ impl World {
             // 我们把该玩家加入列表。
             list.push(player.clone());
             // 检查列表是否过大。
-            if list.len() > max_list_capacity {
+            if list.len() >= max_list_capacity {
                 return;
             }
         }
@@ -3769,7 +3769,7 @@ impl World {
                 continue;
             }
             list.push(entity.clone());
-            if list.len() > max_list_capacity {
+            if list.len() >= max_list_capacity {
                 return;
             }
             // TODO: 实现末影龙处理
