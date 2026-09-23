@@ -1,10 +1,14 @@
 use std::any::Any;
+use std::sync::Arc;
 
-use crate::entity::experience_orb::ExperienceOrbEntity;
-use crate::entity::player::Player;
+use crate::entity::projectile::experience_bottle::ExperienceBottleEntity;
+use crate::entity::{Entity, EntityBase, player::Player};
 use crate::item::{ItemBehaviour, ItemMetadata};
+use papokin_data::entity::EntityType;
 use papokin_data::item::Item;
 use papokin_data::sound::{Sound, SoundCategory};
+
+const POWER: f32 = 0.7;
 
 pub struct ExperienceBottleItem;
 
@@ -16,16 +20,20 @@ impl ItemMetadata for ExperienceBottleItem {
 
 impl ItemBehaviour for ExperienceBottleItem {
     fn normal_use(&self, _item: &Item, player: &Player) {
+        // 原版行为：掷出一枚可投掷的经验瓶实体，落地碎裂后释放经验；
+        // 此前实现是立即在眼前生成经验球，飞行与碎裂体验全部缺失。
         let world = player.world();
-        let pos = player.eye_position();
+        let position = player.position();
         world.play_sound(
             Sound::EntityExperienceBottleThrow,
             SoundCategory::Players,
-            &pos,
+            &position,
         );
-
-        let amount = (rand::random::<u32>() % 9 + 3) as u32; // 3..=11 经验
-        ExperienceOrbEntity::spawn(&world, pos, amount);
+        let entity = Entity::new(world.clone(), position, &EntityType::EXPERIENCE_BOTTLE);
+        let bottle = ExperienceBottleEntity::new_shot(entity, player.get_entity());
+        let (yaw, pitch) = player.rotation();
+        bottle.thrown.set_velocity_from(pitch, yaw, 0.0, POWER, 1.0);
+        world.spawn_entity(Arc::new(bottle));
 
         let mut held = player.inventory().held_item();
         held.decrement_unless_creative(player.gamemode.load(), 1);
