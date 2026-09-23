@@ -1371,7 +1371,8 @@ impl LivingEntity {
             pos.y.floor() as i32,
             pos.z.floor() as i32,
         );
-        let radius = (2 + level).min(16);
+        // 附魔等级来自物品组件，可能被注入任意 i32，先钳制再运算防溢出
+        let radius = (level.clamp(0, 255) + 2).min(16);
         let radius_sq = f64::from(radius * radius);
         for dx in -radius..=radius {
             for dz in -radius..=radius {
