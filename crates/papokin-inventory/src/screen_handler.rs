@@ -1000,6 +1000,10 @@ pub trait ScreenHandler: Send + Sync {
                     return;
                 }
 
+                // 只有玩家物品栏界面（无窗口类型）的 5..=8 槽位是盔甲槽；
+                // 通用容器窗口的同索引是普通格子，不能触发装备更换
+                let has_equipment_slots = self.get_behaviour().window_type.is_none();
+
                 let slot = self.get_behaviour().slots[slot_index as usize].clone();
 
                 if click_type == MouseClick::Left {
@@ -1079,7 +1083,8 @@ pub trait ScreenHandler: Send + Sync {
 
                 if slot_stack.is_empty() {
                     if !cursor_stack.is_empty() {
-                        if equipment_slot.slot_type() == EquipmentType::HumanoidArmor
+                        if has_equipment_slots
+                            && equipment_slot.slot_type() == EquipmentType::HumanoidArmor
                             && (5..9).contains(&slot_index)
                         {
                             player.enqueue_equipment_change(equipment_slot, &cursor_stack);
@@ -1106,7 +1111,7 @@ pub trait ScreenHandler: Send + Sync {
                             *cursor_stack = taken.clone();
                             slot.on_take_item(player, &taken);
 
-                            if (5..9).contains(&slot_index) {
+                            if has_equipment_slots && (5..9).contains(&slot_index) {
                                 let equipment_slot = cursor_stack
                                     .get_data_component::<EquippableImpl>()
                                     .map_or(&EquipmentSlot::MAIN_HAND, |equippable| {
@@ -1116,7 +1121,8 @@ pub trait ScreenHandler: Send + Sync {
                             }
                         }
                     } else if slot.can_insert(&cursor_stack) {
-                        if equipment_slot.slot_type() == EquipmentType::HumanoidArmor
+                        if has_equipment_slots
+                            && equipment_slot.slot_type() == EquipmentType::HumanoidArmor
                             && (5..9).contains(&slot_index)
                         {
                             player.enqueue_equipment_change(equipment_slot, &cursor_stack);
