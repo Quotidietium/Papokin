@@ -500,7 +500,15 @@ impl EntityBase for ArmorStandEntity {
     }
 
     fn kill(&self, _caller: &dyn EntityBase) {
-        self.get_entity().remove();
+        // /kill 等路径同样掉落自身物品与全部装备（原版行为）
+        self.drop_all_equipment();
+        let entity = self.get_entity();
+        let stand_item = ItemStack::new(1, &Item::ARMOR_STAND);
+        entity
+            .world
+            .load()
+            .drop_stack(&entity.block_pos.load(), stand_item);
+        entity.remove();
         // TODO: 发出 GameEvent::ENTITY_DIE
     }
 
