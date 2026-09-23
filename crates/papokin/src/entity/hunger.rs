@@ -1,4 +1,4 @@
-use super::{NBTStorage, NBTStorageInit, player::Player};
+use super::{NBTStorage, NBTStorageInit, finite_non_negative_f32_or, player::Player};
 use crossbeam::atomic::AtomicCell;
 use papokin_data::damage::DamageType;
 use papokin_nbt::compound::NbtCompound;
@@ -170,12 +170,16 @@ impl NBTStorage for HungerManager {
     }
 
     fn read_nbt_non_mut(&self, nbt: &NbtCompound) {
+        // 饥饿值合法域为 0..=20；饱和/消耗值拒绝 NaN/Inf 与负数，
+        // 防止畸形存档经进食/消耗算术持续污染饥饿系统。
         self.level
-            .store(nbt.get_int("foodLevel").unwrap_or(20) as u8);
-        self.saturation
-            .store(nbt.get_float("foodSaturationLevel").unwrap_or(5.0));
-        self.exhaustion
-            .store(nbt.get_float("foodExhaustionLevel").unwrap_or(0.0));
+            .store(nbt.get_int("foodLevel").unwrap_or(20).clamp(0, 20) as u8);
+        let saturation =
+            finite_non_negative_f32_or(nbt.get_float("foodSaturationLevel").unwrap_or(5.0), 5.0);
+        self.saturation.store(saturation);
+        let exhaustion =
+            finite_non_negative_f32_or(nbt.get_float("foodExhaustionLevel").unwrap_or(0.0), 0.0);
+        self.exhaustion.store(exhaustion);
         self.tick_timer
             .store(nbt.get_int("foodTickTimer").unwrap_or(0) as u32);
     }

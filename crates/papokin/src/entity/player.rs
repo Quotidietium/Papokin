@@ -166,7 +166,7 @@ use super::combat::{self, AttackType, player_attack_sound};
 use super::hunger::HungerManager;
 use super::item::ItemEntity;
 use super::living::LivingEntity;
-use super::{Entity, EntityBase, NBTStorage, NBTStorageInit};
+use super::{Entity, EntityBase, NBTStorage, NBTStorageInit, finite_non_negative_f32_or};
 use papokin_data::potion::Effect;
 const MAX_CACHED_SIGNATURES: u8 = 128; // 原版：128
 const MAX_PREVIOUS_MESSAGES: u8 = 20; // 原版：20
@@ -6877,8 +6877,12 @@ impl Abilities {
             self.allow_flying = component.get_bool("mayfly").unwrap_or(false);
             self.creative = component.get_bool("instabuild").unwrap_or(false);
             self.allow_modify_world = component.get_bool("mayBuild").unwrap_or(true);
-            self.fly_speed = component.get_float("flySpeed").unwrap_or(0.05);
-            self.walk_speed = component.get_float("walkSpeed").unwrap_or(0.1);
+            // 速度系数拒绝 NaN/Inf 与负数，防止经移动算术把 NaN
+            // 传播进玩家坐标。
+            self.fly_speed =
+                finite_non_negative_f32_or(component.get_float("flySpeed").unwrap_or(0.05), 0.05);
+            self.walk_speed =
+                finite_non_negative_f32_or(component.get_float("walkSpeed").unwrap_or(0.1), 0.1);
         }
     }
 
