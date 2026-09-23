@@ -138,6 +138,9 @@ pub struct JavaClient {
     /// 从待处理连接继承而来，因此在登录或
     /// 配置在游戏中仍然可见）。
     pub cookies: CookieStore,
+    /// 已请求、等待客户端回报的 cookie 键；用于拒绝未请求的
+    /// cookie 响应（防止伪造键无界增长缓存）。
+    pub pending_cookie_requests: crate::net::java::cookie::PendingCookieRequests,
 }
 
 pub enum OutgoingPacketType {
@@ -272,6 +275,7 @@ impl JavaClient {
             packet_sequence: AtomicI32::new(-1),
             packet_limiter: pending.packet_limiter,
             cookies: pending.cookies,
+            pending_cookie_requests: pending.pending_cookie_requests,
         }
     }
 

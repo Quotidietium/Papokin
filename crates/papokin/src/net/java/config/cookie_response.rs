@@ -9,6 +9,11 @@ impl JavaClient {
             packet.has_payload,
             packet.payload.as_ref().map(|p| p.len()),
         );
-        super::super::cookie::apply_cookie_response(&self.cookies, packet.key, packet.payload);
+        super::super::cookie::apply_cookie_response(
+            &self.cookies,
+            &self.pending_cookie_requests,
+            packet.key,
+            packet.payload,
+        );
     }
 }

@@ -13,7 +13,7 @@
 //! 在登录或配置阶段上报的 cookie 对插件依然可见，
 //! 玩家进入游戏后。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use papokin_protocol::java::client::play::{CPlayCookieRequest, CStoreCookie};
 
@@ -30,20 +30,54 @@ pub const MAX_COOKIE_PAYLOAD: usize = 5120;
 /// 例如 `JavaClient::pending_keep_alives`）。
 pub type CookieStore = std::sync::Mutex<HashMap<String, Vec<u8>>>;
 
+/// 服务器已向客户端发出请求、等待其回报的 cookie 键。
+///
+/// 与原版一致：客户端的 cookie 响应只有命中此前发出的
+/// 请求时才会入库，未请求的键一律丢弃。由于响应中的键
+/// 完全由客户端控制，若不做该门控，伪造键可让缓存无界增长。
+pub type PendingCookieRequests = std::sync::Mutex<HashSet<String>>;
+
 /// 创建一个空的 Cookie 存储。
 #[must_use]
 pub fn new_cookie_store() -> CookieStore {
     std::sync::Mutex::new(HashMap::new())
 }
 
+/// 创建一个空的待回报 cookie 键集合。
+#[must_use]
+pub fn new_pending_requests() -> PendingCookieRequests {
+    std::sync::Mutex::new(HashSet::new())
+}
+
+/// 记录一个已发出的 cookie 请求，使其响应之后可以入库。
+pub fn record_cookie_request(requested: &PendingCookieRequests, key: &str) {
+    requested
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(key.to_string());
+}
+
 /// 以原版语义将客户端方向的 cookie 响应应用到存储中。
 ///
 /// `Some(payload)` 表示插入或替换条目，而 `None` 表示
-/// 客户端没有该 cookie，该条目随即被移除。
-pub fn apply_cookie_response(store: &CookieStore, key: &str, payload: Option<&[u8]>) {
+/// 客户端没有该 cookie，该条目随即被移除。仅当 `key`
+/// 命中此前记录的请求时才生效，否则整个响应被丢弃。
+pub fn apply_cookie_response(
+    store: &CookieStore,
+    requested: &PendingCookieRequests,
+    key: &str,
+    payload: Option<&[u8]>,
+) {
     let mut cookies = store
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut requested = requested
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !requested.remove(key) {
+        tracing::debug!("忽略未请求的 cookie 响应：{key}");
+        return;
+    }
     match payload {
         Some(payload) => {
             cookies.insert(key.to_string(), payload.to_vec());
@@ -70,6 +104,7 @@ impl JavaClient {
     /// [`JavaClient::get_cached_cookie`]。
     pub async fn request_cookie(&self, key: &str) {
         let key = key.to_string();
+        super::cookie::record_cookie_request(&self.pending_cookie_requests, &key);
         self.send_packet(&CPlayCookieRequest::new(&key)).await;
     }
 
