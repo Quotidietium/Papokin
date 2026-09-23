@@ -57,6 +57,10 @@ pub mod stairs;
 #[derive(Deserialize)]
 pub struct StrongholdGenerator;
 
+/// 重试生成的防御性上界：生成依赖随机数产生含传送门房间的布局，
+/// 概率上几乎必然成功，但无界循环会在病态种子下卡死生成工作线程。
+const MAX_GENERATION_TRIES: i64 = 64;
+
 impl StructureGenerator for StrongholdGenerator {
     fn get_structure_position(
         &self,
@@ -66,6 +70,10 @@ impl StructureGenerator for StrongholdGenerator {
         let mut tries: i64 = 0;
 
         loop {
+            if tries >= MAX_GENERATION_TRIES {
+                // 耗尽重试仍无传送门房间：按当前布局放行而非无限重试。
+                break;
+            }
             collector.clear();
             let mut random = crate::generation::structure::structures::create_chunk_random(
                 context.seed.wrapping_add(tries),
