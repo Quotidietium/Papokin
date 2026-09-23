@@ -47,7 +47,7 @@ fn ring_bell(
     if let Some(block_entity) = world.get_block_entity(&position)
         && let Some(be) = block_entity.as_any().downcast_ref::<BellBlockEntity>()
     {
-        be.activate(direction);
+        be.activate(direction, world);
     }
 
     world.play_sound_fine(
