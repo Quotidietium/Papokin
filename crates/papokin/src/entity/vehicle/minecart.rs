@@ -5,15 +5,17 @@ mod hopper;
 mod rideable;
 mod tnt;
 
-use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use papokin_protocol::java::server::play::SPlayerInput;
 use rand::RngExt;
 
 use crate::{
+    command::{CommandSender, CommandSource},
     entity::{Entity, EntityBase, living::LivingEntity, player::Player},
     server::Server,
+    world::World,
 };
 use papokin_data::Block;
 use papokin_data::block_properties::PoweredRailLikeProperties;
@@ -26,7 +28,9 @@ use papokin_inventory::Inventory;
 use papokin_nbt::compound::NbtCompound;
 use papokin_util::GameMode;
 use papokin_util::math::position::BlockPos;
+use papokin_util::math::vector2::Vector2;
 use papokin_util::math::vector3::Vector3;
+use papokin_util::text::TextComponent;
 
 use crate::entity::vehicle::vehicle::VehicleEntity;
 use chest::ChestMinecart;
@@ -68,7 +72,136 @@ enum MinecartKind {
     Furnace(FurnaceMinecart),
     Hopper(HopperMinecart),
     Tnt(TntMinecart),
+    Command(CommandMinecart),
     Other,
+}
+
+/// 命令方块矿车数据：携带一条命令，经过激活中的激活铁轨时执行。
+pub struct CommandMinecart {
+    command: Mutex<String>,
+    last_output: Mutex<String>,
+    track_output: AtomicBool,
+    success_count: AtomicU32,
+    /// 上次执行的刻，对应原版 LastExecution（4 刻冷却防连发）
+    last_execution: AtomicI32,
+}
+
+impl CommandMinecart {
+    const fn new() -> Self {
+        Self {
+            command: Mutex::new(String::new()),
+            last_output: Mutex::new(String::new()),
+            track_output: AtomicBool::new(true),
+            success_count: AtomicU32::new(0),
+            last_execution: AtomicI32::new(i32::MIN / 2),
+        }
+    }
+
+    /// 更新矿车携带的命令（客户端命令方块矿车界面提交）。
+    pub fn set_command(&self, command: &str) {
+        *self
+            .command
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = command.to_string();
+    }
+
+    fn write_nbt(&self, nbt: &mut NbtCompound) {
+        nbt.put_string(
+            "Commands",
+            self.command
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        );
+        nbt.put_bool("TrackOutput", self.track_output.load(Ordering::Relaxed));
+        nbt.put_string(
+            "LastOutput",
+            self.last_output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+        );
+        nbt.put_int(
+            "SuccessCount",
+            self.success_count.load(Ordering::Relaxed).cast_signed(),
+        );
+    }
+
+    fn read_nbt(&self, nbt: &NbtCompound) {
+        // 原版可能将命令存为字符串或字符串列表，两者都接受
+        if let Some(command) = nbt.get_string("Commands") {
+            *self
+                .command
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = command.to_string();
+        } else if let Some(entries) = nbt.get_list("Commands") {
+            let joined = entries
+                .iter()
+                .filter_map(|tag| match tag {
+                    papokin_nbt::tag::NbtTag::String(text) => Some(text.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            *self
+                .command
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = joined;
+        }
+        if let Some(output) = nbt.get_string("LastOutput") {
+            *self
+                .last_output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = output.to_string();
+        }
+        self.track_output.store(
+            nbt.get_bool("TrackOutput").unwrap_or(true),
+            Ordering::Relaxed,
+        );
+        self.success_count.store(
+            nbt.get_int("SuccessCount").unwrap_or(0).cast_unsigned(),
+            Ordering::Relaxed,
+        );
+    }
+
+    /// 在激活中的激活铁轨上执行携带的命令。
+    /// 4 刻冷却对应原版 `LastExecution` 语义，防止逐刻连发。
+    fn execute_if_due(&self, entity: &Entity, world: &Arc<World>, server: &Arc<Server>) {
+        if !world.level_info.load().game_rules.command_blocks_work {
+            return;
+        }
+        let now = server.tick_count.load(Ordering::Relaxed);
+        if now - self.last_execution.load(Ordering::Relaxed) < 4 {
+            return;
+        }
+        self.last_execution.store(now, Ordering::Relaxed);
+
+        let command = self
+            .command
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if command.is_empty() {
+            return;
+        }
+
+        // 以矿车当前位置作为命令源（相对坐标基准），权限与命令方块一致（等级 2）
+        let position = entity.pos.load();
+        let source = CommandSource::new(
+            CommandSender::Dummy,
+            world.clone(),
+            None,
+            position,
+            Vector2::new(0.0, entity.yaw.load()),
+            "@".to_owned(),
+            TextComponent::text("@"),
+            server.clone(),
+        );
+        server
+            .command_dispatcher
+            .load()
+            .handle_command(&source, &command);
+    }
 }
 
 impl MinecartEntity {
@@ -83,11 +216,22 @@ impl MinecartEntity {
                 MinecartKind::Hopper(HopperMinecart::new())
             }
             id if id == EntityType::TNT_MINECART.id => MinecartKind::Tnt(TntMinecart::new()),
+            id if id == EntityType::COMMAND_BLOCK_MINECART.id => {
+                MinecartKind::Command(CommandMinecart::new())
+            }
             _ => MinecartKind::Other,
         };
         Self {
             vehicle: VehicleEntity::new(entity),
             kind,
+        }
+    }
+
+    /// 返回命令方块矿车数据（非命令方块矿车返回 `None`）。
+    pub const fn command_block(&self) -> Option<&CommandMinecart> {
+        match &self.kind {
+            MinecartKind::Command(minecart) => Some(minecart),
+            _ => None,
         }
     }
 
@@ -105,6 +249,7 @@ impl MinecartEntity {
             MinecartKind::Furnace(_) => Some(&Item::FURNACE_MINECART),
             MinecartKind::Hopper(_) => Some(&Item::HOPPER_MINECART),
             MinecartKind::Tnt(_) => Some(&Item::TNT_MINECART),
+            MinecartKind::Command(_) => Some(&Item::COMMAND_BLOCK_MINECART),
             _ => None,
         }
     }
@@ -117,6 +262,7 @@ impl EntityBase for MinecartEntity {
             MinecartKind::Furnace(minecart) => minecart.write_nbt(nbt),
             MinecartKind::Hopper(minecart) => minecart.write_nbt(nbt),
             MinecartKind::Tnt(minecart) => minecart.write_nbt(nbt),
+            MinecartKind::Command(minecart) => minecart.write_nbt(nbt),
             MinecartKind::Rideable(_) | MinecartKind::Other => {}
         }
     }
@@ -127,6 +273,7 @@ impl EntityBase for MinecartEntity {
             MinecartKind::Furnace(minecart) => minecart.read_nbt(nbt),
             MinecartKind::Hopper(minecart) => minecart.read_nbt(nbt),
             MinecartKind::Tnt(minecart) => minecart.read_nbt(nbt),
+            MinecartKind::Command(minecart) => minecart.read_nbt(nbt),
             MinecartKind::Rideable(_) | MinecartKind::Other => {}
         }
     }
@@ -181,8 +328,16 @@ impl EntityBase for MinecartEntity {
             let props = PoweredRailLikeProperties::from_state_id(state_id);
             let powered = props.powered;
 
-            if is_activator_rail && let MinecartKind::Hopper(minecart) = &self.kind {
-                minecart.set_enabled(!powered);
+            if is_activator_rail {
+                if let MinecartKind::Hopper(minecart) = &self.kind {
+                    minecart.set_enabled(!powered);
+                }
+                if powered
+                    && let MinecartKind::Command(minecart) = &self.kind
+                    && let Some(server) = world.server.upgrade()
+                {
+                    minecart.execute_if_due(&self.vehicle.entity, &world, &server);
+                }
             }
         } else if block.id == Block::DETECTOR_RAIL.id
             && let Some(server) = world.server.upgrade()
@@ -773,7 +928,7 @@ impl EntityBase for MinecartEntity {
                 true
             }
             MinecartKind::Rideable(_) => RideableMinecart::interact(&self.vehicle.entity, player),
-            MinecartKind::Tnt(_) | MinecartKind::Other => false,
+            MinecartKind::Tnt(_) | MinecartKind::Command(_) | MinecartKind::Other => false,
         }
     }
 
