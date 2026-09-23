@@ -1,13 +1,18 @@
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
+use crate::entity::experience_orb::ExperienceOrbEntity;
+use crate::entity::item::ItemEntity;
 use crate::entity::projectile::{ProjectileHit, is_projectile};
+use crate::world::loot::{LootContextParameters, generate_loot_with_context};
 use crate::{
     entity::{Entity, EntityBase, living::LivingEntity, player::Player},
     server::Server,
 };
-use papokin_data::item_stack::ItemStack;
+use papokin_data::entity::EntityType;
 use papokin_data::sound::{Sound, SoundCategory};
+use papokin_data::{Block, Enchantment};
 use papokin_util::math::boundingbox::BoundingBox;
+use papokin_util::math::position::BlockPos;
 use papokin_util::math::vector3::Vector3;
 
 pub struct FishingBobberEntity {
@@ -18,6 +23,9 @@ pub struct FishingBobberEntity {
     pub has_hit: AtomicBool,
     pub wait_countdown: AtomicI32,
     pub bite_countdown: AtomicI32,
+    /// 饵钓附魔带来的等待时长折扣（百分比分子，`100 - 15×等级`），
+    /// 抛竿时从鱼竿上捕获（原版在浮漂创建时固化附魔效果）。
+    pub lure_speed: i32,
 }
 
 impl FishingBobberEntity {
@@ -30,19 +38,55 @@ impl FishingBobberEntity {
         owner_pos.y += owner.living_entity.entity.get_eye_height() - 0.1;
         entity.pos.store(owner_pos);
 
+        let lure_speed = 100
+            - 15 * owner
+                .inventory()
+                .held_item()
+                .get_enchantment_level(&Enchantment::LURE);
         Self {
             entity,
             owner_id: owner.living_entity.entity.entity_id,
             hooked_entity_id: AtomicI32::new(0),
             in_ground: AtomicBool::new(false),
             has_hit: AtomicBool::new(false),
-            wait_countdown: AtomicI32::new(rand::random::<i32>().abs() % 600 + 100),
+            wait_countdown: AtomicI32::new(Self::next_wait(lure_speed)),
             bite_countdown: AtomicI32::new(0),
+            lure_speed,
         }
     }
 
+    /// 下一次咬钩等待时长：基准均匀 100..=600 刻，按饵钓折扣缩短。
+    fn next_wait(lure_speed: i32) -> i32 {
+        let base = (rand::random::<i32>().rem_euclid(501)) + 100;
+        base * lure_speed.max(10) / 100
+    }
+
+    /// 原版的开放水域判定：浮漂周围水平 ±2、竖直 0..=3 的
+    /// 5×4×5 区域内只允许空气、液体与睡莲，否则无法钓到宝藏。
+    fn is_open_water(&self) -> bool {
+        let world = self.entity.world.load();
+        let center = self.entity.pos.load();
+        let base = BlockPos::new(
+            center.x.floor() as i32,
+            center.y.floor() as i32,
+            center.z.floor() as i32,
+        );
+        for dx in -2..=2 {
+            for dz in -2..=2 {
+                for dy in 0..=3 {
+                    let pos = base.0 + Vector3::new(dx, dy, dz);
+                    let (block, state) = world.get_block_and_state(&BlockPos(pos));
+                    if block == &Block::LILY_PAD || state.is_liquid() || state.is_air() {
+                        continue;
+                    }
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     pub fn reel_in(&self, player: &Player) -> i32 {
-        use papokin_data::item::Item;
         let world = self.entity.world.load();
         let hooked_id = self.hooked_entity_id.load(Ordering::Relaxed);
 
@@ -57,6 +101,8 @@ impl FishingBobberEntity {
                     .multiply(0.1, 0.1, 0.1)
                     .add_raw(0.0, delta.length().sqrt() * 0.08, 0.0);
             hooked.get_entity().add_velocity(motion);
+            // 原版：钓上实体同样损耗鱼竿耐久
+            player.damage_held_item(1);
             return 1;
         }
 
@@ -68,21 +114,86 @@ impl FishingBobberEntity {
                 1,
             );
 
-            // TODO: 使用真实的战利品表。目前只给一条生鳕鱼。
-            let item_stack = ItemStack::new(1, &Item::COD);
-            // player.inventory().add_item(item_stack).await; // Need public add_item
+            // 按原版权重在鱼/垃圾/宝藏三张战利品表中选择：
+            // 鱼 85−L、垃圾 10−2L、宝藏 5+2L（L=海之眷顾等级），
+            // 宝藏仅在开放水域可钓。
+            let luck = player
+                .inventory()
+                .held_item()
+                .get_enchantment_level(&Enchantment::LUCK_OF_THE_SEA);
+            let open_water = self.is_open_water();
+            let fish_weight = (85 - luck).max(1);
+            let junk_weight = (10 - 2 * luck).max(0);
+            let treasure_weight = if open_water { (5 + 2 * luck).max(0) } else { 0 };
+            let roll =
+                rand::random::<i32>().rem_euclid(fish_weight + junk_weight + treasure_weight);
+            let table_key = if roll < fish_weight {
+                "minecraft:gameplay/fishing/fish"
+            } else if roll < fish_weight + junk_weight {
+                "minecraft:gameplay/fishing/junk"
+            } else {
+                "minecraft:gameplay/fishing/treasure"
+            };
 
-            player.trigger_advancement(
-                crate::entity::player::advancement::trigger::AdvancementTrigger::FishedItem {
-                    item_id: format!("minecraft:{}", item_stack.item.registry_key),
-                },
+            // 战利品生成事件，取消则本次垂钓无渔获
+            if !world.generate_loot(table_key) {
+                return 0;
+            }
+
+            let drops = papokin_data::loot_table::get_loot_table(table_key)
+                .map(|table| {
+                    let params = LootContextParameters {
+                        position: Some(self.entity.pos.load()),
+                        tool: Some(player.inventory().held_item()),
+                        ..Default::default()
+                    };
+                    let seed: i64 = rand::random();
+                    generate_loot_with_context(table, seed, &params)
+                })
+                .unwrap_or_default();
+
+            if drops.is_empty() {
+                return 0;
+            }
+
+            // 战利品以物品实体形式从浮漂处飞向玩家（原版弹道）
+            let player_pos = player.get_entity().pos.load();
+            let bobber_pos = self.entity.pos.load();
+            let delta = player_pos - bobber_pos;
+            let distance = delta.length();
+            let first_item_id = drops
+                .first()
+                .map(|stack| format!("minecraft:{}", stack.item.registry_key));
+            for stack in drops {
+                let item_entity = Entity::new(world.clone(), bobber_pos, &EntityType::ITEM);
+                let item = ItemEntity::new_with_velocity(
+                    item_entity,
+                    stack,
+                    delta
+                        .multiply(0.1, 0.1, 0.1)
+                        .add_raw(0.0, distance * 0.08, 0.0),
+                    ItemEntity::DEFAULT_PICKUP_DELAY,
+                );
+                world.spawn_entity(std::sync::Arc::new(item));
+            }
+
+            // 原版：钓到鱼掉落 1..=6 经验
+            ExperienceOrbEntity::spawn(
+                &world,
+                player_pos,
+                (rand::random::<u32>().rem_euclid(6) + 1) as u32,
             );
 
-            world.play_sound(
-                Sound::EntityExperienceOrbPickup,
-                SoundCategory::Neutral,
-                &player.position(),
-            );
+            if let Some(first) = first_item_id {
+                player.trigger_advancement(
+                    crate::entity::player::advancement::trigger::AdvancementTrigger::FishedItem {
+                        item_id: first,
+                    },
+                );
+            }
+
+            // 原版：成功收线损耗鱼竿耐久
+            player.damage_held_item(1);
             return 1;
         }
 
@@ -140,7 +251,7 @@ impl FishingBobberEntity {
                     // 开始咬合
                     self.bite_countdown.store(40, Ordering::Relaxed);
                     self.wait_countdown
-                        .store(rand::random::<i32>().abs() % 600 + 100, Ordering::Relaxed);
+                        .store(Self::next_wait(self.lure_speed), Ordering::Relaxed);
 
                     world.play_sound(
                         Sound::EntityFishingBobberSplash,
