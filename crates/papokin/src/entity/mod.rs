@@ -99,6 +99,32 @@ pub mod predicate;
 /// 实体可携带的记分板标签最大数量，与原版一致。
 pub const MAX_SCOREBOARD_TAGS: usize = 1024;
 
+/// 校验来自存档的双精度浮点：要求有限（NaN/Inf 一律拒绝），
+/// 但允许任意符号（位置/速度分量为负是合法的）。
+/// 与原版 `Entity.load` 的 `isFinite` 检查对齐，防止 NaN
+/// 经运动与伤害算术传播并随存档持久化。
+#[must_use]
+pub(crate) const fn finite_f64_or(value: f64, default: f64) -> f64 {
+    if value.is_finite() { value } else { default }
+}
+
+/// 校验来自存档的单精度浮点：要求有限但允许任意符号（如旋转角）。
+#[must_use]
+pub(crate) const fn finite_f32_or(value: f32, default: f32) -> f32 {
+    if value.is_finite() { value } else { default }
+}
+
+/// 校验来自存档的单精度浮点：要求有限且非负（血量、速度系数
+/// 等 gameplay 数值均不应为 NaN/Inf 或负数）。
+#[must_use]
+pub(crate) const fn finite_non_negative_f32_or(value: f32, default: f32) -> f32 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        default
+    }
+}
+
 ///返回在给定情况下应广播的 [`EntityStatus`]
 /// 装备槽位损坏。
 #[must_use]
@@ -3953,9 +3979,9 @@ impl Entity {
         if let Some(position) = nbt.get_list("Pos")
             && position.len() >= 3
         {
-            let x = position[0].extract_double().unwrap_or(0.0);
-            let y = position[1].extract_double().unwrap_or(0.0);
-            let z = position[2].extract_double().unwrap_or(0.0);
+            let x = finite_f64_or(position[0].extract_double().unwrap_or(0.0), 0.0);
+            let y = finite_f64_or(position[1].extract_double().unwrap_or(0.0), 0.0);
+            let z = finite_f64_or(position[2].extract_double().unwrap_or(0.0), 0.0);
             let pos = Vector3::new(x, y, z);
             self.set_pos(pos);
             self.last_sent_pos.store(pos);
@@ -3963,16 +3989,16 @@ impl Entity {
         if let Some(velocity) = nbt.get_list("Motion")
             && velocity.len() >= 3
         {
-            let x = velocity[0].extract_double().unwrap_or(0.0);
-            let y = velocity[1].extract_double().unwrap_or(0.0);
-            let z = velocity[2].extract_double().unwrap_or(0.0);
+            let x = finite_f64_or(velocity[0].extract_double().unwrap_or(0.0), 0.0);
+            let y = finite_f64_or(velocity[1].extract_double().unwrap_or(0.0), 0.0);
+            let z = finite_f64_or(velocity[2].extract_double().unwrap_or(0.0), 0.0);
             self.velocity.store(Vector3::new(x, y, z));
         }
         if let Some(rotation) = nbt.get_list("Rotation")
             && rotation.len() >= 2
         {
-            let yaw = rotation[0].extract_float().unwrap_or(0.0);
-            let pitch = rotation[1].extract_float().unwrap_or(0.0);
+            let yaw = finite_f32_or(rotation[0].extract_float().unwrap_or(0.0), 0.0);
+            let pitch = finite_f32_or(rotation[1].extract_float().unwrap_or(0.0), 0.0);
             self.set_rotation(yaw, pitch);
             let yaw_byte = (yaw * 256.0 / 360.0).rem_euclid(256.0) as u8;
             let pitch_byte = (pitch * 256.0 / 360.0).rem_euclid(256.0) as u8;
@@ -4161,5 +4187,24 @@ mod tests {
                 "status mismatch at index {i}"
             );
         }
+    }
+
+    #[test]
+    fn finite_sanitizers_reject_nan_and_infinity() {
+        // 存档中的 NaN/Inf 必须回退到默认值，正常值（含负数）原样通过。
+        assert_eq!(finite_f64_or(f64::NAN, 1.5), 1.5);
+        assert_eq!(finite_f64_or(f64::INFINITY, 1.5), 1.5);
+        assert_eq!(finite_f64_or(f64::NEG_INFINITY, 1.5), 1.5);
+        assert_eq!(finite_f64_or(-3.25, 1.5), -3.25);
+        assert_eq!(finite_f64_or(0.0, 1.5), 0.0);
+
+        assert_eq!(finite_f32_or(f32::NAN, 2.0), 2.0);
+        assert_eq!(finite_f32_or(f32::INFINITY, 2.0), 2.0);
+        assert_eq!(finite_f32_or(-180.0, 2.0), -180.0);
+
+        assert_eq!(finite_non_negative_f32_or(f32::NAN, 0.5), 0.5);
+        assert_eq!(finite_non_negative_f32_or(f32::INFINITY, 0.5), 0.5);
+        assert_eq!(finite_non_negative_f32_or(-1.0, 0.5), 0.5);
+        assert_eq!(finite_non_negative_f32_or(0.05, 0.5), 0.05);
     }
 }
