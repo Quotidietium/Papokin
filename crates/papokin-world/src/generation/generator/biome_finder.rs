@@ -166,7 +166,9 @@ fn collect_tree_biomes(tree: &'static BiomeTree, out: &mut FxHashSet<u8>) {
 
 /// 要探测的 Y 层级，按从 `origin` 向外的顺序排列（先向上），
 /// 被钳制在 `[min, max]` 之间，与原版的 `Mth.outFromOrigin` 一致。
+/// 步长必须为正（原版同为此前提）；此处强制为正以防死循环。
 fn out_from_origin(origin: i32, min: i32, max: i32, step: i32) -> Vec<i32> {
+    let step = step.max(1);
     let start = origin.clamp(min, max);
     let mut ys = vec![start];
     let mut distance = step;
