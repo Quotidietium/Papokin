@@ -1,11 +1,15 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
+use papokin_data::Block;
+use papokin_data::damage::DamageType;
 use papokin_data::entity::EntityType;
 use papokin_data::item::Item;
 use papokin_data::item_stack::ItemStack;
 use papokin_data::sound::{Sound, SoundCategory};
 use papokin_nbt::compound::NbtCompound;
+use papokin_util::math::position::BlockPos;
+use papokin_world::world::BlockFlags;
 
 use crate::entity::{
     Entity, EntityBase,
@@ -119,6 +123,58 @@ impl SnowGolemEntity {
 }
 
 impl Mob for SnowGolemEntity {
+    fn mob_tick(&self, caller: &dyn EntityBase) {
+        let entity = &self.mob_entity.living_entity.entity;
+        let world = entity.world.load();
+        let pos = entity.pos.load();
+        let block_pos = BlockPos::new(
+            pos.x.floor() as i32,
+            pos.y.floor() as i32,
+            pos.z.floor() as i32,
+        );
+        let temperature = world.get_biome(&block_pos).weather.base_temperature();
+
+        // 原版行为：炎热生物群系里雪傀儡持续融化受伤（每刻 1 点）。
+        // 数据集未含 snow_golem_melts 标签，以基础温度 ≥ 0.95 近似
+        // 覆盖沙漠/恶地/热带草原/丛林与下界群系。
+        if temperature >= 0.95 {
+            self.mob_entity
+                .living_entity
+                .damage(caller, 1.0, DamageType::ON_FIRE);
+        }
+
+        // 原版行为：寒冷群系（温度 < 0.8）在脚下空气格留下雪层，
+        // 受 mob_griefing 游戏规则约束。
+        if world.level_info.load().game_rules.mob_griefing
+            && temperature < 0.8
+            && (pos.x - f64::from(block_pos.0.x) - 0.5).abs() < 3.0
+            && (pos.z - f64::from(block_pos.0.z) - 0.5).abs() < 3.0
+        {
+            let (_, state) = world.get_block_and_state(&block_pos);
+            if state.is_air() {
+                let new_state_id = Block::SNOW.default_state.id;
+                // 实体域方块形成事件（雪傀儡留雪），取消则不放置
+                let Some(entity_arc) = world.get_entity_by_id(entity.entity_id) else {
+                    return;
+                };
+                let mut event =
+                    crate::plugin::api::events::block::entity_block_form::EntityBlockFormEvent::new(
+                        entity_arc,
+                        block_pos,
+                        world.clone(),
+                        new_state_id,
+                    );
+                if let Some(server) = world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                    if event.cancelled {
+                        return;
+                    }
+                }
+                world.set_block_state(&block_pos, new_state_id, BlockFlags::NOTIFY_ALL);
+            }
+        }
+    }
+
     fn mob_write_nbt(&self, nbt: &mut NbtCompound) {
         nbt.put_bool("Pumpkin", self.has_pumpkin());
     }
