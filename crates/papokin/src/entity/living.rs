@@ -65,6 +65,8 @@ use papokin_protocol::{
 use papokin_util::math::boundingbox::BoundingBox;
 use papokin_util::math::vector3::Vector3;
 use papokin_util::text::TextComponent;
+use papokin_world::tick::TickPriority;
+use papokin_world::world::BlockFlags;
 use rand::RngExt;
 use std::sync::RwLock;
 
@@ -1335,7 +1337,84 @@ impl LivingEntity {
             caller.damage(caller, 1.0, DamageType::IN_WALL);
         }
 
+        self.tick_frost_walker();
+
         self.push_entities(caller);
+    }
+
+    /// 冰霜行者：穿着该附魔靴子且站在地面时，把脚下的水源冻成霜冰。
+    /// 语义对齐原版 `FrostWalkerEnchantment#onEntityMove`：
+    /// 半径为 `2 + 附魔等级`（上限 16）的圆形区域，仅冻结上方为空气的水源方块，
+    /// 冻结出的霜冰在 60-120 刻后由方块自身的计划刻负责融化。
+    fn tick_frost_walker(&self) {
+        let level = {
+            let equipment = self
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            equipment
+                .equipment
+                .get(&EquipmentSlot::FEET)
+                .map_or(0, |boots| {
+                    boots.get_enchantment_level(&Enchantment::FROST_WALKER)
+                })
+        };
+        if level <= 0 || !self.entity.on_ground.load(SeqCst) {
+            return;
+        }
+
+        let entity = &self.entity;
+        let world = entity.world.load();
+        let pos = entity.pos.load();
+        let center = BlockPos::new(
+            pos.x.floor() as i32,
+            pos.y.floor() as i32,
+            pos.z.floor() as i32,
+        );
+        let radius = (2 + level).min(16);
+        let radius_sq = f64::from(radius * radius);
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                if f64::from(dx * dx + dz * dz) > radius_sq {
+                    continue;
+                }
+                let target = BlockPos::new(center.0.x + dx, center.0.y, center.0.z + dz);
+                // 上方必须为空气
+                if !world.get_block_state(&target.up()).is_air() {
+                    continue;
+                }
+                let (block, state_id) = world.get_block_and_state_id(&target);
+                // 仅冻结水源（level=0 的水方块）
+                if block != &Block::WATER || state_id != Block::WATER.default_state.id {
+                    continue;
+                }
+                let new_state_id = Block::FROSTED_ICE.default_state.id;
+                // 实体域方块形成事件（冰霜行者），取消则跳过该格
+                let Some(entity_arc) = world.get_entity_by_id(entity.entity_id) else {
+                    return;
+                };
+                let mut event =
+                    crate::plugin::api::events::block::entity_block_form::EntityBlockFormEvent::new(
+                        entity_arc,
+                        target,
+                        world.clone(),
+                        new_state_id,
+                    );
+                if let Some(server) = world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                    if event.cancelled {
+                        continue;
+                    }
+                }
+                world.set_block_state(&target, new_state_id, BlockFlags::NOTIFY_ALL);
+                world.schedule_block_tick(
+                    &Block::FROSTED_ICE,
+                    target,
+                    rand::rng().random_range(60..=120),
+                    TickPriority::Normal,
+                );
+            }
+        }
     }
 
     fn push_entities(&self, dyn_self: &dyn EntityBase) {
@@ -3448,6 +3527,8 @@ impl EntityBase for LivingEntity {
             if suffocating {
                 caller.damage(caller, 1.0, DamageType::IN_WALL);
             }
+
+            self.tick_frost_walker();
 
             // 玩家会像任何生物实体一样推挤其他实体。
             self.push_entities(caller);
