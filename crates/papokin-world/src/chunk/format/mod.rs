@@ -108,6 +108,32 @@ impl Dirtiable for ChunkData {
     }
 }
 
+/// 高度图数组长度：每列 9 位、每 7 列打包进一个 long，共 37 个。
+/// 磁盘数据长度不符时一律丢弃（返回空），由光照/访问路径重新计算，
+/// 防止消费端按固定布局索引时越界 panic。
+const HEIGHTMAP_ARRAY_LEN: usize = 37;
+
+/// 高度图复合标签中必须校验的三个键。
+const HEIGHTMAP_KEYS: [&str; 3] = [
+    "WORLD_SURFACE",
+    "MOTION_BLOCKING",
+    "MOTION_BLOCKING_NO_LEAVES",
+];
+
+fn validate_heightmaps(
+    h_compound: Option<&papokin_nbt::compound::NbtCompound>,
+) -> Option<&papokin_nbt::compound::NbtCompound> {
+    let h_compound = h_compound?;
+    for key in HEIGHTMAP_KEYS {
+        if let Some(arr) = h_compound.get_long_array(key)
+            && arr.len() != HEIGHTMAP_ARRAY_LEN
+        {
+            return None;
+        }
+    }
+    Some(h_compound)
+}
+
 fn extract_u16_array(tag: &papokin_nbt::tag::NbtTag) -> Option<Box<[BlockStateId]>> {
     match tag {
         papokin_nbt::tag::NbtTag::IntArray(arr) => Some(
@@ -240,6 +266,15 @@ impl ChunkData {
             ChunkParsingError::ErrorDeserializingChunk("Missing yPos".to_string())
         })?;
 
+        // 畸形 yPos（全范围 i32）会驱动按 section 数的巨额分配、破坏
+        // 32 位 section 掩码，并使下方差值运算溢出。合法世界最低
+        // section 在 -128..=127（对应 y -2048..2047），超出即拒绝该区块。
+        if !(i32::from(i8::MIN)..=i32::from(i8::MAX)).contains(&min_y_section) {
+            return Err(ChunkParsingError::ErrorDeserializingChunk(format!(
+                "yPos 超出合理范围：{min_y_section}"
+            )));
+        }
+
         let mut max_y_section = min_y_section as i8;
         if let Some(sections_list) = root_tag.get_list("sections") {
             for section_tag in sections_list {
@@ -253,6 +288,13 @@ impl ChunkData {
         }
 
         let section_count = (max_y_section as i32 - min_y_section + 1).max(0) as usize;
+        // 运行时用 u32 掩码跟踪随机刻 section，最多 32 个；超出即数据畸形
+        if section_count > u32::BITS as usize {
+            return Err(ChunkParsingError::ErrorDeserializingChunk(format!(
+                "section 数量超出上限：{section_count} > {}",
+                u32::BITS
+            )));
+        }
         let mut block_lights = vec![LightContainer::Empty(0); section_count];
         let mut sky_lights = vec![LightContainer::Empty(0); section_count];
         let mut block_palettes = vec![BlockPalette::default(); section_count];
@@ -267,9 +309,12 @@ impl ChunkData {
                         continue;
                     }
 
+                    // 光照数组必须恰为 2048 字节（DIM^3/2）；短数组会在
+                    // 光照引擎按固定布局索引时越界读写，故不予采信
                     let block_light = section_compound
                         .get("BlockLight")
                         .and_then(|tag| tag.extract_byte_array())
+                        .filter(|arr| arr.len() == LightContainer::ARRAY_SIZE)
                         .map(|arr| {
                             // SAFETY: `arr` 是 `i8` 切片（`&[i8]`）。`u8` 与 `i8` 具有相同的内存布局、对齐（1 字节）和生命周期。
                             unsafe {
@@ -283,6 +328,7 @@ impl ChunkData {
                     let sky_light = section_compound
                         .get("SkyLight")
                         .and_then(|tag| tag.extract_byte_array())
+                        .filter(|arr| arr.len() == LightContainer::ARRAY_SIZE)
                         .map(|arr| {
                             // SAFETY: `arr` 是 `i8` 切片（`&[i8]`）。`u8` 与 `i8` 具有相同的内存布局、对齐（1 字节）和生命周期。
                             unsafe {
@@ -350,7 +396,7 @@ impl ChunkData {
             min_y,
         };
 
-        let heightmaps = root_tag.get_compound("Heightmaps").map_or(
+        let heightmaps = validate_heightmaps(root_tag.get_compound("Heightmaps")).map_or(
             ChunkHeightmaps {
                 world_surface: None,
                 motion_blocking: None,
