@@ -2076,7 +2076,20 @@ impl LivingEntity {
             {
                 let amount = dyn_self.get_experience_reward(killer);
                 if amount > 0 {
-                    ExperienceOrbEntity::spawn(&world, self.entity.pos.load(), amount);
+                    // 幽匿催发：死亡位置 8 格内有催化体时，经验被吸收用于催发幽匿，
+                    // 不再生成经验球（原版幽匿催发体语义）
+                    let death_pos = BlockPos::new(
+                        self.entity.pos.load().x.floor() as i32,
+                        self.entity.pos.load().y.floor() as i32,
+                        self.entity.pos.load().z.floor() as i32,
+                    );
+                    let catalyst_absorbed = crate::block::blocks::sculk::sculk_catalyst::SculkCatalystBlock::find_nearby_catalyst(&world, &death_pos)
+                        .is_some_and(|catalyst| {
+                            crate::block::blocks::sculk::sculk_catalyst::SculkCatalystBlock::absorb_death(&world, catalyst, amount)
+                        });
+                    if !catalyst_absorbed {
+                        ExperienceOrbEntity::spawn(&world, self.entity.pos.load(), amount);
+                    }
                 }
             }
             self.entity.pose.store(EntityPose::Dying);
