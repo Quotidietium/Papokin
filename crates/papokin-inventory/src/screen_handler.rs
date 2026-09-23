@@ -613,7 +613,7 @@ pub trait ScreenHandler: Send + Sync {
 
     /// 检查槽位索引是否有效。
     fn is_slot_valid(&self, slot: i32) -> bool {
-        slot == -1 || slot == -999 || slot < self.get_behaviour().slots.len() as i32
+        slot == -1 || slot == -999 || (slot >= 0 && slot < self.get_behaviour().slots.len() as i32)
     }
 
     /// 禁用同步（用于批量操作）。
