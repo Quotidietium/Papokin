@@ -42,7 +42,10 @@ impl FishingBobberEntity {
             - 15 * owner
                 .inventory()
                 .held_item()
-                .get_enchantment_level(&Enchantment::LURE);
+                .get_enchantment_level(&Enchantment::LURE)
+                // 附魔等级来自物品组件，可能被指令/客户端注入任意 i32，
+                // 先钳制再参与运算，避免溢出 panic（debug 构建下可被利用）
+                .clamp(0, 255);
         Self {
             entity,
             owner_id: owner.living_entity.entity.entity_id,
@@ -117,10 +120,12 @@ impl FishingBobberEntity {
             // 按原版权重在鱼/垃圾/宝藏三张战利品表中选择：
             // 鱼 85−L、垃圾 10−2L、宝藏 5+2L（L=海之眷顾等级），
             // 宝藏仅在开放水域可钓。
+            // 等级先钳制：物品组件可携带任意 i32，防后续运算溢出。
             let luck = player
                 .inventory()
                 .held_item()
-                .get_enchantment_level(&Enchantment::LUCK_OF_THE_SEA);
+                .get_enchantment_level(&Enchantment::LUCK_OF_THE_SEA)
+                .clamp(0, 255);
             let open_water = self.is_open_water();
             let fish_weight = (85 - luck).max(1);
             let junk_weight = (10 - 2 * luck).max(0);
@@ -204,6 +209,17 @@ impl FishingBobberEntity {
     pub fn process_tick(&self, caller: &dyn EntityBase) {
         let entity = self.get_entity();
         let world = entity.world.load();
+
+        // 主人下线或离开过远时回收浮漂，防止实体泄漏长期占用 tick
+        let Some(owner) = world.get_player_by_id(self.owner_id) else {
+            caller.get_entity().remove();
+            return;
+        };
+        let owner_pos = owner.get_entity().pos.load();
+        if owner_pos.squared_distance_to_vec(&entity.pos.load()) > 32.0 * 32.0 {
+            caller.get_entity().remove();
+            return;
+        }
 
         if self.in_ground.load(Ordering::Relaxed) {
             return;
