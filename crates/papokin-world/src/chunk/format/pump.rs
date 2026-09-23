@@ -12,6 +12,9 @@ use ruzstd::decoding::StreamingDecoder;
 use ruzstd::encoding::{CompressionLevel, compress_to_vec};
 use serde::{Deserialize, Serialize};
 
+/// 单区块解压输出上限（8 MiB），防 zstd 炸弹。
+const MAX_CHUNK_DECOMPRESSED_LEN: usize = 8 * 1024 * 1024;
+
 pub struct PumpFile<D> {
     pub data: PumpData,
     _phantom: PhantomData<D>,
@@ -154,13 +157,19 @@ where
                     || LoadedData::Missing(pos),
                     |chunk_bytes| {
                         let res = (|| {
-                            let mut decoder =
-                                StreamingDecoder::new(&chunk_bytes[..]).map_err(|e| {
-                                    ChunkReadingError::IoError(std::io::Error::other(e.to_string()))
-                                })?;
+                            let decoder = StreamingDecoder::new(&chunk_bytes[..]).map_err(|e| {
+                                ChunkReadingError::IoError(std::io::Error::other(e.to_string()))
+                            })?;
                             let mut decompressed = Vec::new();
-                            std::io::Read::read_to_end(&mut decoder, &mut decompressed)
+                            let mut bounded = std::io::Read::take(
+                                decoder,
+                                (MAX_CHUNK_DECOMPRESSED_LEN + 1) as u64,
+                            );
+                            std::io::Read::read_to_end(&mut bounded, &mut decompressed)
                                 .map_err(ChunkReadingError::IoError)?;
+                            if decompressed.len() > MAX_CHUNK_DECOMPRESSED_LEN {
+                                return Err(ChunkReadingError::RegionIsInvalid);
+                            }
                             let bytes = Bytes::from(decompressed);
                             D::from_bytes(&bytes, pos)
                         })();

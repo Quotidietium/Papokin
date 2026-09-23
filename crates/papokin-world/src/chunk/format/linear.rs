@@ -29,6 +29,10 @@ const VALID_GRID_SIZES: &[u8] = &[1, 2, 4, 8, 16, 32];
 /// 对大多数世界来说是不错的折中。
 const DEFAULT_GRID_SIZE: u8 = 2;
 
+/// 单桶解压输出上限：恶意桶数据（zstd 炸弹）可将 KB 级输入
+/// 放大至无界；256 MiB 远超合法桶（1024 区块组）的规模。
+const MAX_BUCKET_DECOMPRESSED_LEN: usize = 256 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // 超级块（26 字节）
 // ---------------------------------------------------------------------------
@@ -531,11 +535,16 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
             let compressed_slice = &buf[..compressed_size];
             let mut decompressed = Vec::new();
             {
-                let mut decoder = StreamingDecoder::new(compressed_slice)
+                let decoder = StreamingDecoder::new(compressed_slice)
                     .map_err(|_| ChunkReadingError::RegionIsInvalid)?;
-                decoder
+                let mut bounded = decoder.take((MAX_BUCKET_DECOMPRESSED_LEN + 1) as u64);
+                bounded
                     .read_to_end(&mut decompressed)
-                    .map_err(ChunkReadingError::IoError)?
+                    .map_err(ChunkReadingError::IoError)?;
+                if decompressed.len() > MAX_BUCKET_DECOMPRESSED_LEN {
+                    error!("Linear v2: 桶解压输出超过上限（疑似解压炸弹）");
+                    return Err(ChunkReadingError::RegionIsInvalid);
+                }
             };
             buf.advance(compressed_size);
 

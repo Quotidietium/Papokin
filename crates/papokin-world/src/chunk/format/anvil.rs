@@ -139,10 +139,22 @@ impl Compression {
     const LZ4_ID: u8 = 4;
     const CUSTOM_ID: u8 = 127;
 
+    /// 单区块解压输出上限。正常区块解压后远小于此值；不设上限时，
+    /// 恶意压缩数据（解压炸弹）可借 zlib ~1032:1 的膨胀比把 1 MB
+    /// 输入放大到 GB 级直至内存耗尽。与原版解压后大小限制同量级。
+    const MAX_DECOMPRESSED_LEN: usize = 8 * 1024 * 1024;
+
     fn decompress_data(self, compressed_data: &[u8]) -> Result<Box<[u8]>, CompressionError> {
-        fn decode<R: std::io::Read>(mut reader: R, capacity: usize) -> std::io::Result<Box<[u8]>> {
-            let mut buf = Vec::with_capacity(capacity);
-            reader.read_to_end(&mut buf)?;
+        fn decode<R: std::io::Read>(reader: R, capacity: usize) -> std::io::Result<Box<[u8]>> {
+            let mut buf = Vec::with_capacity(capacity.min(Compression::MAX_DECOMPRESSED_LEN));
+            let mut bounded = reader.take((Compression::MAX_DECOMPRESSED_LEN + 1) as u64);
+            bounded.read_to_end(&mut buf)?;
+            if buf.len() > Compression::MAX_DECOMPRESSED_LEN {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "解压输出超过单区块上限（疑似解压炸弹）",
+                ));
+            }
             Ok(buf.into_boxed_slice())
         }
 
@@ -585,9 +597,14 @@ impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {
                 // 附属文件是一个经 zlib 压缩、以命名根起始的 NBT 文档；
                 // 流式解码器无法 seek，因此先在内存中解码。
                 let mut decoded = Vec::new();
-                ZlibDecoder::new(&compressed[..])
+                let mut bounded = ZlibDecoder::new(&compressed[..])
+                    .take((Compression::MAX_DECOMPRESSED_LEN + 1) as u64);
+                bounded
                     .read_to_end(&mut decoded)
                     .map_err(std::io::Error::other)?;
+                if decoded.len() > Compression::MAX_DECOMPRESSED_LEN {
+                    return Err(std::io::Error::other("解压输出超过单区块上限"));
+                }
                 let mut cursor = std::io::Cursor::new(decoded);
                 let mut reader = papokin_nbt::deserializer::NbtReadHelperJava::new(
                     papokin_nbt::deserializer::NbtStreamReader(&mut cursor),
