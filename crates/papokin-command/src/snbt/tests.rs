@@ -479,3 +479,19 @@ fn arrays() {
         []
     );
 }
+
+#[test]
+fn nesting_depth_limit() {
+    // 浅嵌套在上限内正常解析
+    assert_parse_ok!(
+        "[[[1]]]",
+        NbtTag::List(vec![NbtTag::List(vec![NbtTag::List(vec![NbtTag::Int(1)])])])
+    );
+
+    // 深嵌套输入必须被拒绝（深度上限 512），而不是递归下降直到栈溢出
+    let deep_lists = "[".repeat(2000);
+    assert!(parse(&deep_lists).is_err());
+
+    let deep_maps = "{a:".repeat(2000) + "1" + &"}".repeat(2000);
+    assert!(parse(&deep_maps).is_err());
+}

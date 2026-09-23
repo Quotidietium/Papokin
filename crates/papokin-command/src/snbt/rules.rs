@@ -43,6 +43,13 @@ pub const EXPECTED_DECIMAL_NUMERAL: CommandErrorType<0> =
 pub const EXPECTED_HEX_NUMERAL: CommandErrorType<0> =
     CommandErrorType::new(translation::java::SNBT_PARSER_EXPECTED_HEX_NUMERAL);
 
+/// SNBT 复合/列表嵌套深度上限。递归下降解析不设限时，
+/// 深嵌套输入（如 `/summon ... {a:{a:{...}}}`）可烧穿调用栈，
+/// 栈溢出会直接 abort 进程且不可捕获，故超限一律拒绝解析。
+/// 每层递归跨越多个闭包帧（约数 KB 栈空间），需在 2 MB 线程栈内
+/// 留足余量，故取 128——真实 NBT 嵌套极少超过 20 层。
+const MAX_SNBT_DEPTH: usize = 128;
+
 pub const EMPTY_KEY: CommandErrorType<0> =
     CommandErrorType::new(translation::java::SNBT_PARSER_EMPTY_KEY);
 
@@ -639,6 +646,20 @@ impl SnbtParser<'_, '_> {
             .map_or_else(|| self.unquoted_string_literal(), Some)
     }
 
+    /// 进入嵌套复合/列表前递增深度计数；超过 [`MAX_SNBT_DEPTH`]
+    /// 时记录错误并返回 `None` 以终止整个解析。
+    fn enter_nested(&mut self) -> Option<()> {
+        self.depth += 1;
+        if self.depth > MAX_SNBT_DEPTH {
+            self.store_dynamic_error(
+                &LITERAL_INCORRECT,
+                format!("SNBT 嵌套过深（上限 {MAX_SNBT_DEPTH} 层）"),
+            );
+            return None;
+        }
+        Some(())
+    }
+
     fn map_entry(&mut self) -> Option<(String, NbtTag)> {
         let entry = self.parse_or_revert(|parser| {
             let key = parser.map_key()?;
@@ -794,8 +815,18 @@ impl SnbtParser<'_, '_> {
         } else {
             match self.reader.peek() {
                 Some('"' | '\'') => Literal::String(self.quoted_string_literal()?),
-                Some('{') => Literal::Tag(self.map_literal()?),
-                Some('[') => Literal::Tag(self.list_literal()?),
+                Some('{') => {
+                    self.enter_nested()?;
+                    let tag = self.map_literal();
+                    self.depth -= 1;
+                    Literal::Tag(tag?)
+                }
+                Some('[') => {
+                    self.enter_nested()?;
+                    let tag = self.list_literal();
+                    self.depth -= 1;
+                    Literal::Tag(tag?)
+                }
                 _ => Literal::Tag(self.unquoted_string_or_built_in()?),
             }
         };

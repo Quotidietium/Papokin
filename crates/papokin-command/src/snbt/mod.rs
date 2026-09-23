@@ -41,6 +41,8 @@ pub const EXPECTED_INTEGER_TYPE: CommandErrorType<0> =
 pub struct SnbtParser<'r, 's> {
     reader: &'r mut StringReader<'s>,
     errors: ParserErrors,
+    /// 复合/列表互递归的嵌套深度计数，用于拒绝深嵌套输入
+    depth: usize,
 }
 
 //
@@ -53,6 +55,7 @@ impl SnbtParser<'_, '_> {
             let mut parser = SnbtParser {
                 reader,
                 errors: ParserErrors::default(),
+                depth: 0,
             };
 
             let literal = parser.parse();
@@ -102,6 +105,7 @@ impl SnbtParser<'_, '_> {
             let mut parser = SnbtParser {
                 reader: &mut reader,
                 errors: ParserErrors::default(),
+                depth: 0,
             };
 
             let _ = parser.parse();
