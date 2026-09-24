@@ -334,6 +334,8 @@ pub struct Player {
     pub client_loaded_timeout: AtomicU32,
     /// 用于追踪聊天和命令刷屏的计数器。每个服务器刻衰减一次。
     pub chat_spam_tick_count: AtomicU32,
+    /// Tab 补全请求的每 tick 限流计数器（见 `try_consume_suggestion_quota`）。
+    pub command_suggestion_tick_count: AtomicU32,
     /// 弓、弩等物品的使用跟踪。
     pub using_item: AtomicBool,
     pub item_use_start_time: AtomicI32,
@@ -569,6 +571,7 @@ impl Player {
             client_loaded: AtomicBool::new(initially_loaded),
             client_loaded_timeout: AtomicU32::new(if initially_loaded { 0 } else { 60 }),
             chat_spam_tick_count: AtomicU32::new(0),
+            command_suggestion_tick_count: AtomicU32::new(0),
             // 物品使用追踪
             using_item: AtomicBool::new(false),
             item_use_start_time: AtomicI32::new(0),
@@ -2636,6 +2639,15 @@ impl Player {
             );
         }
 
+        // Tab 补全限流计数器衰减：每 tick 释放一个配额。
+        // 无条件衰减（不挂 anti_spam 配置）：该限流针对的是改过的
+        // 客户端高频刷补全包的 DoS 面，与聊天刷屏配置无关。
+        let _ = self.command_suggestion_tick_count.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |count| Some(count.saturating_sub(1)),
+        );
+
         // 超时/保活处理
         self.tick_client_load_timeout();
         // 空闲超时处理
@@ -3970,6 +3982,26 @@ impl Player {
     }
 
     /// 检查发送聊天消息或命令是否构成刷屏。
+    /// 补全请求的每 tick 配额。合法客户端的 Tab 补全由按键触发，
+    /// 频率远低于此；只有被修改的客户端才会高频刷补全包，
+    /// 用全命令树解析消耗服务端 CPU。
+    const COMMAND_SUGGESTION_RATE_LIMIT: u32 = 20;
+
+    /// 尝试消耗一个补全请求配额；超限时静默丢弃本次请求。
+    ///
+    /// 与聊天刷屏不同，这里不踢出玩家：补全是被动响应，
+    /// 无副作用，丢弃即可；计数器超限后不再累加，避免无界增长。
+    pub fn try_consume_suggestion_quota(&self) -> bool {
+        if self.command_suggestion_tick_count.load(Ordering::Relaxed)
+            >= Self::COMMAND_SUGGESTION_RATE_LIMIT
+        {
+            return false;
+        }
+        self.command_suggestion_tick_count
+            .fetch_add(1, Ordering::Relaxed)
+            < Self::COMMAND_SUGGESTION_RATE_LIMIT
+    }
+
     pub fn check_chat_spam(&self, server: &Server, spam_type: SpamType) -> bool {
         let anti_spam = &server.advanced_config.chat.anti_spam;
         if !anti_spam.enabled {

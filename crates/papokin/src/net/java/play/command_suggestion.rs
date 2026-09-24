@@ -9,6 +9,12 @@ impl JavaClient {
         packet: &SCommandSuggestion<'_>,
         server: &Arc<Server>,
     ) {
+        // 补全请求按每 tick 配额限流：全命令树解析有成本，
+        // 被修改的客户端可高频刷此包做 DoS
+        if !player.try_consume_suggestion_quota() {
+            return;
+        }
+
         let Some(cmd) = &packet.command.get(1..) else {
             return;
         };
