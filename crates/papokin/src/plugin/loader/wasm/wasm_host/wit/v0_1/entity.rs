@@ -1039,8 +1039,13 @@ pub(crate) fn to_wit_entity_type(name: &str) -> wasmtime::Result<entity_types::E
         .binary_search_by_key(&name, |e| e.resource_name)
         .map_err(|_| wasmtime::Error::msg(format!("未知的实体类型：{name}")))?;
 
-    // SAFETY: WIT 枚举的变体与 EntityType::ALL 按字母顺序一一对应生成。
-    Ok(unsafe { std::mem::transmute::<u8, entity_types::EntityType>(index as u8) })
+    // 若未来实体类型超过 256，u8 截断会得到非法枚举值，
+    // 故先显式校验拒绝而非静默 UB。
+    let index_u8 = u8::try_from(index)
+        .map_err(|_| wasmtime::Error::msg(format!("实体类型索引超出 u8 值域：{index}")))?;
+    // SAFETY: WIT 枚举的变体与 EntityType::ALL 按字母顺序一一对应生成，
+    // 且 index_u8 已验证落在 u8 值域内（当前实体类型数为 168）。
+    Ok(unsafe { std::mem::transmute::<u8, entity_types::EntityType>(index_u8) })
 }
 
 pub(crate) fn from_wit_entity_type(

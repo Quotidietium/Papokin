@@ -49,9 +49,10 @@ pub(crate) fn to_wit_enchantment(id: &Enchantment) -> WitEnchantment {
     unsafe { std::mem::transmute(id.id) }
 }
 
-pub(crate) fn from_wit_enchantment(id: WitEnchantment) -> &'static Enchantment {
-    // Safety: WIT 枚举按与内部枚举相同的顺序生成
-    Enchantment::from_id(id as u8).expect("有效的附魔 ID")
+pub(crate) fn from_wit_enchantment(id: WitEnchantment) -> wasmtime::Result<&'static Enchantment> {
+    // WIT 枚举按与内部枚举相同的顺序生成；两表失配时优雅报错，
+    // 不让 panic 跨越宿主调用边界。
+    Enchantment::from_id(id as u8).ok_or_else(|| wasmtime::Error::msg("无效的附魔 ID"))
 }
 
 #[must_use]
@@ -196,7 +197,7 @@ impl HostItemStack for PluginHostState {
     ) -> wasmtime::Result<()> {
         let stack = self.get_item_stack(&res)?;
         let mut stack = stack.lock().await;
-        let enc = from_wit_enchantment(enchantment);
+        let enc = from_wit_enchantment(enchantment)?;
 
         let mut current_encs = if let Some((_, Some(data))) = stack
             .patch
@@ -240,7 +241,7 @@ impl HostItemStack for PluginHostState {
     ) -> wasmtime::Result<()> {
         let stack = self.get_item_stack(&res)?;
         let mut stack = stack.lock().await;
-        let enc = from_wit_enchantment(enchantment);
+        let enc = from_wit_enchantment(enchantment)?;
 
         if let Some((_, Some(data))) = stack
             .patch
