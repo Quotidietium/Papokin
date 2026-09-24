@@ -451,6 +451,10 @@ pub fn start_telemetry_with_config(server: Arc<Server>, config: &TelemetryConfig
         tracing::trace!("遥测已在配置中禁用。");
         return;
     }
+    if config.endpoint.trim().is_empty() {
+        tracing::warn!("遥测已启用但 endpoint 为空，拒绝启动遥测上报。");
+        return;
+    }
 
     tracing::info!(
         "匿名服务器遥测已启用。正在向 {} 定期发送心跳",

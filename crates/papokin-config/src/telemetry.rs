@@ -19,8 +19,10 @@ pub struct TelemetryConfig {
 impl Default for TelemetryConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
-            endpoint: "https://market.pumpkinmc.org/api/v1/rest/telemetry/heartbeat".to_string(),
+            // 默认禁用：Papokin 是独立衍生项目，没有可用的官方遥测
+            // 后端，不得默认把服务器心跳发往原版组织的端点。
+            enabled: false,
+            endpoint: String::new(),
             interval_secs: 300,
             public: false,
             server_name: None,
@@ -30,7 +32,22 @@ impl Default for TelemetryConfig {
 
 impl TelemetryConfig {
     /// 验证遥测配置选项。
-    pub const fn validate(&self) {}
+    ///
+    /// # Panics
+    ///
+    /// 启用心跳间隔小于 60 秒，或已启用但接入端点为空时 panic，
+    /// 与其余配置校验一致地在启动期暴露错误配置。
+    pub fn validate(&self) {
+        assert!(
+            self.interval_secs >= 60,
+            "遥测心跳间隔不得小于 60 秒（当前 {} 秒）",
+            self.interval_secs
+        );
+        assert!(
+            !self.enabled || !self.endpoint.trim().is_empty(),
+            "遥测已启用但 endpoint 为空：请填写接入端点或在配置中禁用遥测"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -40,14 +57,32 @@ mod tests {
     #[test]
     fn telemetry_default() {
         let default_config = TelemetryConfig::default();
-        assert!(default_config.enabled);
-        assert_eq!(
-            default_config.endpoint,
-            "https://market.pumpkinmc.org/api/v1/rest/telemetry/heartbeat"
-        );
+        // 默认禁用且端点为空：衍生项目不得默认外联原版组织的遥测端点
+        assert!(!default_config.enabled);
+        assert!(default_config.endpoint.is_empty());
         assert_eq!(default_config.interval_secs, 300);
         assert!(!default_config.public);
         assert_eq!(default_config.server_name, None);
+        default_config.validate();
+    }
+
+    #[test]
+    fn telemetry_rejects_short_interval_and_empty_endpoint() {
+        let mut config = TelemetryConfig {
+            interval_secs: 30,
+            ..TelemetryConfig::default()
+        };
+        assert!(std::panic::catch_unwind(|| config.validate()).is_err());
+
+        let mut config = TelemetryConfig {
+            enabled: true,
+            endpoint: String::new(),
+            ..TelemetryConfig::default()
+        };
+        assert!(std::panic::catch_unwind(|| config.validate()).is_err());
+
+        config.endpoint = "https://example.invalid/heartbeat".to_string();
+        config.validate();
     }
 
     #[test]
