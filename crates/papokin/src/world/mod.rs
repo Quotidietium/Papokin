@@ -132,6 +132,7 @@ pub mod bossbar;
 pub mod custom_bossbar;
 pub mod dragon_fight;
 pub mod end_podium;
+pub mod entity_index;
 pub mod entity_tracker;
 pub mod environment;
 pub mod natural_spawner;
@@ -186,6 +187,9 @@ pub struct World {
     /// 世界中活跃实体的映射，以各自的 UUID 为键。
     /// 这不包括玩家。
     pub entities: ArcSwap<Vec<Arc<dyn EntityBase>>>,
+    /// 按区块分桶的实体空间索引（弱引用）：供 `get_entities_at_box`
+    /// 的小范围查询替代全表线性扫描。见 `entity_index` 模块文档。
+    pub entities_by_chunk: entity_index::ChunkedEntityIndex<dyn EntityBase>,
     /// 世界的记分板，用于跟踪分数、目标和显示信息。
     pub scoreboard: std::sync::Mutex<Scoreboard>,
     /// 世界的世界边界（worldborder），定义可玩区域并控制其扩张或收缩。
@@ -321,6 +325,7 @@ impl World {
             level_info,
             players: ArcSwap::new(Arc::new(Vec::new())),
             entities: ArcSwap::new(Arc::new(Vec::new())),
+            entities_by_chunk: entity_index::ChunkedEntityIndex::new(),
             scoreboard: std::sync::Mutex::new(Scoreboard::default()),
             worldborder: std::sync::Mutex::new(Worldborder::new(
                 0.0,
@@ -3535,6 +3540,23 @@ impl World {
 
     // 获取某个 Box 中的所有非玩家实体
     pub fn get_entities_at_box(&self, aabb: &BoundingBox) -> Vec<Arc<dyn EntityBase>> {
+        // 小范围盒子（漏斗/投掷物/压力板/绊线等高频调用）走按区块
+        // 分桶的索引，代价 O(命中实体数)；范围超过阈值（64 桶，
+        // 即 128×128 格）时回退全表线性扫描，保证任意大盒子仍正确。
+        let min_chunk = Vector2::new(
+            get_section_cord(aabb.min.x.floor() as i32),
+            get_section_cord(aabb.min.z.floor() as i32),
+        );
+        let max_chunk = Vector2::new(
+            get_section_cord(aabb.max.x.floor() as i32),
+            get_section_cord(aabb.max.z.floor() as i32),
+        );
+        if let Some(candidates) = self.entities_by_chunk.query(min_chunk, max_chunk, 64) {
+            return candidates
+                .into_iter()
+                .filter(|entity| entity.get_entity().bounding_box.load().intersects(aabb))
+                .collect();
+        }
         self.entities
             .load()
             .iter()
@@ -3888,6 +3910,7 @@ impl World {
         let _base_entity = entity.get_entity();
         self.entity_tracker.add_entity(&entity, self);
         self.spawn_state.load().add_entity(self, entity.as_ref());
+        self.register_entity_in_chunk_index(&entity);
 
         self.entities.rcu(|current_entities| {
             let mut new_entities = (**current_entities).clone();
@@ -3935,12 +3958,33 @@ impl World {
         // 一次性序列化（这会在下次重载时使其翻倍）。
         self.spawn_state.load().add_entity(self, entity.as_ref());
         self.entity_tracker.add_entity(&entity, self);
+        self.register_entity_in_chunk_index(&entity);
 
         self.entities.rcu(|current_entities| {
             let mut new_entities = (**current_entities).clone();
             new_entities.push(entity.clone());
             new_entities
         });
+    }
+
+    /// 将实体登记进按区块分桶的空间索引，并在实体基座上记录自身的
+    /// 弱引用句柄——`Entity::set_pos` 跨块移动时凭该句柄向新桶插入，
+    /// 保证盒查询不会漏掉已移动的实体。
+    fn register_entity_in_chunk_index(&self, entity: &Arc<dyn EntityBase>) {
+        let base = entity.get_entity();
+        // 实体只会被加入世界一次（`add_entity_silent` 有 UUID 去重），
+        // 但跨维度迁移会复用同一 Arc 重新登记：句柄不变，幂等无害。
+        let _ = base
+            .chunk_index_handle
+            .set(Arc::downgrade(entity) as Weak<dyn EntityBase>);
+        // 桶位从当前位置直接计算：`chunk_pos` 依赖 set_pos 驱动，
+        // 构造后未移动过的实体可能仍是默认值。
+        let pos = base.pos.load();
+        let chunk = Vector2::new(
+            get_section_cord(pos.x.floor() as i32),
+            get_section_cord(pos.z.floor() as i32),
+        );
+        self.entities_by_chunk.insert(chunk, entity);
     }
 
     pub fn remove_entity(&self, entity: &dyn EntityBase) {

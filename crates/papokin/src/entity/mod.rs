@@ -55,7 +55,7 @@ use papokin_util::version::JavaMinecraftVersion;
 use player::Player;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{
-    Arc,
+    Arc, OnceLock, Weak,
     atomic::{
         AtomicBool, AtomicI32, AtomicU8, AtomicU32,
         Ordering::{self, Relaxed},
@@ -1029,6 +1029,10 @@ pub struct Entity {
     pub last_sent_head_yaw: AtomicU8,
     /// 面向插件的持久自定义数据容器（对应 Bukkit 的 `PersistentDataHolder`）
     pub custom_data: std::sync::Mutex<NbtCompound>,
+    /// 自身作为 trait 对象的弱引用句柄，在被加入世界时登记
+    /// （见 `World::register_entity_in_chunk_index`）。`set_pos` 跨块
+    /// 移动时凭它向新桶插入，供 `get_entities_at_box` 分块索引查询。
+    pub chunk_index_handle: OnceLock<Weak<dyn EntityBase>>,
 }
 
 impl Entity {
@@ -1156,6 +1160,7 @@ impl Entity {
             last_sent_head_yaw: AtomicU8::new(0),
             last_sent_pos: AtomicCell::new(position),
             custom_data: std::sync::Mutex::new(NbtCompound::new()),
+            chunk_index_handle: OnceLock::new(),
         }
     }
 
@@ -1295,13 +1300,24 @@ impl Entity {
                 self.last_biome_update_pos.store(new_bp);
 
                 let chunk_pos = self.chunk_pos.load();
+                let new_chunk_x = get_section_cord(new_block_pos.x);
+                let new_chunk_z = get_section_cord(new_block_pos.z);
                 if get_section_cord(floor_x) != chunk_pos.x
                     || get_section_cord(floor_z) != chunk_pos.y
                 {
-                    self.chunk_pos.store(Vector2::new(
-                        get_section_cord(new_block_pos.x),
-                        get_section_cord(new_block_pos.z),
-                    ));
+                    self.chunk_pos.store(Vector2::new(new_chunk_x, new_chunk_z));
+                    // 跨块移动：向新区块桶插入自身弱引用（旧桶的过期项
+                    // 由查询侧 AABB 过滤排除并惰性清理）。凭加入世界时
+                    // 登记的句柄取回自身的 Arc，无需全局查找。
+                    if let Some(entity) = self
+                        .chunk_index_handle
+                        .get()
+                        .and_then(std::sync::Weak::upgrade)
+                    {
+                        world
+                            .entities_by_chunk
+                            .insert(Vector2::new(new_chunk_x, new_chunk_z), &entity);
+                    }
                 }
             }
         }
