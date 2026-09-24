@@ -1,7 +1,6 @@
 #![allow(clippy::wildcard_imports)]
 
 use std::borrow::Cow;
-use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, RwLock};
 
