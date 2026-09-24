@@ -90,9 +90,22 @@ pub fn load_permissions_file(manager: &PermissionManager, path: &Path) -> Result
     let file: PermissionsFile =
         toml::from_str(&content).map_err(|e| format!("invalid TOML: {e}"))?;
 
-    let mut applied = 0usize;
+    // 两阶段应用：先验证全部声明（默认值语法与 UUID），
+    // 任一条目非法则整体失败，避免半应用状态残留到管理器
+    let mut parsed_permissions = Vec::with_capacity(file.permissions.len());
     for (node, declaration) in &file.permissions {
         let default = parse_default(&declaration.default)?;
+        parsed_permissions.push((node, declaration, default));
+    }
+    let mut parsed_players = Vec::with_capacity(file.players.len());
+    for (uuid, declaration) in &file.players {
+        let uuid =
+            uuid::Uuid::parse_str(uuid).map_err(|_| format!("invalid player uuid `{uuid}`"))?;
+        parsed_players.push((uuid, declaration));
+    }
+
+    let mut applied = 0usize;
+    for (node, declaration, default) in parsed_permissions {
         if manager.has_registered_permission(node) {
             let _ = manager.set_default(node, default);
         } else {
@@ -107,10 +120,7 @@ pub fn load_permissions_file(manager: &PermissionManager, path: &Path) -> Result
     }
 
     let mut players = 0usize;
-    for (uuid, declaration) in &file.players {
-        let Ok(uuid) = uuid::Uuid::parse_str(uuid) else {
-            return Err(format!("invalid player uuid `{uuid}`"));
-        };
+    for (uuid, declaration) in parsed_players {
         for node in &declaration.granted {
             manager.set_permission(uuid, node.clone(), true);
         }
