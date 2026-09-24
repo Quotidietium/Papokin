@@ -149,6 +149,15 @@ impl Mob for SkeletonHorseEntity {
         if let Some(owner) = nbt.get_uuid("Owner") {
             self.owner.store(Some(owner));
         }
+        // 通用层已把 SaddleItem 读入 SADDLE 装备槽；据此恢复鞍具
+        // 标志（客户端渲染与骑乘控制依赖 DATA_ID_FLAGS）。
+        if !self
+            .get_mob_entity()
+            .get_item_in_slot(&papokin_data::data_component_impl::EquipmentSlot::SADDLE)
+            .is_empty()
+        {
+            self.set_saddled(true);
+        }
     }
 
     fn get_mob_entity(&self) -> &MobEntity {
