@@ -423,6 +423,12 @@ impl DataComponentCodec<Self> for MaxStackSizeImpl {
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
         let size = u8::try_from(seq.get_var_int()?.0)
             .map_err(|_| ReadingError::Message("No MaxStackSize VarInt!".into()))?;
+        // 原版取值范围是 1..=99；伪造的 0 会在收纳袋重量计算等处触发除零 panic
+        if size == 0 {
+            return Err(ReadingError::Message(
+                "MaxStackSize must be at least 1".into(),
+            ));
+        }
         Ok(Self { size })
     }
 }
@@ -3130,6 +3136,22 @@ impl DataComponentCodec<Self> for BreakSoundImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 伪造的 `max_stack_size` = 0 必须在解码时被拒绝（原版范围 1..=99）；
+    /// 0 会在收纳袋重量计算等处触发除零 panic。
+    #[test]
+    fn max_stack_size_zero_is_rejected() {
+        let mut reader = &[0u8][..];
+        assert!(
+            MaxStackSizeImpl::deserialize(&mut reader).is_err(),
+            "size 为 0 的 MaxStackSize 必须被拒绝"
+        );
+        let mut reader = &[1u8][..];
+        assert!(
+            MaxStackSizeImpl::deserialize(&mut reader).is_ok(),
+            "合法的 size = 1 必须正常解码"
+        );
+    }
 
     /// 深度守卫基于线程局部计数；验证 32 层嵌套 bundle
     /// 会被拒绝而不是无限递归导致栈溢出，且拒绝后计数归零。
