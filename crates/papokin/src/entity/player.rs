@@ -946,9 +946,11 @@ impl Player {
             return;
         }
 
+        // 服务端发起的重连恢复按原版 startRiding(force) 处理：
+        // 绕过骑乘冷却，但完整性校验（自骑/重复/满座/成环）仍生效。
         vehicle
             .get_entity()
-            .add_passenger(vehicle.clone(), self.clone());
+            .add_passenger_force(vehicle.clone(), self.clone());
     }
 
     pub fn clean_up_chunk_tickets(&self, level: &Arc<papokin_world::level::Level>) {

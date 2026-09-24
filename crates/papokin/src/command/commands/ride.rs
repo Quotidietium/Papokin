@@ -80,9 +80,11 @@ impl CommandExecutor for RideMountExecutor {
             return Err(ERROR_WRONG_DIMENSION.create_without_context());
         }
 
+        // 命令语义对齐原版 startRiding(force)：绕过骑乘冷却
+        //（完整性校验仍不可绕过）。
         vehicle
             .get_entity()
-            .add_passenger(vehicle.clone(), target.clone());
+            .add_passenger_force(vehicle.clone(), target.clone());
 
         let msg = TextComponent::translate(
             translation::java::COMMANDS_RIDE_MOUNT_SUCCESS,
