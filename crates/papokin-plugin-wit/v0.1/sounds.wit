@@ -1367,7 +1367,7 @@ interface sounds {
     entity-puffer-fish-flop,
     entity-puffer-fish-hurt,
     entity-puffer-fish-sting,
-    block-papokin-carve,
+    block-pumpkin-carve,
     entity-rabbit-ambient,
     entity-rabbit-attack,
     entity-rabbit-death,
