@@ -58,10 +58,11 @@ impl PlayerScreenHandler {
 
     /// 检查槽位索引是否位于快捷栏内。
     ///
-    /// 快捷栏槽位在协议中为 36-44（0 起始索引的 36-44）。
+    /// 快捷栏槽位在协议中为 36-44（0 起始索引的 36-44）；
+    /// 槽 45 是副手，不属于快捷栏。
     #[must_use]
     pub fn is_in_hotbar(slot: u8) -> bool {
-        (36..=45).contains(&slot)
+        (36..=44).contains(&slot)
     }
 
     /// 根据索引获取槽位。
@@ -241,5 +242,23 @@ impl ScreenHandler for PlayerScreenHandler {
 
         // 无变化
         ItemStack::EMPTY.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 快捷栏边界：协议槽 36-44 属于快捷栏；45 是副手、35 是背包
+    /// 末格，均不属于。此前实现误把 45（副手）纳入快捷栏。
+    #[test]
+    fn is_in_hotbar_excludes_offhand_slot() {
+        assert!(!PlayerScreenHandler::is_in_hotbar(35));
+        assert!(PlayerScreenHandler::is_in_hotbar(36));
+        assert!(PlayerScreenHandler::is_in_hotbar(44));
+        assert!(
+            !PlayerScreenHandler::is_in_hotbar(45),
+            "槽 45 是副手，不是快捷栏"
+        );
     }
 }
