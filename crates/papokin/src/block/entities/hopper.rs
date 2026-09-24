@@ -230,13 +230,19 @@ impl HopperBlockEntity {
         {
             // TODO 检查 WorldlyContainer
             for i in 0..container.size() {
-                let mut item = container.get_stack(i);
+                let item = container.get_stack(i);
                 if !item.is_empty() && container.can_transfer_to(self, i, &item) {
                     //TODO WorldlyContainer
-                    let _backup = item.clone();
-                    let one_item = item.split(1);
+                    // 原版 `tryMoveBetweenInventories` 顺序：先原子取出
+                    // 一件（在源容器自己的锁内），再尝试放入漏斗，失败
+                    // 则回滚。此前的「克隆后盲写回」在取出与写回之间
+                    // 存在并发窗口（玩家点击/另一漏斗同时改动该槽），
+                    // 写回会覆盖他方变更造成物品复制。
+                    let one_item = container.remove_stack_specific(i, 1);
+                    if one_item.is_empty() {
+                        continue;
+                    }
                     if Self::add_one_item(container.as_ref(), self, &one_item) {
-                        container.set_stack(i, item);
                         // 如果从熔炉输出槽（索引 2）取出物品，则以经验球形式掉落经验
                         let furnace_output_slot: usize = 2;
                         if i == furnace_output_slot
@@ -250,6 +256,12 @@ impl HopperBlockEntity {
                             }
                         }
                         return true;
+                    }
+                    // 放入失败：把这一件还回源容器；期间源容器若已被
+                    // 塞满，宁可掉落也不能丢失或覆盖。
+                    if !Self::add_one_item(self, container.as_ref(), &one_item) {
+                        let pos = self.position.to_centered_f64();
+                        world.scatter_stack(pos.x, pos.y, pos.z, one_item);
                     }
                 }
             }
@@ -287,7 +299,7 @@ impl HopperBlockEntity {
                         if pickup_event.cancelled {
                             continue;
                         }
-                        let (backup, one_item, is_empty) = {
+                        let (one_item, is_empty) = {
                             let mut stack = item_entity
                                 .get_item_stack()
                                 .lock()
@@ -295,10 +307,9 @@ impl HopperBlockEntity {
                             if stack.is_empty() {
                                 continue;
                             }
-                            let backup = stack.clone();
                             let one_item = stack.split(1);
                             let is_empty = stack.is_empty();
-                            (backup, one_item, is_empty)
+                            (one_item, is_empty)
                         };
                         if Self::add_one_item(self, self, &one_item) {
                             if is_empty {
@@ -306,11 +317,22 @@ impl HopperBlockEntity {
                             }
                             return true;
                         }
-                        let mut stack = item_entity
-                            .get_item_stack()
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        *stack = backup;
+                        // 放入失败：只把这一件还回物品实体。全量快照回写
+                        // 会在与其他拾取方的竞态窗口内覆盖对方的取出
+                        // （把对方拿走的数量凭空变回来，复制物品）。
+                        let restore_failed = {
+                            let mut stack = item_entity
+                                .get_item_stack()
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            !Self::restore_one(&mut stack, &one_item)
+                        };
+                        if restore_failed {
+                            // 实体上的物品已被整体替换，无处归还：掉落
+                            // 这一件，不能凭空消失。
+                            let pos = self.position.to_centered_f64();
+                            world.scatter_stack(pos.x, pos.y, pos.z, one_item);
+                        }
                     }
                 }
             }
@@ -427,6 +449,24 @@ impl HopperBlockEntity {
         }
         false
     }
+    /// 将一件取出的物品归还到可能已被并发修改的物品堆上：仅返还
+    /// 这一件，绝不整体回写快照——否则会覆盖其他拾取方在竞态窗口
+    /// 内的取出（复制物品）。物品已被整体替换或堆满时无处归还，
+    /// 返回 false，由调用方掉落这一件。
+    fn restore_one(stack: &mut ItemStack, one_item: &ItemStack) -> bool {
+        if stack.is_empty() {
+            *stack = one_item.clone();
+            true
+        } else if stack.are_items_and_components_equal(one_item)
+            && stack.item_count < stack.get_max_stack_size()
+        {
+            stack.item_count += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn add_one_item(from: &dyn Inventory, to: &dyn Inventory, item: &ItemStack) -> bool {
         let mut success = false;
         let to_empty = to.is_empty();
@@ -679,5 +719,44 @@ mod tests {
 
         assert_eq!(leftover.item_count, 1);
         assert_eq!(hopper.get_stack(0).item_count, max);
+    }
+
+    /// 物品实体回滚仅返还一件：空堆恢复这一件（不回写全量快照，
+    /// 否则会在与其他拾取方的竞态窗口内覆盖对方的取出）。
+    #[test]
+    fn restore_one_into_emptied_stack_returns_just_the_item() {
+        // 场景：实体原 1 件被取走后堆已空，另一拾取方未涉入。
+        let one = ItemStack::new(1, &Item::DIAMOND);
+        let mut stack = ItemStack::EMPTY.clone();
+
+        assert!(HopperBlockEntity::restore_one(&mut stack, &one));
+        assert_eq!(stack.item_count, 1);
+        assert_eq!(stack.get_item().id, Item::DIAMOND.id);
+    }
+
+    /// 同物有剩余空间：数量加一，绝不覆盖对方并发取走后的现值。
+    #[test]
+    fn restore_one_into_same_item_increments_by_one() {
+        // 场景：原 10 件，取出 1 后剩 9；另一拾取方又取走 7 剩 2。
+        // 回滚必须得到 3，而不是回写快照 10。
+        let one = ItemStack::new(1, &Item::DIAMOND);
+        let mut stack = ItemStack::new(2, &Item::DIAMOND);
+
+        assert!(HopperBlockEntity::restore_one(&mut stack, &one));
+        assert_eq!(stack.item_count, 3);
+    }
+
+    /// 物品被整体替换或堆满：无处归还，返回 false 由调用方掉落。
+    #[test]
+    fn restore_one_into_replaced_or_full_stack_fails() {
+        let one = ItemStack::new(1, &Item::DIAMOND);
+
+        let mut replaced = ItemStack::new(64, &Item::DIRT);
+        assert!(!HopperBlockEntity::restore_one(&mut replaced, &one));
+
+        let max = ItemStack::new(1, &Item::DIAMOND).get_max_stack_size();
+        let mut full = ItemStack::new(max, &Item::DIAMOND);
+        assert!(!HopperBlockEntity::restore_one(&mut full, &one));
+        assert_eq!(full.item_count, max, "已满的堆不得被改动");
     }
 }
