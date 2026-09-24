@@ -211,7 +211,7 @@ impl Mob for ZombieHorseEntity {
             let ent = &self.mob_entity.living_entity.entity;
             if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                 if !player.get_entity().is_sneaking() {
-                    super::horse::open_equipment_screen(&vehicle, player);
+                    super::horse::open_equipment_screen(&vehicle, player, None);
                 } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
                     ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }

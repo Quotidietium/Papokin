@@ -152,11 +152,15 @@ pub fn is_horse_armor(item: &Item) -> bool {
     item.registry_key.ends_with("_horse_armor")
 }
 
-/// 打开马系装备界面（鞍 + 马铠槽；普通马无箱子格）。
+/// 打开马系装备界面（鞍 + 马铠槽 + 可选箱子格）。
 /// 鞍槽装卸时同步客户端装备渲染与 `FLAG_SADDLE`（经
 /// `Mob::set_saddled_flag`，骑乘控制与交互判定依赖该标志，
-/// 避免界面状态与实体状态分裂）。
-pub fn open_equipment_screen(mount: &Arc<dyn EntityBase>, player: &Arc<Player>) {
+/// 避免界面状态与实体状态分裂）。带箱驴/骡传入真实箱子物品栏。
+pub fn open_equipment_screen(
+    mount: &Arc<dyn EntityBase>,
+    player: &Arc<Player>,
+    chest_inventory: Option<Arc<dyn papokin_inventory::inventory::Inventory>>,
+) {
     let Some(entity_equipment) = mount
         .get_living_entity()
         .map(|living| living.entity_equipment.clone())
@@ -189,16 +193,25 @@ pub fn open_equipment_screen(mount: &Arc<dyn EntityBase>, player: &Arc<Player>) 
         }),
     );
 
+    let chest_inventory = chest_inventory.unwrap_or_else(|| Arc::new(SimpleInventory::new(0)));
+    let chest_columns = chest_inventory.size() / MountScreenHandler::INVENTORY_ROWS;
+
     player.increment_screen_handler_sync_id();
     let handler = Arc::new(std::sync::Mutex::new(MountScreenHandler::new(
         player.screen_handler_sync_id.load(Ordering::Relaxed),
         &player.inventory,
-        Arc::new(SimpleInventory::new(0)),
+        chest_inventory.clone(),
         saddle_inventory,
         armor_inventory,
-        0,
+        chest_columns,
     )));
-    player.open_mount_screen(handler, 0, mount.get_entity().entity_id);
+    // 原版 MOUNT_SCREEN_OPEN 的 slot_count 为马侧总槽数（鞍 + 马铠 +
+    // 箱子格），客户端据此构造占位物品栏；偏小会使鞍/马铠槽访问越界。
+    player.open_mount_screen(
+        handler,
+        2 + chest_inventory.size() as i32,
+        mount.get_entity().entity_id,
+    );
 }
 
 impl AgeableMob for HorseEntity {
@@ -341,7 +354,7 @@ impl Mob for HorseEntity {
             let ent = &self.mob_entity.living_entity.entity;
             if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                 if self.is_tame() && !player.get_entity().is_sneaking() {
-                    open_equipment_screen(&vehicle, player);
+                    open_equipment_screen(&vehicle, player, None);
                 } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
                     ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }
