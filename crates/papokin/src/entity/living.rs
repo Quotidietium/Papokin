@@ -2160,6 +2160,21 @@ impl LivingEntity {
         let slots_to_drop: Vec<EquipmentSlot> = {
             let mut slots: Vec<_> = self.equipment_slots.values().cloned().collect();
             slots.push(EquipmentSlot::MAIN_HAND);
+            // 鞍等坐骑专用槽不在通用装备槽表（build_equipment_slots）
+            // 中，但物品存放在装备映射里，死亡时同样要参与掉落结算。
+            let stored: Vec<EquipmentSlot> = self
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .equipment
+                .keys()
+                .cloned()
+                .collect();
+            for slot in stored {
+                if !slots.contains(&slot) {
+                    slots.push(slot);
+                }
+            }
             slots
         };
 

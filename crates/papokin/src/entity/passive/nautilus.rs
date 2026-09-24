@@ -339,6 +339,12 @@ impl Mob for NautilusEntity {
             {
                 item_stack.decrement_unless_creative(player.gamemode.load(), 1);
                 self.is_saddled.store(true, Ordering::Relaxed);
+                // 鞍具存入装备槽并标记必掉：死亡时完好掉落（原版行为），
+                // 不再随 is_saddled 标志一起湮灭。
+                self.mob_entity.set_item_slot_and_drop_when_killed(
+                    &papokin_data::data_component_impl::EquipmentSlot::SADDLE,
+                    ItemStack::new(1, &papokin_data::item::Item::SADDLE),
+                );
                 let world = entity.world.load();
                 world.play_sound(
                     Sound::ItemNautilusSaddleEquip,

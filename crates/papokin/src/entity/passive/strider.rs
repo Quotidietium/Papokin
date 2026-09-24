@@ -181,6 +181,12 @@ impl Mob for StriderEntity {
 
         if item == &Item::SADDLE && self.can_be_saddled() && !self.is_saddled() {
             self.set_saddled(true);
+            // 鞍具存入装备槽并标记必掉：死亡时完好掉落（原版行为），
+            // 不再随 FLAG_SADDLE 标志一起湮灭。
+            self.mob_entity.set_item_slot_and_drop_when_killed(
+                &papokin_data::data_component_impl::EquipmentSlot::SADDLE,
+                ItemStack::new(1, &Item::SADDLE),
+            );
             item_stack.decrement_unless_creative(player.gamemode.load(), 1);
             let entity = self.get_entity();
             let world = entity.world.load();
