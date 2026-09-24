@@ -837,7 +837,9 @@ impl ItemStack {
         // 尝试通过注册表键获取物品
         let item = Item::from_registry_key(registry_key)?;
 
-        let count = compound.get_int("count")? as u8;
+        // 数量来自存档，可能被外部编辑或损坏：钳制到 u8 范围，
+        // 避免负值/超界值经裸截断回绕变成凭空的超量物品堆。
+        let count = compound.get_int("count")?.clamp(0, u8::MAX as i32) as u8;
 
         // 创建物品堆
         let mut item_stack = Self::new(count, item);
