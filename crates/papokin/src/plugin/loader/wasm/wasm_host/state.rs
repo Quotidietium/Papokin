@@ -219,7 +219,19 @@ pub struct PluginHostState {
     pub name: Option<String>,
     pub marketplace_metadata:
         Option<crate::plugin::loader::wasm::wasm_host::wit::v0_1::papokin::plugin::context::MarketplaceMetadata>,
+    /// 事件派发护栏：派发期间压入资源表条目的回收闭包。访客调用
+    /// 失败（trap/panic）时参数所有权已降载给访客、无人释放，强引用
+    /// 条目会无限累积（含 `Arc<Player>` 滞留已离线玩家）——失败时按
+    /// 记录逐条回收兜底。成功路径由 `cleanup_event` 与访客 drop 按
+    /// 正常生命周期释放，护栏只清空记录、绝不重放（访客可能持有
+    /// 调用期间新建的长期句柄，重放会误删活句柄）。
+    pub dispatch_guard: Vec<ResourceTableDeleter>,
+    /// 护栏嵌套深度：大于零时 `add_*` 压入的条目被记录。
+    dispatch_guard_depth: u32,
 }
+
+/// 按记录 rep 从资源表删除单条条目的回收闭包。
+pub type ResourceTableDeleter = Box<dyn FnOnce(&mut ResourceTable) + Send>;
 
 impl Default for PluginHostState {
     fn default() -> Self {
@@ -245,6 +257,41 @@ impl PluginHostState {
             permissions: Vec::new(),
             name: None,
             marketplace_metadata: None,
+            dispatch_guard: Vec::new(),
+            dispatch_guard_depth: 0,
+        }
+    }
+
+    /// 进入事件派发：此后 `add_*` 压入的条目会被记录，供失败路径
+    /// 回收。见 `dispatch_guard` 字段注释。
+    pub const fn begin_dispatch_guard(&mut self) {
+        self.dispatch_guard_depth = self.dispatch_guard_depth.saturating_add(1);
+    }
+
+    /// 派发成功：结束记录并丢弃记录（不重放，避免误删访客持有的
+    /// 活句柄——资源已按正常生命周期释放）。
+    pub fn end_dispatch_guard_success(&mut self) {
+        self.dispatch_guard_depth = self.dispatch_guard_depth.saturating_sub(1);
+        self.dispatch_guard.clear();
+    }
+
+    /// 派发失败（访客 trap/panic/宿主降载失败）：重放回收全部被
+    /// 记录条目。已按正常路径释放过的条目删除为无害 no-op；访客
+    /// trap 后残留的句柄即使被其后续使用也只得到干净的「无效句柄」
+    /// 错误，而不是永久泄漏强引用。
+    pub fn end_dispatch_guard_failure(&mut self) {
+        self.dispatch_guard_depth = self.dispatch_guard_depth.saturating_sub(1);
+        for deleter in std::mem::take(&mut self.dispatch_guard) {
+            deleter(&mut self.resource_table);
+        }
+    }
+
+    fn record_dispatch_guard<F>(&mut self, delete: F)
+    where
+        F: FnOnce(&mut ResourceTable) + Send + 'static,
+    {
+        if self.dispatch_guard_depth > 0 {
+            self.dispatch_guard.push(Box::new(delete));
         }
     }
 
@@ -253,7 +300,11 @@ impl PluginHostState {
         provider: Arc<Server>,
     ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
         let resource = self.resource_table.push(ServerResource { provider })?;
-        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+        let rep = resource.rep();
+        self.record_dispatch_guard(move |table| {
+            let _ = table.delete::<ServerResource>(wasmtime::component::Resource::new_own(rep));
+        });
+        Ok(wasmtime::component::Resource::new_own(rep))
     }
 
     pub fn add_context<T>(
@@ -269,7 +320,11 @@ impl PluginHostState {
         provider: Arc<Player>,
     ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
         let resource = self.resource_table.push(PlayerResource { provider })?;
-        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+        let rep = resource.rep();
+        self.record_dispatch_guard(move |table| {
+            let _ = table.delete::<PlayerResource>(wasmtime::component::Resource::new_own(rep));
+        });
+        Ok(wasmtime::component::Resource::new_own(rep))
     }
 
     pub fn add_java_player<T>(
@@ -311,7 +366,11 @@ impl PluginHostState {
         provider: Arc<World>,
     ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
         let resource = self.resource_table.push(WorldResource { provider })?;
-        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+        let rep = resource.rep();
+        self.record_dispatch_guard(move |table| {
+            let _ = table.delete::<WorldResource>(wasmtime::component::Resource::new_own(rep));
+        });
+        Ok(wasmtime::component::Resource::new_own(rep))
     }
 
     pub fn add_chunk<T>(
@@ -385,7 +444,12 @@ impl PluginHostState {
         let resource = self
             .resource_table
             .push(TextComponentResource { provider })?;
-        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+        let rep = resource.rep();
+        self.record_dispatch_guard(move |table| {
+            let _ =
+                table.delete::<TextComponentResource>(wasmtime::component::Resource::new_own(rep));
+        });
+        Ok(wasmtime::component::Resource::new_own(rep))
     }
 
     pub fn add_command<T>(
@@ -439,7 +503,11 @@ impl PluginHostState {
         provider: Arc<Mutex<papokin_data::item_stack::ItemStack>>,
     ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
         let resource = self.resource_table.push(ItemStackResource { provider })?;
-        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+        let rep = resource.rep();
+        self.record_dispatch_guard(move |table| {
+            let _ = table.delete::<ItemStackResource>(wasmtime::component::Resource::new_own(rep));
+        });
+        Ok(wasmtime::component::Resource::new_own(rep))
     }
 
     pub fn add_recipe_manager<T>(
@@ -787,5 +855,59 @@ impl WasiHttpView for PluginHostState {
             table: &mut self.resource_table,
             hooks: &mut self.wasi_http_hooks,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 派发护栏语义：成功路径只清记录不删条目（访客可能合法持有
+    /// 调用期间获得的句柄）；失败路径重放回收全部被记录条目，且
+    /// 对已删除条目无害。防止访客 trap 时事件参数资源（含强
+    /// `Arc<Player>`）无限累积刷满资源表。
+    #[test]
+    fn dispatch_guard_success_keeps_failure_replays() {
+        let mut state = PluginHostState::new();
+        // 护栏之外压入的条目不被记录（长期句柄）
+        let long_lived = state
+            .add_text_component::<TextComponentResource>(TextComponent::text("常驻"))
+            .unwrap();
+
+        state.begin_dispatch_guard();
+        let dispatched = state
+            .add_text_component::<TextComponentResource>(TextComponent::text("事件"))
+            .unwrap();
+        state.end_dispatch_guard_success();
+        // 成功路径：条目仍在（由 cleanup_event/访客 drop 释放）
+        assert!(
+            state
+                .resource_table
+                .get::<TextComponentResource>(&dispatched)
+                .is_ok()
+        );
+
+        state.begin_dispatch_guard();
+        let leaked = state
+            .add_text_component::<TextComponentResource>(TextComponent::text("失败派发"))
+            .unwrap();
+        state.end_dispatch_guard_failure();
+        // 失败路径：被记录条目被重放回收
+        assert!(
+            state
+                .resource_table
+                .get::<TextComponentResource>(&leaked)
+                .is_err()
+        );
+        // 未记录条目不受失败重放影响
+        assert!(
+            state
+                .resource_table
+                .get::<TextComponentResource>(&long_lived)
+                .is_ok()
+        );
+        // 护栏清空后可重复使用
+        assert!(state.dispatch_guard.is_empty());
+        assert_eq!(state.dispatch_guard_depth, 0);
     }
 }
