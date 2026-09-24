@@ -78,7 +78,10 @@ impl Weather {
     }
 
     pub fn tick_weather(&mut self, world: &World) {
-        if !self.weather_cycle_enabled {
+        // 与 gamerule `advance_weather`（原版 doWeatherCycle）实时同步：
+        // 该规则变更应立即生效，循环仅在启用时推进。
+        self.weather_cycle_enabled = world.level_info.load().game_rules.advance_weather;
+        if self.weather_cycle_enabled {
             self.advance_weather_cycle();
         }
 
@@ -169,5 +172,53 @@ impl Clone for Weather {
             old_thunder_level: self.old_thunder_level,
             weather_cycle_enabled: self.weather_cycle_enabled,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 晴天计时应逐刻递减，且期间强制保持无雨无雷状态。
+    #[test]
+    fn clear_weather_time_counts_down_and_forces_clear() {
+        let mut weather = Weather::new();
+        weather.clear_weather_time = 100;
+
+        weather.advance_weather_cycle();
+
+        assert_eq!(weather.clear_weather_time, 99);
+        assert!(!weather.raining);
+        assert!(!weather.thundering);
+    }
+
+    /// 雨天计时归零时翻转下雨状态；重新随机的新计时在下一刻才产生。
+    #[test]
+    fn rain_time_expiring_toggles_raining() {
+        let mut weather = Weather::new();
+        weather.raining = true;
+        weather.rain_time = 1;
+
+        weather.advance_weather_cycle();
+
+        assert!(!weather.raining);
+        assert_eq!(weather.rain_time, 0);
+
+        // 翻转后的下一刻进入无雨延迟计时
+        weather.advance_weather_cycle();
+        assert!(weather.rain_time >= RAIN_DELAY_MIN && weather.rain_time <= RAIN_DELAY_MAX);
+    }
+
+    /// 雨量过渡在 0..=1 内饱和，不会越界。
+    #[test]
+    fn rain_level_saturates_within_bounds() {
+        let mut weather = Weather::new();
+        weather.rain_level = 0.999;
+
+        for _ in 0..4 {
+            weather.rain_level = (weather.rain_level + WEATHER_TRANSITION_SPEED).min(1.0);
+        }
+
+        assert_eq!(weather.rain_level, 1.0);
     }
 }
