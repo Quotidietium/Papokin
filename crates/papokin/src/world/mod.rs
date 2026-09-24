@@ -3032,6 +3032,8 @@ impl World {
         }
 
         let block_count = explosion.explode(self);
+        // 音效与客户端渲染半径使用钳制后的威力，与实际破坏效果一致
+        let power = explosion.power();
         let particle = if power < 2.0 {
             Particle::Explosion
         } else {

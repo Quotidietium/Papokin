@@ -193,8 +193,20 @@ pub struct Explosion {
 }
 
 impl Explosion {
+    /// 爆炸威力的安全上限。原版内容最高为 6（末地水晶）；每条
+    /// 破坏射线的步进数与威力成正比，未经钳制的威力（如外部
+    /// 编辑存档注入的火球 `ExplosionPower`）会把单次爆炸的射线
+    /// 步进数放大到亿级，卡死 tick 线程。
+    pub const MAX_POWER: f32 = 64.0;
+
     #[must_use]
     pub const fn new(power: f32, pos: Vector3<f64>, block_interaction: BlockInteraction) -> Self {
+        // 非有限值按 0 处理（无破坏），超界值钳制到安全上限
+        let power = if power.is_nan() {
+            0.0
+        } else {
+            power.clamp(0.0, Self::MAX_POWER)
+        };
         Self {
             power,
             pos,
@@ -217,6 +229,12 @@ impl Explosion {
     pub const fn preserving_rails(mut self) -> Self {
         self.preserve_rails = true;
         self
+    }
+
+    /// 钳制后的爆炸威力（见 [`Self::MAX_POWER`]）。
+    #[must_use]
+    pub const fn power(&self) -> f32 {
+        self.power
     }
 
     fn protects_rail(&self, world: &World, pos: &BlockPos, block: &Block) -> bool {
