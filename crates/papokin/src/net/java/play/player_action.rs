@@ -180,7 +180,6 @@ impl JavaClient {
                     self.update_sequence(player_action.sequence.0);
                 }
                 Status::FinishedDigging => {
-                    // TODO: 进行校验
                     let location = player_action.position;
                     if !player.can_interact_with_block_at(&location, 1.0) {
                         warn!(
@@ -189,6 +188,46 @@ impl JavaClient {
                         );
                         self.update_sequence(player_action.sequence.0);
                         return;
+                    }
+
+                    // 原版行为：服务端只承认进度达标的挖掘完成。改过的
+                    // 客户端可以不等待挖掘时间直接连发 Started/Finished
+                    // 瞬时破坏任意方块（黑曜石甚至基岩），因此此处必须
+                    // 校验该方块确实被持续挖掘至进度 >= 1.0。创造模式除外
+                    //（Started 即破坏，与原版一致）。
+                    if player.gamemode.load() != GameMode::Creative {
+                        let (mining, mining_pos) = {
+                            let pos = player
+                                .mining_pos
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            (player.mining.load(Ordering::Relaxed), *pos)
+                        };
+                        let elapsed = player
+                            .tick_counter
+                            .load(Ordering::Relaxed)
+                            .saturating_sub(player.start_mining_time.load(Ordering::Relaxed));
+                        // 与 continue_mining 同式（time + 1），容忍客户端
+                        // 相对服务端 tick 先行一步的网络时序
+                        let speed = f32::from_bits(
+                            player.current_block_breaking_speed.load(Ordering::Relaxed),
+                        );
+                        let progress = speed * (elapsed + 1) as f32;
+                        if !mining || mining_pos != location || progress < 1.0 {
+                            warn!(
+                                "玩家 {} 声称完成挖掘 {}，但进度未达标（挖掘中：{}，进度 {:.2}），已驳回",
+                                player.gameprofile.name,
+                                location,
+                                mining && mining_pos == location,
+                                progress
+                            );
+                            // 拒绝破坏，并把真实方块状态同步回客户端以恢复显示
+                            let entity = &player.get_entity();
+                            let world = entity.world.load_full();
+                            self.sync_block_state_to_client(&world, location);
+                            self.update_sequence(player_action.sequence.0);
+                            return;
+                        }
                     }
 
                     // 破坏方块并播放音效
