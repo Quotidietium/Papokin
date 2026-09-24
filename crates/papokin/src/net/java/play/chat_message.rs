@@ -217,6 +217,26 @@ impl JavaClient {
             return;
         }
 
+        // 与当前已生效会话完全一致的重复更新直接早退：该会话在首次应用时
+        // 已通过公钥验证，重复执行只会给恶意客户端留一个以包速率刷 rayon
+        // RSA 验证 + 全服广播的入口。默认会话（expires_at 为 0）不在此列，
+        // 仍须走完整校验以拒绝无效会话。
+        {
+            let current = player
+                .chat_session
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let is_duplicate = current.expires_at > 0
+                && current.session_id == session.session_id
+                && current.expires_at == session.expires_at
+                && current.public_key == session.public_key
+                && current.signature == session.key_signature;
+            drop(current);
+            if is_duplicate {
+                return;
+            }
+        }
+
         if let Err(err) = self.validate_chat_session(player, server, &session).await {
             log_at_level!(
                 err.severity(),
