@@ -32,6 +32,15 @@ pub fn is_within_chebyshev_distance(
 
 #[allow(clippy::too_many_lines)]
 pub fn update_position(player: &Arc<Player>) {
+    // 按玩家串行化整个「读旧值 → 算差集 → 写回 + 派发」段：快速
+    // 移动时移动包、传送与载具移动可能在多个任务上并发触发，两次
+    // 更新若基于同一旧值各算一份差集，注视计数会双加/双减错位，
+    // 卸载列表也会重复下发。
+    let _serialized = player
+        .watched_update_lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let entity = &player.get_entity();
     let new_chunk_center = entity.chunk_pos.load();
     let old_cylindrical = player.watched_section.load();
@@ -127,32 +136,10 @@ pub fn update_position(player: &Arc<Player>) {
     }
     player.watched_section.store(new_cylindrical);
 
-    // 确保被监视的区块和区块监视器的更新是异步原子的。我们要
-    // 确保玩家断开连接时我们卸载的内容是正确的。
-    if !loading_chunks.is_empty() || !unloading_chunks.is_empty() {
-        let level = world.level.clone();
-        let world_clone = world.clone();
-        let loading_chunks_clone = loading_chunks.clone();
-        let unloading_chunks_clone = unloading_chunks;
-
-        if let Some(server) = world.server.upgrade() {
-            server.spawn_task(async move {
-                level
-                    .mark_chunks_as_newly_watched(&loading_chunks_clone)
-                    .await;
-                let chunks_to_clean = level
-                    .mark_chunks_as_not_watched(&unloading_chunks_clone)
-                    .await;
-
-                if !chunks_to_clean.is_empty() {
-                    world_clone
-                        .remove_entities_in_chunks(&chunks_to_clean)
-                        .await;
-                    world_clone.level.clean_entity_chunks(&chunks_to_clean);
-                }
-            });
-        }
-    }
+    // 差集应用经玩家任务链按发起顺序串行执行：乱序会让仍在注视的
+    // 区块计数瞬时归零而被误清实体，或卸载后又被更早的差集加回
+    // 造成泄漏。详见 dispatch_watched_update 的字段注释。
+    player.dispatch_watched_update(&world, loading_chunks.clone(), unloading_chunks, false);
 
     if !loading_chunks.is_empty() {
         world.spawn_world_entity_chunks(player.clone(), loading_chunks);

@@ -244,6 +244,10 @@ pub enum SpamType {
 /// 玩家当前持有的区块票：(加票中心, 视距等级, 模拟等级)。
 pub type HeldChunkTickets = (Vector2<i32>, Option<i8>, Option<i8>);
 
+/// 注视差集任务的共享等待句柄：链上后续差集与需要确认差集生效的
+/// 调用方（跨维切换、断线清理）可以各自持有副本同时等待。
+pub type WatchedUpdateHandle = futures::future::Shared<futures::future::BoxFuture<'static, ()>>;
+
 pub struct Player {
     /// 代表玩家的底层生物实体对象。
     pub living_entity: LivingEntity,
@@ -352,6 +356,16 @@ pub struct Player {
     /// `chunk_pos` 可能已因下坐骑等原因越过区块边界，若按当前
     /// 位置移除会错位 no-op，旧中心的票将永不释放（区块常驻内存）。
     pub held_chunk_tickets: Mutex<Option<HeldChunkTickets>>,
+    /// 串行化注视更新的「读旧 `watched_section` → 算差集 → 写回」段。
+    /// 快速移动时移动包、传送与载具移动可能在多个任务上并发触发：
+    /// 无锁交错会让两次更新基于同一旧值各算一份差集，注视计数
+    /// 双加/双减错位（区块泄漏或被误清）。
+    pub watched_update_lock: Mutex<()>,
+    /// 每玩家按序应用的注视差集任务链尾。新任务先等前任完成再应用，
+    /// 防止后到的卸载先于先到的加载执行——计数瞬时归零会把仍在
+    /// 注视的区块误判为无人注视并清除实体；卸载后又被更早的差集
+    /// 加回则造成无人注视却常驻内存的泄漏。
+    pub watched_task_tail: Mutex<Option<WatchedUpdateHandle>>,
     pub chunk_send_epoch: AtomicU32,
     pub has_played_before: AtomicBool,
     root_vehicle_uuid: AtomicCell<Option<Uuid>>,
@@ -585,6 +599,8 @@ impl Player {
             chunk_listener: Mutex::new(world.level.chunk_listener.add_global_chunk_listener()),
             chunk_encode_cache: Mutex::new(rustc_hash::FxHashMap::default()),
             held_chunk_tickets: Mutex::new(None),
+            watched_update_lock: Mutex::new(()),
+            watched_task_tail: Mutex::new(None),
             chunk_send_epoch: AtomicU32::new(0),
             last_sent_xp: AtomicI32::new(-1),
             last_sent_health: AtomicI32::new(-1),
@@ -3427,23 +3443,91 @@ impl Player {
         res.map(|(pos, _)| pos)
     }
 
-    pub async fn unload_watched_chunks(&self, world: &World) {
-        let radial_chunks = self.watched_section.load().all_chunks_within();
-        let level = &world.level;
-        let chunks_to_clean = level.mark_chunks_as_not_watched(radial_chunks).await;
-        if !chunks_to_clean.is_empty() {
-            world.remove_entities_in_chunks(&chunks_to_clean).await;
-            level.clean_entity_chunks(&chunks_to_clean);
+    /// 派发一次注视差集应用任务并挂到玩家任务链尾。必须在持有
+    /// `watched_update_lock` 时调用，保证「取出前任 → 派发 → 写回
+    /// 链尾」原子进行，任务应用顺序即发起顺序。任务先等链上前任
+    /// 完成，再按「先加载后卸载」应用差集，最后清理归零区块；
+    /// `notify_client_unloads` 为真时把归零区块的卸载包发给客户端。
+    /// 返回任务句柄供调用方按需等待；差集为空或服务器停机阶段
+    /// 无法派发时返回 None。
+    pub(crate) fn dispatch_watched_update(
+        self: &Arc<Self>,
+        world: &Arc<World>,
+        loading: Vec<Vector2<i32>>,
+        unloading: Vec<Vector2<i32>>,
+        notify_client_unloads: bool,
+    ) -> Option<WatchedUpdateHandle> {
+        if loading.is_empty() && unloading.is_empty() {
+            return None;
         }
-        for chunk in &chunks_to_clean {
-            self.send_client_packet(&CUnloadChunk::new(chunk.x, chunk.y))
-                .await;
-        }
+        let server = world.server.upgrade()?;
+        let previous = self
+            .watched_task_tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let level = world.level.clone();
+        let world = world.clone();
+        let player = self.clone();
+        let handle = server.spawn_task(async move {
+            if let Some(previous) = previous {
+                // 前任异常结束（panic/被取消）时 JoinHandle 也会立即
+                // 就绪，链条不会卡死。
+                () = previous.await;
+            }
+            level.mark_chunks_as_newly_watched(&loading).await;
+            let chunks_to_clean = level.mark_chunks_as_not_watched(unloading).await;
+            if !chunks_to_clean.is_empty() {
+                world.remove_entities_in_chunks(&chunks_to_clean).await;
+                world.level.clean_entity_chunks(&chunks_to_clean);
+                if notify_client_unloads {
+                    for chunk in &chunks_to_clean {
+                        player
+                            .send_client_packet(&CUnloadChunk::new(chunk.x, chunk.y))
+                            .await;
+                    }
+                }
+            }
+        });
+        // 包装成共享句柄：JoinError 非 Clone 不能直接 Shared，且链上
+        // 后续差集与调用方需要各自持有副本等待。
+        let handle: WatchedUpdateHandle =
+            futures::FutureExt::shared(futures::FutureExt::boxed(async move {
+                let _ = handle.await;
+            }));
+        *self
+            .watched_task_tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(handle.clone());
+        Some(handle)
+    }
 
-        self.watched_section.store(Cylindrical::new(
-            Vector2::new(0, 0),
-            NonZero::new(1).unwrap_or(NonZero::<u8>::MIN),
-        ));
+    /// 卸载玩家当前注视的全部区块（跨维切换/重生路径调用）。
+    /// 快照与写回在 `watched_update_lock` 内完成，差集应用挂到
+    /// 玩家任务链尾：必须与并发 `update_position` 的差集按发起
+    /// 顺序生效，乱序会让区块计数归零误清实体或减一后再被旧差集
+    /// 加回造成泄漏。等待应用完成后才返回，使跨维随后的加载严格
+    /// 排在整体卸载之后。
+    pub async fn unload_watched_chunks(self: &Arc<Self>, world: &Arc<World>) {
+        let applied = {
+            let _serialized = self
+                .watched_update_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let radial_chunks = self
+                .watched_section
+                .load()
+                .all_chunks_within()
+                .collect::<Vec<_>>();
+            self.watched_section.store(Cylindrical::new(
+                Vector2::new(0, 0),
+                NonZero::new(1).unwrap_or(NonZero::<u8>::MIN),
+            ));
+            self.dispatch_watched_update(world, Vec::new(), radial_chunks, true)
+        };
+        if let Some(applied) = applied {
+            () = applied.await;
+        }
     }
 
     /// 将玩家传送到另一个世界或维度，可指定位置、偏航角与俯仰角。
