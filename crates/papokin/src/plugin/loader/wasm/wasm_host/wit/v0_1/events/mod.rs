@@ -248,8 +248,48 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                 .call_guest(move |mut guest| {
                     Box::pin(async move {
                         let (wasm_event, server_res) = match guest.with(|mut store| {
+                            if store
+                                .data_mut()
+                                .resource_table_exceeds_dispatch_soft_limit()
+                            {
+                                // 资源表占用接近硬上限（访客囤积句柄或既有
+                                // 泄漏堆积）：跳过本次派发，避免降载中途
+                                // push 失败 panic。
+                                return Err(wasmtime::Error::msg(
+                                    "插件资源表占用达到软上限，跳过事件派发",
+                                ));
+                            }
                             store.data_mut().begin_dispatch_guard();
-                            let wasm_event = event.to_wasm_event(store.data_mut());
+                            // 降载中途 push 失败（表满）会触发 add_* 调用点
+                            // 的 expect panic：拦截后重放护栏回收已压条目，
+                            // 优雅跳过本次派发，不让 panic 跨越宿主边界。
+                            let lowered =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    event.to_wasm_event(store.data_mut())
+                                }));
+                            let wasm_event = match lowered {
+                                Ok(wasm_event) => wasm_event,
+                                Err(payload) => {
+                                    match payload.downcast::<&str>() {
+                                        Ok(message) => {
+                                            tracing::error!(
+                                                "事件降载中断（{message}），跳过本次派发"
+                                            );
+                                        }
+                                        Err(payload) => {
+                                            if let Ok(message) = payload.downcast::<String>() {
+                                                tracing::error!(
+                                                    "事件降载中断（{message}），跳过本次派发"
+                                                );
+                                            } else {
+                                                tracing::error!("事件降载中断，跳过本次派发");
+                                            }
+                                        }
+                                    }
+                                    store.data_mut().end_dispatch_guard_failure();
+                                    return Err(wasmtime::Error::msg("事件降载失败"));
+                                }
+                            };
                             match store.data_mut().add_server(server) {
                                 Ok(resource) => Ok((wasm_event, resource)),
                                 Err(error) => {
@@ -313,11 +353,53 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                 .call_guest(move |mut guest| {
                     Box::pin(async move {
                         let (wasm_event, server_res) = match guest.with(|mut store| {
+                            if store
+                                .data_mut()
+                                .resource_table_exceeds_dispatch_soft_limit()
+                            {
+                                // 资源表占用接近硬上限（访客囤积句柄或既有
+                                // 泄漏堆积）：跳过本次派发，避免降载中途
+                                // push 失败 panic。
+                                return Err(wasmtime::Error::msg(
+                                    "插件资源表占用达到软上限，跳过事件派发",
+                                ));
+                            }
                             store.data_mut().begin_dispatch_guard();
-                            let wasm_event = owned_event.to_wasm_event(store.data_mut());
+                            // 降载中途 push 失败（表满）会触发 add_* 调用点
+                            // 的 expect panic：拦截后重放护栏回收已压条目，
+                            // 优雅跳过本次派发，不让 panic 跨越宿主边界。
+                            let lowered =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    owned_event.to_wasm_event(store.data_mut())
+                                }));
+                            let wasm_event = match lowered {
+                                Ok(wasm_event) => wasm_event,
+                                Err(payload) => {
+                                    match payload.downcast::<&str>() {
+                                        Ok(message) => {
+                                            tracing::error!(
+                                                "事件降载中断（{message}），跳过本次派发"
+                                            );
+                                        }
+                                        Err(payload) => {
+                                            if let Ok(message) = payload.downcast::<String>() {
+                                                tracing::error!(
+                                                    "事件降载中断（{message}），跳过本次派发"
+                                                );
+                                            } else {
+                                                tracing::error!("事件降载中断，跳过本次派发");
+                                            }
+                                        }
+                                    }
+                                    store.data_mut().end_dispatch_guard_failure();
+                                    return Err(wasmtime::Error::msg("事件降载失败"));
+                                }
+                            };
                             match store.data_mut().add_server(server) {
                                 Ok(resource) => Ok((wasm_event, resource)),
                                 Err(error) => {
+                                    // 降载服务器资源失败：按事件结构回收并重放
+                                    // 护栏兜底（重复删除为无害 no-op）。
                                     cleanup_event(&wasm_event, store.data_mut());
                                     store.data_mut().end_dispatch_guard_failure();
                                     Err(error)
