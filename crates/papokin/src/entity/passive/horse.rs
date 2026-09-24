@@ -26,6 +26,9 @@ use crate::entity::{
     passive::animal::Animal,
     player::Player,
 };
+use papokin_data::data_component_impl::EquipmentSlot;
+use papokin_inventory::inventory::{EquipmentSlotInventory, SimpleInventory};
+use papokin_inventory::mount_screen_handler::MountScreenHandler;
 
 const TEMPT_ITEMS: &[&Item] = &[
     &Item::GOLDEN_APPLE,
@@ -143,6 +146,61 @@ impl HorseEntity {
     }
 }
 
+/// 是否为马铠物品（皮/铁/金/钻）。
+#[must_use]
+pub fn is_horse_armor(item: &Item) -> bool {
+    item.registry_key.ends_with("_horse_armor")
+}
+
+/// 打开马系装备界面（鞍 + 马铠槽；普通马无箱子格）。
+/// 鞍槽装卸时同步客户端装备渲染与 `FLAG_SADDLE`（经
+/// `Mob::set_saddled_flag`，骑乘控制与交互判定依赖该标志，
+/// 避免界面状态与实体状态分裂）。
+pub fn open_equipment_screen(mount: &Arc<dyn EntityBase>, player: &Arc<Player>) {
+    let Some(entity_equipment) = mount
+        .get_living_entity()
+        .map(|living| living.entity_equipment.clone())
+    else {
+        return;
+    };
+
+    let saddle_mount = mount.clone();
+    let saddle_inventory = EquipmentSlotInventory::with_callback(
+        entity_equipment.clone(),
+        EquipmentSlot::SADDLE,
+        Arc::new(move |stack| {
+            if let Some(living) = saddle_mount.get_living_entity() {
+                living.send_equipment_changes(&[(EquipmentSlot::SADDLE, stack.clone())]);
+            }
+            if let Some(mob) = saddle_mount.get_mob() {
+                mob.set_saddled_flag(!stack.is_empty());
+            }
+        }),
+    );
+
+    let armor_mount = mount.clone();
+    let armor_inventory = EquipmentSlotInventory::with_callback(
+        entity_equipment,
+        EquipmentSlot::BODY,
+        Arc::new(move |stack| {
+            if let Some(living) = armor_mount.get_living_entity() {
+                living.send_equipment_changes(&[(EquipmentSlot::BODY, stack.clone())]);
+            }
+        }),
+    );
+
+    player.increment_screen_handler_sync_id();
+    let handler = Arc::new(std::sync::Mutex::new(MountScreenHandler::new(
+        player.screen_handler_sync_id.load(Ordering::Relaxed),
+        &player.inventory,
+        Arc::new(SimpleInventory::new(0)),
+        saddle_inventory,
+        armor_inventory,
+        0,
+    )));
+    player.open_mount_screen(handler, 0, mount.get_entity().entity_id);
+}
+
 impl AgeableMob for HorseEntity {
     fn get_ageable_data(&self) -> &AgeableData {
         &self.ageable_data
@@ -252,15 +310,43 @@ impl Mob for HorseEntity {
             return true;
         }
 
+        // 手持马铠右键已驯服的马：直接穿上（原版行为），空槽才接受。
+        if self.is_tame()
+            && !self.is_baby()
+            && is_horse_armor(item)
+            && self
+                .mob_entity
+                .get_item_in_slot(&papokin_data::data_component_impl::EquipmentSlot::BODY)
+                .is_empty()
+        {
+            self.mob_entity.set_item_slot_and_drop_when_killed(
+                &papokin_data::data_component_impl::EquipmentSlot::BODY,
+                item_stack.clone(),
+            );
+            item_stack.decrement_unless_creative(player.gamemode.load(), 1);
+            let entity = self.get_entity();
+            let world = entity.world.load();
+            world.play_sound(
+                Sound::EntityHorseArmor,
+                SoundCategory::Neutral,
+                &entity.pos.load(),
+            );
+            return true;
+        }
+
         if !self.is_baby() && !self.is_food(item_stack) {
+            // 原版交互分流：已驯服且非潜行打开装备界面（装/卸鞍与
+            // 马铠），潜行或未驯服时上马（未驯服空手上马即驯服尝试）。
             let world = player.world();
             let ent = &self.mob_entity.living_entity.entity;
-            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id)
-                && let Some(passenger) = world.get_player_by_id(player.entity_id())
-            {
-                ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
-                return true;
+            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
+                if self.is_tame() && !player.get_entity().is_sneaking() {
+                    open_equipment_screen(&vehicle, player);
+                } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
+                    ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
+                }
             }
+            return true;
         }
 
         self.animal_interact(player, item_stack, Sound::EntityHorseAmbient)
