@@ -20,35 +20,48 @@ impl JavaClient {
         }
 
         let world = player.world();
-        if let Some(target) = world.get_entity_by_uuid(packet.target) {
-            let target_pos = target.get_entity().pos.load();
-            let target_yaw = target.get_entity().yaw.load();
-            let target_pitch = target.get_entity().pitch.load();
-            let target_id = target.get_entity().entity_id;
+        // 目标必须与旁观者同世界：跨维度目标没有对应的跨维度传送
+        // 实现，若放行会把旁观者拉到当前维度的同坐标处（可能嵌入
+        // 方块），且相机指向异维度实体 id 会让客户端视角错乱。
+        // 原版通过 changeDimension 支持跨维度旁观，在补齐该实现
+        // 之前一律拒绝
+        let target = world
+            .get_entity_by_uuid(packet.target)
+            .map(|entity| {
+                let entity = entity.get_entity();
+                (
+                    entity.pos.load(),
+                    entity.yaw.load(),
+                    entity.pitch.load(),
+                    entity.entity_id,
+                )
+            })
+            .or_else(|| {
+                server
+                    .get_player_by_uuid(packet.target)
+                    .filter(|target_player| Arc::ptr_eq(&target_player.world(), &world))
+                    .map(|target_player| {
+                        let entity = &target_player.living_entity.entity;
+                        (
+                            entity.pos.load(),
+                            entity.yaw.load(),
+                            entity.pitch.load(),
+                            entity.entity_id,
+                        )
+                    })
+            });
+        let Some((target_pos, target_yaw, target_pitch, target_id)) = target else {
+            return;
+        };
 
-            if !Self::fire_start_spectating(player, server, target_id) {
-                return;
-            }
-
-            player.camera_target_id.store(Some(target_id));
-            player.try_send_client_packet(&CSetCamera::new(target_id.into()));
-
-            player.request_teleport(target_pos, target_yaw, target_pitch);
-        } else if let Some(target_player) = server.get_player_by_uuid(packet.target) {
-            let target_pos = target_player.living_entity.entity.pos.load();
-            let target_yaw = target_player.living_entity.entity.yaw.load();
-            let target_pitch = target_player.living_entity.entity.pitch.load();
-            let target_id = target_player.living_entity.entity.entity_id;
-
-            if !Self::fire_start_spectating(player, server, target_id) {
-                return;
-            }
-
-            player.camera_target_id.store(Some(target_id));
-            player.try_send_client_packet(&CSetCamera::new(target_id.into()));
-
-            player.request_teleport(target_pos, target_yaw, target_pitch);
+        if !Self::fire_start_spectating(player, server, target_id) {
+            return;
         }
+
+        player.camera_target_id.store(Some(target_id));
+        player.try_send_client_packet(&CSetCamera::new(target_id.into()));
+
+        player.request_teleport(target_pos, target_yaw, target_pitch);
     }
 
     /// 触发 `PlayerStartSpectatingEntityEvent`；若事件被取消则返回 `false`

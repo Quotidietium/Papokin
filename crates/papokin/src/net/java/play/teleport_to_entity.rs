@@ -1,5 +1,6 @@
 #[allow(clippy::wildcard_imports)]
 use super::*;
+use papokin_protocol::java::server::play::SSpectateEntity;
 
 impl JavaClient {
     pub fn handle_teleport_to_entity(
@@ -8,25 +9,17 @@ impl JavaClient {
         packet: &STeleportToEntity,
         server: &Server,
     ) {
-        if !player.has_client_loaded() {
-            return;
-        }
-        player.update_last_action_time();
-
-        if player.gamemode.load() != GameMode::Spectator {
-            return;
-        }
-
-        if let Some(target_player) = server.get_player_by_uuid(packet.target) {
-            let target_pos = target_player.living_entity.entity.pos.load();
-            let target_yaw = target_player.living_entity.entity.yaw.load();
-            let target_pitch = target_player.living_entity.entity.pitch.load();
-
-            let target_id = target_player.living_entity.entity.entity_id;
-            player.camera_target_id.store(Some(target_id));
-            player.try_send_client_packet(&CSetCamera::new(target_id.into()));
-
-            player.request_teleport(target_pos, target_yaw, target_pitch);
-        }
+        // 26.2+ 协议将旁观包从 SpectateEntity 改名重发为 TeleportToEntity
+        // （1.21.11 及以下仍发 SpectateEntity），两者字段一致、语义相同，
+        // 必须走同一条旁观处理路径：否则 26.x 客户端不触发
+        // `PlayerStartSpectatingEntityEvent`、也无法旁观非玩家实体，
+        // 造成随客户端版本分裂的行为差异
+        self.handle_spectate_entity(
+            player,
+            server,
+            &SSpectateEntity {
+                target: packet.target,
+            },
+        );
     }
 }
