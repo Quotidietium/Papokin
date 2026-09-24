@@ -636,3 +636,122 @@ impl ScreenHandler for CraftingTableScreenHandler {
 }
 
 impl CraftingScreenHandler<CraftingInventory> for CraftingTableScreenHandler {}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::Mutex;
+
+    use papokin_data::data_component_impl::EquipmentSlot;
+    use papokin_data::item::Item;
+    use papokin_data::screen::WindowType;
+    use papokin_data::sound::Sound;
+    use papokin_data::statistic::StatisticCategory;
+    use papokin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::screen_handler::InventoryPlayer;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn drop_item(&self, _item: ItemStack, _retain_ownership: bool) {}
+
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+
+        fn is_creative(&self) -> bool {
+            false
+        }
+
+        fn experience_level(&self) -> i32 {
+            0
+        }
+
+        fn add_experience_levels(&self, _levels: i32) {}
+
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+
+        fn set_enchantment_seed(&self, _seed: i32) {}
+
+        fn enqueue_inventory_packet(
+            &self,
+            _packet: &CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) {
+        }
+
+        fn enqueue_slot_packet(
+            &self,
+            _packet: &CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) {
+        }
+
+        fn enqueue_cursor_packet(&self, _packet: &CSetCursorItem) {}
+
+        fn enqueue_property_packet(&self, _packet: &CSetContainerProperty) {}
+
+        fn enqueue_slot_set_packet(&self, _packet: &CSetPlayerInventory) {}
+
+        fn enqueue_set_held_item_packet(&self, _packet: &CSetSelectedSlot) {}
+
+        fn enqueue_equipment_change(&self, _slot: &EquipmentSlot, _stack: &ItemStack) {}
+
+        fn award_experience(&self, _amount: i32) {}
+
+        fn increment_stat(&self, _category: StatisticCategory, _stat_id: i32, _amount: i32) {}
+
+        fn play_block_sound(&self, _sound: Sound, _pitch: f32) {}
+    }
+
+    /// `ResultSlot::safe_take` 必须恰好扣一份原料并返回缓存结果：
+    /// 调用方重复触发 `on_take_item` 会双倍吞原料；循环 `safe_take` 则会
+    /// 因结果缓存不随取出变化而无限刷物品并挂死线程（两者均已修复，
+    /// 此测试固定单次取出语义）。
+    #[test]
+    fn result_slot_safe_take_consumes_one_ingredient_set() {
+        let inventory = Arc::new(CraftingInventory::new(2, 2));
+        inventory.set_stack(0, ItemStack::new(2, &Item::OAK_LOG));
+        inventory.set_stack(1, ItemStack::new(1, &Item::OAK_LOG));
+        let slot = ResultSlot::new(inventory.clone(), None);
+        *slot
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            ItemStack::new(4, &Item::OAK_PLANKS);
+
+        let player_inventory = Arc::new(PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        ));
+        let player = TestPlayer {
+            inventory: player_inventory,
+        };
+
+        let taken = slot.safe_take(4, u8::MAX, &player);
+        assert_eq!(taken.item_count, 4);
+        assert_eq!(taken.item.id, Item::OAK_PLANKS.id);
+        // 每个输入槽恰好扣 1 个，不多不少
+        assert_eq!(inventory.get_stack(0).item_count, 1);
+        assert_eq!(inventory.get_stack(1).item_count, 0);
+    }
+}

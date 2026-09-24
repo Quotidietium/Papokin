@@ -945,27 +945,20 @@ pub trait ScreenHandler: Send + Sync {
                 let slot = self.get_behaviour().slots[slot_index as usize].clone();
                 let prev_stack = slot.get_cloned_stack();
                 if !prev_stack.is_empty() {
-                    if button == 1 {
-                        // 全部丢出
-                        while slot
-                            .get_cloned_stack()
-                            .are_items_and_components_equal(&prev_stack)
-                        {
-                            let drop_stack = slot.safe_take(prev_stack.item_count, u8::MAX, player);
-                            if drop_stack.is_empty() {
-                                // 结果槽等拒绝取出的槽位拿不到物品，继续循环
-                                // 只会永远满足条件——终止以防挂死处理线程
-                                break;
-                            }
-                            player.drop_item(drop_stack, true);
-                            // player.handleCreativeModeItemDrop(itemStack);
-                        }
+                    // 原版 THROW 语义：单次取出（Ctrl+Q 整组、Q 一个），
+                    // on_take_item 由 safe_take 内部触发一次。
+                    // 注意不能循环取：合成结果槽的缓存不随取出变化，
+                    // 循环条件会永远成立——无限刷物品并挂死处理线程；
+                    // 也不能在 safe_take 之外再调 on_take_item，否则
+                    // 原料/经验会被重复消耗。
+                    let take_count = if button == 1 {
+                        prev_stack.item_count
                     } else {
-                        let drop_stack = slot.safe_take(1, u8::MAX, player);
-                        if !drop_stack.is_empty() {
-                            slot.on_take_item(player, &drop_stack);
-                            player.drop_item(drop_stack, true);
-                        }
+                        1
+                    };
+                    let drop_stack = slot.safe_take(take_count, u8::MAX, player);
+                    if !drop_stack.is_empty() {
+                        player.drop_item(drop_stack, true);
                     }
                 }
             }
