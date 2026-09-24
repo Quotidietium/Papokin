@@ -17,6 +17,18 @@ impl JavaClient {
         let Some(vehicle) = vehicle else {
             return;
         };
+        let vehicle_entity = vehicle.get_entity();
+        // 原版仅“控制乘客”（乘客表首位）驱动载具移动；其余乘客的
+        // 载具移动包一律忽略，防止后座客户端抢占载具位置。
+        let is_controller = vehicle_entity
+            .passengers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .first()
+            .is_some_and(|passenger| passenger.get_entity().entity_id == entity.entity_id);
+        if !is_controller {
+            return;
+        }
         // 原版校验：坐标或视角非有限直接断开，防止 NaN 持续污染实体状态
         if !packet.x.is_finite()
             || !packet.y.is_finite()
@@ -42,7 +54,6 @@ impl JavaClient {
             self.force_tp(player, last_pos);
             return;
         }
-        let vehicle_entity = vehicle.get_entity();
         vehicle_entity.set_pos(pos);
         vehicle_entity.set_rotation(packet.yaw, packet.pitch);
         entity.set_pos(pos);
