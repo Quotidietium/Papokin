@@ -241,6 +241,9 @@ pub enum SpamType {
     Command,
 }
 
+/// 玩家当前持有的区块票：(加票中心, 视距等级, 模拟等级)。
+pub type HeldChunkTickets = (Vector2<i32>, Option<i8>, Option<i8>);
+
 pub struct Player {
     /// 代表玩家的底层生物实体对象。
     pub living_entity: LivingEntity,
@@ -344,7 +347,11 @@ pub struct Player {
     /// 区块网络编码缓存（按区块位置复用序列化字节），跨 tick 持久。
     /// 条目以对区块数据的弱引用判新鲜度；容量超限时整体清空兜底。
     pub chunk_encode_cache: Mutex<rustc_hash::FxHashMap<Vector2<i32>, crate::net::EncodedChunk>>,
-    pub held_chunk_tickets: Mutex<Option<(Option<i8>, Option<i8>)>>,
+    /// 玩家当前持有的区块票：(加票中心, 视距等级, 模拟等级)。
+    /// 必须连同加票时的中心一起记录：断线/跨维度清理时玩家的
+    /// `chunk_pos` 可能已因下坐骑等原因越过区块边界，若按当前
+    /// 位置移除会错位 no-op，旧中心的票将永不释放（区块常驻内存）。
+    pub held_chunk_tickets: Mutex<Option<HeldChunkTickets>>,
     pub chunk_send_epoch: AtomicU32,
     pub has_played_before: AtomicBool,
     root_vehicle_uuid: AtomicCell<Option<Uuid>>,
@@ -963,13 +970,14 @@ impl Player {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        if let Some((view_level, sim_level)) = held {
-            let center = self.get_entity().chunk_pos.load();
+        // 用加票时记录的中心移除：清理发生时 chunk_pos 可能已
+        // 因下坐骑等原因越过区块边界，按当前位置移除会错位泄漏。
+        if let Some((held_center, view_level, sim_level)) = held {
             if let Some(view) = view_level {
-                lock.remove_ticket(center, view);
+                lock.remove_ticket(held_center, view);
             }
             if let Some(sim) = sim_level {
-                lock.remove_ticket(center, sim);
+                lock.remove_ticket(held_center, sim);
             }
         }
         lock.send_change();
