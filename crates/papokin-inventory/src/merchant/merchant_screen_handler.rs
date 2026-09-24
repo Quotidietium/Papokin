@@ -252,31 +252,6 @@ impl MerchantScreenHandler {
         true
     }
 
-    fn can_fully_insert(&self, stack: &ItemStack, start: usize, end: usize) -> bool {
-        let mut remaining = stack.item_count;
-        for slot in &self.get_behaviour().slots[start..end] {
-            if !slot.can_insert(stack) {
-                continue;
-            }
-            let existing = slot.get_cloned_stack();
-            let capacity = if existing.is_empty() {
-                slot.get_max_item_count_for_stack(stack)
-            } else if existing.are_items_and_components_equal(stack)
-                && stack.are_items_and_components_equal(&existing)
-            {
-                slot.get_max_item_count_for_stack(&existing)
-                    .saturating_sub(existing.item_count)
-            } else {
-                0
-            };
-            remaining = remaining.saturating_sub(capacity);
-            if remaining == 0 {
-                return true;
-            }
-        }
-        false
-    }
-
     fn move_from_inventory_to_payment_slot(&self, payment_slot: usize, cost: &ItemStack) {
         let mut payment = self.inventory.get_stack(payment_slot);
 

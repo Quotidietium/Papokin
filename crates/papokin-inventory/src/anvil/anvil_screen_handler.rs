@@ -503,6 +503,11 @@ impl ScreenHandler for AnvilScreenHandler {
                     if !slot.can_take_items(player) {
                         return ItemStack::EMPTY.clone();
                     }
+                    // 背包放不下整个结果时拒绝移动：部分放入会消耗全部
+                    // 费用但把剩余结果吞掉（堆叠重命名时的物品丢失）
+                    if !self.can_fully_insert(&slot_stack, 3, 39) {
+                        return ItemStack::EMPTY.clone();
+                    }
                     if !self.insert_item(&mut slot_stack, 3, 39, true) {
                         return ItemStack::EMPTY.clone();
                     }

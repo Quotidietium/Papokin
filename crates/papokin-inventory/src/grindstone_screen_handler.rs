@@ -405,6 +405,15 @@ impl ScreenHandler for GrindstoneScreenHandler {
             let additional = self.inventory.get_stack(Self::ADDITIONAL_SLOT);
 
             if slot_index as usize == Self::RESULT_SLOT {
+                // 背包放不下整个结果时拒绝移动：部分放入会消耗全部
+                // 输入但把剩余结果吞掉（物品丢失）
+                if !self.can_fully_insert(
+                    &slot_stack,
+                    Self::INV_SLOT_START as usize,
+                    Self::USE_ROW_SLOT_END as usize,
+                ) {
+                    return ItemStack::EMPTY.clone();
+                }
                 if !self.insert_item(
                     &mut slot_stack,
                     Self::INV_SLOT_START,

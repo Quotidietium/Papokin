@@ -646,6 +646,34 @@ pub trait ScreenHandler: Send + Sync {
         false
     }
 
+    /// 模拟检查物品堆能否完整放入一段槽位范围（不改变任何状态）。
+    /// 结果槽 shift 取出前必须用它预检：只能部分放入时就移动会
+    /// 消耗全部费用但吞掉剩余结果（物品丢失）。
+    fn can_fully_insert(&self, stack: &ItemStack, start: usize, end: usize) -> bool {
+        let mut remaining = stack.item_count;
+        for slot in &self.get_behaviour().slots[start..end] {
+            if !slot.can_insert(stack) {
+                continue;
+            }
+            let existing = slot.get_cloned_stack();
+            let capacity = if existing.is_empty() {
+                slot.get_max_item_count_for_stack(stack)
+            } else if existing.are_items_and_components_equal(stack)
+                && stack.are_items_and_components_equal(&existing)
+            {
+                slot.get_max_item_count_for_stack(&existing)
+                    .saturating_sub(existing.item_count)
+            } else {
+                0
+            };
+            remaining = remaining.saturating_sub(capacity);
+            if remaining == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
     /// 将物品插入一段槽位范围。
     ///
     /// 首先尝试与现有物品堆叠，然后填充空槽位。
