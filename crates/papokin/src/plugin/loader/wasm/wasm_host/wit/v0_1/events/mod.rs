@@ -314,7 +314,20 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                         match result {
                             Ok(returned_event) => Ok(guest.with(|mut store| {
                                 let mut updated_event = owned_event;
-                                updated_event.apply_wasm_event(returned_event, store.data_mut());
+                                // 访客完全控制返回的事件变体；类型不匹配时
+                                // from_wasm_event 会 panic（约半数事件走无守卫的
+                                // 默认 apply_wasm_event）。绝不能让该 panic 跨越
+                                // 宿主调用边界——拦截后忽略插件对本事件的全部修改。
+                                let applied =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        updated_event
+                                            .apply_wasm_event(returned_event, store.data_mut());
+                                    }));
+                                if applied.is_err() {
+                                    tracing::error!(
+                                        "插件事件处理器返回了类型不匹配的事件变体；已忽略其全部修改"
+                                    );
+                                }
                                 updated_event
                             })),
                             Err(error) => Err(error),

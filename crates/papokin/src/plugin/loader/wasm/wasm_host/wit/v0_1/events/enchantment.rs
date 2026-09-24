@@ -117,7 +117,16 @@ impl ToFromWasmEvent for EnchantItemEvent {
                 let enchantments_to_add = data
                     .enchantments_to_add
                     .into_iter()
-                    .map(|ev| (from_wit_enchantment(ev.enchantment), ev.level as i32))
+                    .filter_map(|ev| {
+                        // 事件回读路径容错：无效附魔条目跳过而非 panic
+                        match from_wit_enchantment(ev.enchantment) {
+                            Ok(enc) => Some((enc, ev.level as i32)),
+                            Err(error) => {
+                                tracing::error!("事件附魔 ID 无效，已跳过该条目：{error}");
+                                None
+                            }
+                        }
+                    })
                     .collect();
                 Self {
                     player: consume_player(state, &data.player),

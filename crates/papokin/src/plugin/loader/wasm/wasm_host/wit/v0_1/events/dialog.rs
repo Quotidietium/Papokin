@@ -25,19 +25,36 @@ use crate::plugin::loader::wasm::wasm_host::{
     },
 };
 
+/// 事件回读路径的容错转换：句柄无效时记录错误并以空文本占位，
+/// 避免恶意/异常的插件句柄让 panic 跨越宿主调用边界中断事件分发。
+fn text_or_empty(
+    state: &PluginHostState,
+    res: &wasmtime::component::Resource<
+        crate::plugin::loader::wasm::wasm_host::wit::v0_1::papokin::plugin::text::TextComponent,
+    >,
+) -> papokin_util::text::TextComponent {
+    match text_component_from_resource(state, res) {
+        Ok(component) => component,
+        Err(error) => {
+            tracing::error!("对话框文本资源句柄无效，已用空文本占位：{error}");
+            papokin_util::text::TextComponent::text("")
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn protocol_dialog_from_wasm(
     state: &PluginHostState,
     dialog: &Dialog,
 ) -> ProtocolDialog {
-    let title = text_component_from_resource(state, &dialog.title);
+    let title = text_or_empty(state, &dialog.title);
 
     let body: Vec<_> = dialog
         .body
         .iter()
         .map(|b| match b {
             DialogBody::PlainMessage(c) => ProtocolDialogBody::PlainMessage {
-                contents: text_component_from_resource(state, c),
+                contents: text_or_empty(state, c),
             },
             DialogBody::Item(_i) => ProtocolDialogBody::Item { item: 0 },
         })
@@ -48,16 +65,16 @@ pub(crate) fn protocol_dialog_from_wasm(
         .iter()
         .map(|i| match i {
             DialogInput::Bool(b) => ProtocolDialogInput::Boolean {
-                label: text_component_from_resource(state, &b.label),
+                label: text_or_empty(state, &b.label),
                 default_value: b.default_value,
             },
             DialogInput::Text(t) => ProtocolDialogInput::Text {
-                label: text_component_from_resource(state, &t.label),
-                placeholder: text_component_from_resource(state, &t.placeholder),
+                label: text_or_empty(state, &t.label),
+                placeholder: text_or_empty(state, &t.placeholder),
                 default_value: t.default_value.clone(),
             },
             DialogInput::NumberRange(n) => ProtocolDialogInput::NumberRange {
-                label: text_component_from_resource(state, &n.label),
+                label: text_or_empty(state, &n.label),
                 min: n.min_value,
                 max: n.max_value,
                 initial: n.initial_value,
@@ -65,12 +82,8 @@ pub(crate) fn protocol_dialog_from_wasm(
                 label_format: n.label_format.clone(),
             },
             DialogInput::SingleOption(s) => ProtocolDialogInput::SingleOption {
-                label: text_component_from_resource(state, &s.label),
-                options: s
-                    .options
-                    .iter()
-                    .map(|o| text_component_from_resource(state, o))
-                    .collect(),
+                label: text_or_empty(state, &s.label),
+                options: s.options.iter().map(|o| text_or_empty(state, o)).collect(),
                 initial_index: s.initial_index,
             },
         })
@@ -80,11 +93,8 @@ pub(crate) fn protocol_dialog_from_wasm(
         .buttons
         .iter()
         .map(|b| ProtocolActionButton {
-            text: text_component_from_resource(state, &b.text),
-            tooltip: b
-                .tooltip
-                .as_ref()
-                .map(|t| text_component_from_resource(state, t)),
+            text: text_or_empty(state, &b.text),
+            tooltip: b.tooltip.as_ref().map(|t| text_or_empty(state, t)),
             width: b.width,
             action: match &b.action {
                 Action::OpenUrl(u) => DialogAction::OpenUrl { url: u.clone() },
@@ -118,9 +128,9 @@ pub(crate) fn protocol_dialog_from_wasm(
                     };
                     papokin_protocol::Label::BuiltIn(link_type)
                 }
-                LinkLabel::Custom(c) => papokin_protocol::Label::TextComponent(Box::new(
-                    text_component_from_resource(state, c),
-                )),
+                LinkLabel::Custom(c) => {
+                    papokin_protocol::Label::TextComponent(Box::new(text_or_empty(state, c)))
+                }
             };
             DialogLink {
                 label,
@@ -151,7 +161,7 @@ pub(crate) fn protocol_dialog_from_wasm(
         external_title: dialog
             .external_title
             .as_ref()
-            .map(|t| text_component_from_resource(state, t)),
+            .map(|t| text_or_empty(state, t)),
     }
 }
 
@@ -424,5 +434,27 @@ impl ToFromWasmEvent for DialogShowEvent {
             }
             _ => panic!("意外的事件类型"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_dialog_text_handle_falls_back_to_empty() {
+        let mut state = PluginHostState::new();
+        let valid = state
+            .add_text_component::<crate::plugin::loader::wasm::wasm_host::wit::v0_1::papokin::plugin::text::TextComponent>(
+                papokin_util::text::TextComponent::text("标题"),
+            )
+            .expect("添加文本组件资源失败");
+        assert_eq!(text_or_empty(&state, &valid).get_text(), "标题");
+
+        // 伪造的未注册句柄：容错为空文本而非 panic 跨越宿主边界
+        let forged = wasmtime::component::Resource::<
+            crate::plugin::loader::wasm::wasm_host::wit::v0_1::papokin::plugin::text::TextComponent,
+        >::new_own(u32::MAX - 1);
+        assert_eq!(text_or_empty(&state, &forged).get_text(), "");
     }
 }
