@@ -4,6 +4,7 @@ use papokin_data::data_component_impl::BundleContentsImpl;
 use papokin_data::item::Item;
 use papokin_data::sound::Sound;
 use papokin_data::tag;
+use papokin_util::Hand;
 
 pub struct BundleItem;
 
@@ -32,6 +33,10 @@ impl ItemBehaviour for BundleItem {
                 );
                 let updated_bundle = held_item.clone();
 
+                // `held_item()` 返回的是克隆，必须显式写回物品栏；
+                // 否则服务端袋内物品不减少，每次右键都会重复
+                // 取出同一件物品（复制漏洞）。
+                player.inventory.set_held_item(updated_bundle.clone());
                 player.drop_item(extracted_stack);
                 player.sync_hand_slot(used_slot_index, updated_bundle);
             }
@@ -53,6 +58,10 @@ impl ItemBehaviour for BundleItem {
                     );
                     let updated_bundle = off_hand_item.clone();
 
+                    // 与主手同理：`off_hand_item()` 返回克隆，需写回装备表。
+                    player
+                        .inventory
+                        .set_stack_in_hand(Hand::Left, updated_bundle.clone());
                     player.drop_item(extracted_stack);
                     player.sync_hand_slot(used_slot_index, updated_bundle);
                 }
