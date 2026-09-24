@@ -3517,6 +3517,23 @@ impl Player {
                 let abs_yaw = event.yaw;
                 let abs_pitch = event.pitch;
                 let new_world = event.new_world;
+
+                // 目标坐标可能来自插件 API 或被事件处理器改写：
+                // 非有限坐标一旦落库会沿实体位置污染全部下游算术，
+                // 超界坐标会把区块加载中心推到世界边缘，二者都直接拒绝。
+                if !abs_position.x.is_finite()
+                    || !abs_position.y.is_finite()
+                    || !abs_position.z.is_finite()
+                    || abs_position.x.abs() > 2.999_99E7
+                    || abs_position.z.abs() > 2.999_99E7
+                {
+                    warn!(
+                        "拒绝玩家 {} 的跨世界传送：目标坐标非法（{:?}）",
+                        self.gameprofile.name, abs_position
+                    );
+                    return;
+                }
+
                 let (packet_position, packet_yaw, packet_pitch, packet_relatives) =
                     if target_rewritten {
                         (abs_position, abs_yaw, abs_pitch, Vec::new())
