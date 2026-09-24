@@ -71,14 +71,39 @@ thread_local! {
     static FUNCTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// 单次函数触发允许执行的最大命令条数，对齐原版
+/// 单次函数触发链的默认命令条数上限，对齐原版
 /// `maxCommandChainLength` 的默认值；同一条触发链上嵌套执行的
-/// 函数共享该预算。
-const MAX_FUNCTION_COMMANDS: i64 = 65_536;
+/// 函数共享该预算。实际限额优先取来源世界的
+/// `maxCommandSequenceLength` gamerule（该规则在 1.21.x 的
+/// 原版键名为 `maxCommandChainLength`）。
+const DEFAULT_FUNCTION_COMMANDS: i64 = 65_536;
 
 thread_local! {
     #[allow(clippy::missing_const_for_thread_local)]
     static FUNCTION_COMMAND_BUDGET: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+// 当前链的命令上限副本：预算会被逐条扣减，错误消息需要
+// 读取链开始时的原始限额，故单独存一份
+thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
+    static FUNCTION_COMMAND_LIMIT: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// 解析本次执行链的命令预算：优先取来源世界的
+/// `maxCommandSequenceLength` gamerule；负值按 0 处理
+/// （原版允许把该规则设为 0 以彻底禁用函数执行，负值视为同等
+/// 意图而非放行无限）。无世界上下文（控制台/测试来源）时回退
+/// 默认值。
+fn command_budget_for(source: &CommandSource) -> i64 {
+    use papokin_data::game_rules::{GameRule, GameRuleValue};
+
+    if let Some(world) = &source.world
+        && let GameRuleValue::Int(v) = world.get_game_rule(&GameRule::MaxCommandSequenceLength)
+    {
+        return v.max(0);
+    }
+    DEFAULT_FUNCTION_COMMANDS
 }
 
 /// 从当前执行链的命令预算中扣减一条额度；返回 `false` 表示
@@ -497,9 +522,12 @@ impl DatapackManager {
             ));
         };
         // 顶层触发重建本条执行链的命令预算；嵌套执行共享同一预算，
-        // 防止单函数巨量行/标签展开做慢消耗 DoS
+        // 防止单函数巨量行/标签展开做慢消耗 DoS。限额取来源世界
+        // 的 maxCommandSequenceLength gamerule（管理员可动态调整）
         if FUNCTION_DEPTH.with(std::cell::Cell::get) == 1 {
-            FUNCTION_COMMAND_BUDGET.with(|budget| budget.set(MAX_FUNCTION_COMMANDS));
+            let limit = command_budget_for(source);
+            FUNCTION_COMMAND_BUDGET.with(|budget| budget.set(limit));
+            FUNCTION_COMMAND_LIMIT.with(|limit_cell| limit_cell.set(limit));
         }
         let mut budget_exhausted = false;
         let result = self.visit_function_lines(name, |line| {
@@ -514,7 +542,8 @@ impl DatapackManager {
         });
         if budget_exhausted {
             return Err(format!(
-                "函数执行链超过 {MAX_FUNCTION_COMMANDS} 条命令上限，已中止"
+                "函数执行链超过 {} 条命令上限（maxCommandSequenceLength），已中止",
+                FUNCTION_COMMAND_LIMIT.with(std::cell::Cell::get)
             ));
         }
         result
@@ -1353,8 +1382,8 @@ mod command_budget_tests {
         assert!(!consume_command_budget(), "预算为 0 时必须拒绝");
 
         // 模拟顶层进入：预算应重建为满额
-        FUNCTION_COMMAND_BUDGET.with(|b| b.set(MAX_FUNCTION_COMMANDS));
-        for i in 0..MAX_FUNCTION_COMMANDS {
+        FUNCTION_COMMAND_BUDGET.with(|b| b.set(DEFAULT_FUNCTION_COMMANDS));
+        for i in 0..DEFAULT_FUNCTION_COMMANDS {
             assert!(consume_command_budget(), "第 {i} 条应有预算");
         }
         assert!(!consume_command_budget(), "耗尽后必须拒绝");
@@ -1363,10 +1392,10 @@ mod command_budget_tests {
 
     #[test]
     fn oversize_function_is_truncated_by_budget() {
-        // 巨量行函数：预算在 MAX_FUNCTION_COMMANDS 条后耗尽，
+        // 巨量行函数：预算在 DEFAULT_FUNCTION_COMMANDS 条后耗尽，
         // visit 闭包停止执行命令，visit_function_lines 正常返回
         let manager = DatapackManager::new();
-        let lines: Vec<String> = (0..MAX_FUNCTION_COMMANDS + 10)
+        let lines: Vec<String> = (0..DEFAULT_FUNCTION_COMMANDS + 10)
             .map(|i| format!("say {i}"))
             .collect();
         manager
@@ -1376,7 +1405,7 @@ mod command_budget_tests {
             .insert("test:huge".to_string(), std::sync::Arc::from(lines));
 
         let guard = FunctionDepthGuard::enter().unwrap();
-        FUNCTION_COMMAND_BUDGET.with(|b| b.set(MAX_FUNCTION_COMMANDS));
+        FUNCTION_COMMAND_BUDGET.with(|b| b.set(DEFAULT_FUNCTION_COMMANDS));
         let mut executed = 0i64;
         let result = manager.visit_function_lines("test:huge", |_line| {
             if consume_command_budget() {
@@ -1385,6 +1414,14 @@ mod command_budget_tests {
         });
         drop(guard);
         assert!(result.is_ok());
-        assert_eq!(executed, MAX_FUNCTION_COMMANDS, "恰好执行到预算上限");
+        assert_eq!(executed, DEFAULT_FUNCTION_COMMANDS, "恰好执行到预算上限");
+    }
+
+    #[test]
+    fn budget_falls_back_to_default_without_world() {
+        // 无世界上下文（控制台/测试来源）：回退默认值，
+        // 与来源世界的 gamerule 无关
+        let source = CommandSource::dummy();
+        assert_eq!(command_budget_for(&source), DEFAULT_FUNCTION_COMMANDS);
     }
 }
