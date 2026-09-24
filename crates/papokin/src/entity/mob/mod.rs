@@ -901,6 +901,10 @@ pub trait Mob: EntityBase + Send + Sync {
     /// 仅马系等可鞍生物覆写；默认空实现保证其余生物不受影响。
     fn set_saddled_flag(&self, _saddled: bool) {}
 
+    /// 死亡时掉落驮箱（箱子本体与内容）。仅带箱驴/骡覆写；
+    /// 默认空实现保证其余生物不受影响。
+    fn drop_mount_chest(&self) {}
+
     fn can_attack(&self, target: &crate::entity::living::LivingEntity) -> bool {
         if target.entity.entity_type == &EntityType::GHAST {
             return false;

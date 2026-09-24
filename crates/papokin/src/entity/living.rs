@@ -2121,6 +2121,12 @@ impl LivingEntity {
 
             self.drop_equipment(looting_level);
 
+            // 驮箱（驴/骡箱子格）随死亡掉落：箱子本体与内容，防止
+            // 玩家存放的物品随实体移除无声湮灭。
+            if let Some(mob) = dyn_self.get_mob() {
+                mob.drop_mount_chest();
+            }
+
             // 若为玩家且游戏规则已启用，则广播死亡消息
             self.broadcast_death_message(&*dyn_self, damage_type, source, cause);
 

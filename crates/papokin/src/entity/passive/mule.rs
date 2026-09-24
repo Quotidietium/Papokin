@@ -12,6 +12,8 @@ use papokin_data::tag::{self, Taggable};
 use papokin_nbt::compound::NbtCompound;
 use uuid::Uuid;
 
+use papokin_inventory::inventory::{Inventory, SimpleInventory};
+
 use crate::entity::{
     Entity, EntityBase,
     ageable::{AgeableData, AgeableMob},
@@ -43,6 +45,9 @@ pub struct MuleEntity {
     pub ageable_data: AgeableData,
     pub flags: AtomicU8,
     pub has_chest: AtomicBool,
+    /// 驮箱内容（原版带箱骡 5 列 × 3 行 = 15 格）。物品栏常驻，
+    /// 仅 `has_chest` 时暴露给界面，避免装箱/卸箱时迁移数据。
+    pub chest_inventory: Arc<SimpleInventory>,
     pub temper: AtomicI32,
     pub owner: AtomicCell<Option<Uuid>>,
 }
@@ -55,6 +60,7 @@ impl MuleEntity {
             ageable_data: AgeableData::default(),
             flags: AtomicU8::new(0),
             has_chest: AtomicBool::new(false),
+            chest_inventory: Arc::new(SimpleInventory::new(15)),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
         };
@@ -163,6 +169,8 @@ impl Mob for MuleEntity {
     fn mob_write_nbt(&self, nbt: &mut NbtCompound) {
         self.write_ageable_nbt(nbt);
         nbt.put_bool("ChestedHorse", self.has_chest());
+        // 驮箱内容走原版 Items 列表（Slot 字节 + 物品堆），空箱不写出
+        self.chest_inventory.write_inventory_nbt(nbt, false);
         nbt.put_bool("Tame", self.is_tame());
         nbt.put_int("Temper", self.temper.load(Ordering::Relaxed));
         if let Some(owner) = self.owner.load() {
@@ -174,6 +182,14 @@ impl Mob for MuleEntity {
         self.read_ageable_nbt(nbt);
         if let Some(chested) = nbt.get_bool("ChestedHorse") {
             self.set_has_chest(chested);
+        }
+        // 恢复驮箱内容：越界 Slot 字节被忽略（防伪造存档越界写入）
+        let mut stacks = vec![ItemStack::EMPTY.clone(); self.chest_inventory.size()];
+        self.chest_inventory.read_data(nbt, &mut stacks);
+        for (index, stack) in stacks.into_iter().enumerate() {
+            if !stack.is_empty() {
+                self.chest_inventory.set_stack(index, stack);
+            }
         }
         if let Some(tame) = nbt.get_bool("Tame") {
             self.set_tame(tame);
@@ -197,6 +213,23 @@ impl Mob for MuleEntity {
 
     fn set_saddled_flag(&self, saddled: bool) {
         self.set_saddled(saddled);
+    }
+
+    fn drop_mount_chest(&self) {
+        if !self.has_chest() {
+            return;
+        }
+        // 箱子本体必掉（原版语义）；内容受 doMobLoot 游戏规则管控
+        self.mob_entity
+            .spawn_at_location(ItemStack::new(1, &Item::CHEST));
+        let world = self.get_entity().world.load();
+        if !world.level_info.load().game_rules.mob_drops {
+            return;
+        }
+        for index in 0..self.chest_inventory.size() {
+            let stack = self.chest_inventory.remove_stack(index);
+            self.mob_entity.spawn_at_location(stack);
+        }
     }
 
     fn get_mob_entity(&self) -> &MobEntity {
@@ -263,7 +296,11 @@ impl Mob for MuleEntity {
             let ent = &self.mob_entity.living_entity.entity;
             if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                 if self.is_tame() && !player.get_entity().is_sneaking() {
-                    super::horse::open_equipment_screen(&vehicle, player);
+                    let chest_inventory = self
+                        .has_chest()
+                        .then(|| self.chest_inventory.clone())
+                        .map(|inventory| inventory as Arc<dyn Inventory>);
+                    super::horse::open_equipment_screen(&vehicle, player, chest_inventory);
                 } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
                     ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }
