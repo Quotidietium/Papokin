@@ -41,6 +41,17 @@ impl MountScreenHandler {
         if has_armor_slot { 2 } else { 1 }
     }
 
+    /// `MOUNT_SCREEN_OPEN` 包应上报的马侧槽位总数（鞍 + 可选马铠 +
+    /// 箱子格）。原版客户端 `HorseScreenHandler` 按
+    /// `slot_count - 前置槽数` 推导箱格数并排布菜单，随后才接玩家
+    /// 物品栏——多报一格会让客户端整体菜单错位一位（点击错槽、
+    /// 出现幻影箱格），必须与本处理器实际添加的马侧槽数一致。
+    /// 与 `mount_slots_before_chest` 同源计算，杜绝两处失同步。
+    #[must_use]
+    pub const fn packet_slot_count(has_armor_slot: bool, chest_size: usize) -> i32 {
+        (Self::mount_slots_before_chest(has_armor_slot) + chest_size) as i32
+    }
+
     pub fn new(
         sync_id: u8,
         player_inventory: &Arc<PlayerInventory>,
@@ -479,6 +490,53 @@ mod tests {
     /// 驴/骡形态：无马铠槽，槽序必须为鞍(0) + 箱格(1..=15) + 玩家
     /// 36 格（总 52）。多出的马铠槽会使全部后续槽位错位一位
     /// （点击错槽）——对齐原版客户端 `HorseScreenHandler`。
+    /// `MOUNT_SCREEN_OPEN` 上报的 `slot_count` 必须与处理器实际的
+    /// 马侧槽数一致：原版客户端按 `slot_count - 前置槽数` 推导箱格
+    /// 数并排布菜单，多报一格即整体错位（点击错槽、幻影箱格）。
+    /// ㊱回归：带箱驴/骡此前被硬编码上报 `2 + 箱格数`，比无马铠
+    /// 布局的实际槽数多 1。
+    #[test]
+    fn packet_slot_count_matches_handler_mount_side_slots() {
+        let player_inventory = player_inventory();
+
+        // 普通马：鞍 + 马铠，无箱格
+        let horse = horse_handler(&player_inventory);
+        assert_eq!(MountScreenHandler::packet_slot_count(true, 0), 2);
+        assert_eq!(
+            mount_side_slot_count(&horse),
+            usize::try_from(MountScreenHandler::packet_slot_count(true, 0)).unwrap()
+        );
+
+        // 带箱驴/骡：鞍 + 15 箱格，无马铠槽
+        let donkey = donkey_handler(&player_inventory);
+        assert_eq!(MountScreenHandler::packet_slot_count(false, 15), 16);
+        assert_eq!(
+            mount_side_slot_count(&donkey),
+            usize::try_from(MountScreenHandler::packet_slot_count(false, 15)).unwrap()
+        );
+
+        // 无箱且无马铠（未放箱的驴/骡、骷髅马、僵尸马、骆驼）：仅鞍
+        let bare = MountScreenHandler::new(
+            1,
+            &player_inventory,
+            Arc::new(SimpleInventory::new(0)),
+            Arc::new(SimpleInventory::new(1)),
+            Arc::new(SimpleInventory::new(1)),
+            0,
+            false,
+        );
+        assert_eq!(MountScreenHandler::packet_slot_count(false, 0), 1);
+        assert_eq!(
+            mount_side_slot_count(&bare),
+            usize::try_from(MountScreenHandler::packet_slot_count(false, 0)).unwrap()
+        );
+    }
+
+    /// 处理器中位于玩家物品栏（固定 36 格）之前的马侧槽数。
+    fn mount_side_slot_count(handler: &MountScreenHandler) -> usize {
+        handler.get_behaviour().slots.len() - 36
+    }
+
     #[test]
     fn donkey_layout_has_no_armor_slot() {
         let player_inventory = player_inventory();

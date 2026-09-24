@@ -39,6 +39,16 @@ impl LlamaScreenHandler {
         (strength * 3) as usize
     }
 
+    /// `MOUNT_SCREEN_OPEN` 包应上报的羊驼侧槽位总数（驼物 + 驮箱
+    /// 格）。原版客户端 `LlamaScreenHandler` 按 `slot_count - 1`
+    /// 推导驮箱格数，多报一格会让整体菜单错位（点击错槽）。与
+    /// 本处理器实际暴露的羊驼侧槽数（`SLOT_CHEST_START` + 暴露
+    /// 驮箱格）同源，杜绝两处失同步。
+    #[must_use]
+    pub const fn packet_slot_count(chest_slots: usize) -> i32 {
+        (Self::SLOT_CHEST_START + chest_slots) as i32
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     pub fn new(
         sync_id: u8,
@@ -284,6 +294,25 @@ mod tests {
             .filter(|s| s.get_cloned_stack().item.id == Item::STONE.id)
             .map(|s| u32::from(s.get_cloned_stack().item_count))
             .sum()
+    }
+
+    /// `MOUNT_SCREEN_OPEN` 上报的 `slot_count` 必须与处理器实际暴露
+    /// 的羊驼侧槽数一致：原版客户端按 `slot_count - 1` 推导驮箱格数，
+    /// 多报一格即整体菜单错位（点击错槽、幻影箱格）。前置条件：
+    /// 底层驮箱物品栏容量不小于请求暴露的格数（调用方恒为
+    /// `SimpleInventory::new(15)`，格数按 strength 截断至 15）。
+    #[test]
+    fn packet_slot_count_matches_handler_mount_side_slots() {
+        let player_inventory = player_inventory();
+
+        for chest_slots in [3, 6, 15] {
+            let (handler, _) = llama_handler(&player_inventory, chest_slots);
+            assert_eq!(
+                handler.get_behaviour().slots.len() - 36,
+                usize::try_from(LlamaScreenHandler::packet_slot_count(chest_slots)).unwrap(),
+                "羊驼侧槽数必须与包上报的 slot_count 一致（chest_slots = {chest_slots}）"
+            );
+        }
     }
 
     /// 驮箱格数按 strength 截断暴露（3-15 格），处理器槽位总数
