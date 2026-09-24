@@ -649,10 +649,18 @@ impl<S: CommandSource> CommandDispatcher<S> {
         let truncated_input = &full_input[0..cursor.min(full_input.len())];
 
         let children = self.tree.get_children(parent);
+        let source = context.source.clone();
         let context = context.build(truncated_input);
         let mut suggestions = Vec::with_capacity(children.len());
 
         for child in children {
+            // 补全请求是客户端可主动触发的枚举面：无权使用的子节点
+            // 不得进入建议，否则未授权的命令名、子命令与参数枚举
+            // （suggestion provider / list-suggestions）都会泄露
+            if !self.tree.can_use(child, source.as_ref()) {
+                continue;
+            }
+
             let builder = SuggestionsBuilder::new(truncated_input, start);
 
             match self.tree.classify_id(child) {
@@ -1275,5 +1283,52 @@ mod test {
         assert_eq!(dispatcher.execute_input("//set", &source), Ok(42));
         // 通过 /set 别名执行（Java 客户端为 //set 发送的形式）
         assert_eq!(dispatcher.execute_input("/set", &source), Ok(42));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::argument_builder::CommandArgumentBuilder;
+    use crate::context::command_context::CommandContext;
+    use crate::node::{CommandExecutor, CommandExecutorResult};
+    use crate::source::DummySource;
+
+    struct NoopExecutor;
+    impl CommandExecutor for NoopExecutor {
+        fn execute(&self, _context: &CommandContext) -> CommandExecutorResult {
+            Ok(0)
+        }
+    }
+
+    #[test]
+    fn suggestions_exclude_nodes_failing_requirements() {
+        let mut dispatcher = CommandDispatcher::new();
+        dispatcher
+            .register(CommandArgumentBuilder::new("publiccmd", "公开命令").executes(NoopExecutor));
+        dispatcher.register(
+            CommandArgumentBuilder::new("secretcmd", "机密命令")
+                .requires(|_source: &DummySource| false)
+                .executes(NoopExecutor),
+        );
+
+        let source = Arc::new(DummySource::dummy());
+
+        // 根级补全：无权命令不得出现在建议中
+        let all: Vec<String> = dispatcher
+            .suggest("", &source)
+            .into_iter()
+            .map(|s| s.suggestion)
+            .collect();
+        assert!(all.iter().any(|s| s == "publiccmd"));
+        assert!(!all.iter().any(|s| s == "secretcmd"));
+
+        // 即便输入前缀精确匹配无权命令，也不得补全
+        assert!(
+            !dispatcher
+                .suggest("secret", &source)
+                .into_iter()
+                .any(|s| s.suggestion == "secretcmd")
+        );
     }
 }
