@@ -411,7 +411,8 @@ macro_rules! impl_block_entity_for_cooking {
                             if burn_event.cancelled {
                                 burn_cancelled = true;
                             } else {
-                                burn_ticks = burn_event.burn_time as u16;
+                                // 钳制到 u16 范围：插件可上报任意 u32，截断会回绕
+                                burn_ticks = burn_event.burn_time.min(u32::from(u16::MAX)) as u16;
                             }
                         }
                         if !burn_cancelled {
@@ -443,27 +444,42 @@ macro_rules! impl_block_entity_for_cooking {
                         let mut start_cancelled = false;
                         if self.get_cooking_time_spent() == 0 {
                             if let Some(server) = world.server.upgrade() {
+                                // 初始总时长必须取自配方：新熔炉的 cooking_total_time
+                                // 为 0，直接传入会让首次熔炼永远无法完成
+                                // （spent 要等 u16 回绕后才等于 0）。
+                                let recipe_cook_time = furnace_recipe
+                                    .map_or(0, |recipe| recipe.cookingtime.max(0) as u32);
                                 let mut start_event = $crate::plugin::api::events::inventory::furnace_start_smelt::FurnaceStartSmeltEvent::new(
                                     self.position,
                                     top_item.item.registry_key.to_string(),
-                                    self.get_cooking_total_time() as u32,
+                                    recipe_cook_time,
                                 );
                                 server.plugin_manager.fire_blocking(&server, &mut start_event);
                                 if start_event.cancelled {
                                     start_cancelled = true;
                                 } else {
-                                    self.set_cooking_total_time(start_event.cooking_time as u16);
+                                    // 钳制到 u16 范围，理由同燃料时长
+                                    self.set_cooking_total_time(
+                                        start_event.cooking_time.min(u32::from(u16::MAX)) as u16,
+                                    );
                                 }
+                            } else if let Some(recipe) = furnace_recipe {
+                                // 无服务器句柄时（不应发生）也要保证总时长来自配方
+                                self.set_cooking_total_time(recipe.cookingtime.max(0) as u16);
                             }
                         }
                         if !start_cancelled {
                             self.cooking_time_spent.fetch_add(1, Ordering::Relaxed);
 
-                            if self.get_cooking_time_spent() == self.get_cooking_total_time() {
+                            // 用 >= 而非 ==：插件下调总时长后 spent 可能已超过它
+                            if self.get_cooking_time_spent() >= self.get_cooking_total_time() {
                                 self.set_cooking_time_spent(0);
                                 if let Some(cooking_recipe) = furnace_recipe {
-                                    let cooking_total_time = cooking_recipe.cookingtime;
-                                    self.set_cooking_total_time(cooking_total_time as u16);
+                                    // 数据包配方可给出负值/超大值，钳制到 u16 范围
+                                    self.set_cooking_total_time(
+                                        cooking_recipe.cookingtime.clamp(0, i32::from(u16::MAX))
+                                            as u16,
+                                    );
 
                                     let mut smelt_cancelled = false;
                                     if let Some(server) = world.server.upgrade() {
