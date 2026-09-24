@@ -1,9 +1,11 @@
 use papokin_data::item_stack::ItemStack;
 
+mod equipment_slot_inventory;
 #[expect(clippy::module_inception)]
 mod inventory;
 mod simple_inventory;
 
+pub use equipment_slot_inventory::*;
 pub use inventory::*;
 pub use simple_inventory::*;
 
