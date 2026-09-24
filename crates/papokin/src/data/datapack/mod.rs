@@ -71,6 +71,26 @@ thread_local! {
     static FUNCTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
+/// 单次函数触发允许执行的最大命令条数，对齐原版
+/// `maxCommandChainLength` 的默认值；同一条触发链上嵌套执行的
+/// 函数共享该预算。
+const MAX_FUNCTION_COMMANDS: i64 = 65_536;
+
+thread_local! {
+    #[allow(clippy::missing_const_for_thread_local)]
+    static FUNCTION_COMMAND_BUDGET: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+}
+
+/// 从当前执行链的命令预算中扣减一条额度；返回 `false` 表示
+/// 预算已耗尽。预算在每次顶层触发（深度为 1）时重建。
+fn consume_command_budget() -> bool {
+    FUNCTION_COMMAND_BUDGET.with(|budget| {
+        let next = budget.get() - 1;
+        budget.set(next);
+        next >= 0
+    })
+}
+
 /// 进入函数执行时的深度守卫：超过上限则拒绝进入，离开时递减。
 struct FunctionDepthGuard;
 
@@ -476,12 +496,28 @@ impl DatapackManager {
                 "函数嵌套超过 {MAX_FUNCTION_DEPTH} 层：可能存在递归调用"
             ));
         };
-        self.visit_function_lines(name, |line| {
+        // 顶层触发重建本条执行链的命令预算；嵌套执行共享同一预算，
+        // 防止单函数巨量行/标签展开做慢消耗 DoS
+        if FUNCTION_DEPTH.with(std::cell::Cell::get) == 1 {
+            FUNCTION_COMMAND_BUDGET.with(|budget| budget.set(MAX_FUNCTION_COMMANDS));
+        }
+        let mut budget_exhausted = false;
+        let result = self.visit_function_lines(name, |line| {
+            if budget_exhausted || !consume_command_budget() {
+                budget_exhausted = true;
+                return;
+            }
             server
                 .command_dispatcher
                 .load()
                 .handle_command(source, line);
-        })
+        });
+        if budget_exhausted {
+            return Err(format!(
+                "函数执行链超过 {MAX_FUNCTION_COMMANDS} 条命令上限，已中止"
+            ));
+        }
+        result
     }
 
     fn visit_function_lines(
@@ -1302,5 +1338,53 @@ mod function_depth_tests {
         drop(guard);
         assert!(result.is_ok());
         assert_eq!(reentries, 1);
+    }
+}
+
+#[cfg(test)]
+mod command_budget_tests {
+    use super::*;
+
+    #[test]
+    fn budget_rebuilt_at_top_level_and_shared_across_nested() {
+        // 重建预算：顶层（深度 1）进入时满额
+        let guard = FunctionDepthGuard::enter().unwrap();
+        FUNCTION_COMMAND_BUDGET.with(|b| b.set(0));
+        assert!(!consume_command_budget(), "预算为 0 时必须拒绝");
+
+        // 模拟顶层进入：预算应重建为满额
+        FUNCTION_COMMAND_BUDGET.with(|b| b.set(MAX_FUNCTION_COMMANDS));
+        for i in 0..MAX_FUNCTION_COMMANDS {
+            assert!(consume_command_budget(), "第 {i} 条应有预算");
+        }
+        assert!(!consume_command_budget(), "耗尽后必须拒绝");
+        drop(guard);
+    }
+
+    #[test]
+    fn oversize_function_is_truncated_by_budget() {
+        // 巨量行函数：预算在 MAX_FUNCTION_COMMANDS 条后耗尽，
+        // visit 闭包停止执行命令，visit_function_lines 正常返回
+        let manager = DatapackManager::new();
+        let lines: Vec<String> = (0..MAX_FUNCTION_COMMANDS + 10)
+            .map(|i| format!("say {i}"))
+            .collect();
+        manager
+            .functions
+            .write()
+            .unwrap()
+            .insert("test:huge".to_string(), std::sync::Arc::from(lines));
+
+        let guard = FunctionDepthGuard::enter().unwrap();
+        FUNCTION_COMMAND_BUDGET.with(|b| b.set(MAX_FUNCTION_COMMANDS));
+        let mut executed = 0i64;
+        let result = manager.visit_function_lines("test:huge", |_line| {
+            if consume_command_budget() {
+                executed += 1;
+            }
+        });
+        drop(guard);
+        assert!(result.is_ok());
+        assert_eq!(executed, MAX_FUNCTION_COMMANDS, "恰好执行到预算上限");
     }
 }
