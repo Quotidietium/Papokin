@@ -320,13 +320,19 @@ impl TrialSpawnerConfig {
         if self.spawn_potentials.is_empty() {
             return Some(SpawnData::default());
         }
-        let total_weight: i32 = self.spawn_potentials.iter().map(|p| p.weight.max(1)).sum();
+        // 权重来自存档 NBT（可被外部编辑）：求和改用 i64，避免
+        // 两个大权重条目相加就 i32 溢出 panic。
+        let total_weight: i64 = self
+            .spawn_potentials
+            .iter()
+            .map(|p| i64::from(p.weight.max(1)))
+            .sum();
         if total_weight <= 0 {
             return self.spawn_potentials.first().map(|p| p.data.clone());
         }
         let mut roll = rand::rng().random_range(0..total_weight);
         for potential in &self.spawn_potentials {
-            let weight = potential.weight.max(1);
+            let weight = i64::from(potential.weight.max(1));
             if roll < weight {
                 return Some(potential.data.clone());
             }
@@ -340,17 +346,18 @@ impl TrialSpawnerConfig {
         if self.loot_tables_to_eject.is_empty() {
             return None;
         }
-        let total_weight: i32 = self
+        // 同上：i64 求和防止编辑存档的权重溢出。
+        let total_weight: i64 = self
             .loot_tables_to_eject
             .iter()
-            .map(|p| p.weight.max(1))
+            .map(|p| i64::from(p.weight.max(1)))
             .sum();
         if total_weight <= 0 {
             return self.loot_tables_to_eject.first().map(|p| p.data.clone());
         }
         let mut roll = rand::rng().random_range(0..total_weight);
         for loot in &self.loot_tables_to_eject {
-            let weight = loot.weight.max(1);
+            let weight = i64::from(loot.weight.max(1));
             if roll < weight {
                 return Some(loot.data.clone());
             }
@@ -364,7 +371,10 @@ impl TrialSpawnerConfig {
         let mut cfg = Self::default();
 
         if let Some(v) = nbt.get_int("spawn_range") {
-            cfg.spawn_range = v;
+            // 生成半径参与位置偏移与逐块视线 raycast（DDA 无步数
+            // 上限）：钳制防止编辑存档注入巨值后一次视线检查就
+            // 遍历数十亿方块卡死 tick。
+            cfg.spawn_range = v.clamp(0, 64);
         }
         if let Some(v) = nbt
             .get_float("total_mobs")
@@ -1461,6 +1471,39 @@ impl TrialSpawnerBlockEntity {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 编辑存档可给生成潜力注入全域 i32 权重：两个极大权重求和
+    /// 在旧实现（i32）中直接溢出 panic。
+    #[test]
+    fn spawn_potentials_huge_weights_do_not_overflow() {
+        let config = TrialSpawnerConfig {
+            spawn_potentials: vec![
+                WeightedSpawnData {
+                    data: SpawnData::default(),
+                    weight: i32::MAX,
+                },
+                WeightedSpawnData {
+                    data: SpawnData::default(),
+                    weight: i32::MAX,
+                },
+            ],
+            ..Default::default()
+        };
+        for _ in 0..8 {
+            assert!(config.pick_spawn_data().is_some());
+        }
+    }
+
+    /// 生成半径参与逐块视线 raycast（无步数上限），装载时必须钳制。
+    #[test]
+    fn spawn_range_from_nbt_is_clamped() {
+        let mut nbt = NbtCompound::new();
+        nbt.put_int("spawn_range", i32::MAX);
+
+        let cfg = TrialSpawnerConfig::from_nbt(&nbt);
+
+        assert_eq!(cfg.spawn_range, 64);
+    }
 
     #[test]
     fn trial_spawner_config_scaling() {
