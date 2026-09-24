@@ -111,7 +111,9 @@ impl NBTStorageInit for papokin_data::potion::Effect {
             warn!("无法读取效果：show_icon 不存在");
             return None;
         };
-        let amplifier = nbt.get_int("amplifier").unwrap_or(0) as u8;
+        // amplifier 来自存档 NBT（可被外部编辑），钳制到原版 byte
+        // 语义 0..=127，防止截断回绕出 255 级效果污染每刻计算。
+        let amplifier = nbt.get_int("amplifier").unwrap_or(0).clamp(0, 127) as u8;
         let duration = nbt.get_int("duration").unwrap_or(0);
         let ambient = nbt.get_byte("ambient").unwrap_or(0) == 1;
         let show_particles = nbt.get_byte("show_particles").unwrap_or(1) == 1;

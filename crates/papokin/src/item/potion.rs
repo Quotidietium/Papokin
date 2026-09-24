@@ -114,10 +114,13 @@ impl PotionContents {
             // 追加了自定义效果
             for ce in &pc.custom_effects {
                 if let Some(se) = StatusEffect::from_minecraft_name(&ce.effect_id) {
+                    // amplifier 来自网络物品组件（VarInt 全域），钳制到
+                    // 原版语义范围 0..=127，防止负值回绕与后续移位溢出。
+                    let amplifier = ce.amplifier.clamp(0, 127) as u8;
                     out.push((
                         se,
                         ce.duration,
-                        ce.amplifier as u8,
+                        amplifier,
                         ce.ambient,
                         ce.show_particles,
                         ce.show_icon,
@@ -148,12 +151,15 @@ impl PotionContents {
                 // 即时强度缩放
                 let instant_scale = source.instant_scale(scale);
 
-                // 直接应用即时效果逻辑，因为它们不随刻更新
+                // 直接应用即时效果逻辑，因为它们不随刻更新。
+                // 移位量按 Java 语义掩码到 0..=31（Java 的 int 移位
+                // 自动掩码低 5 位），避免 Rust 移位溢出 panic。
+                let amplifier_shift = u32::from(amplifier) & 31;
                 if effect_type.id == papokin_data::effect::StatusEffect::INSTANT_HEALTH.id {
-                    let amount = 4.0 * (1 << amplifier) as f32 * instant_scale;
+                    let amount = 4.0 * (1u32 << amplifier_shift) as f32 * instant_scale;
                     target.heal(amount);
                 } else if effect_type.id == papokin_data::effect::StatusEffect::INSTANT_DAMAGE.id {
-                    let amount = 6.0 * (1 << amplifier) as f32 * instant_scale;
+                    let amount = 6.0 * (1u32 << amplifier_shift) as f32 * instant_scale;
 
                     let _ = target.damage(
                         target.get_entity(),

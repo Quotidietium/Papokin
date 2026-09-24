@@ -888,7 +888,11 @@ impl LivingEntity {
     }
 
     #[expect(clippy::too_many_lines)]
-    pub fn add_effect(&self, effect: Effect) {
+    pub fn add_effect(&self, mut effect: Effect) {
+        // amplifier 途径包括存档 NBT（int 截断为 u8）与药水物品
+        // 组件等，原版存储语义是 byte：统一钳制到 0..=127，防止
+        // 属性修正量被放大到污染实体数值。
+        effect.amplifier = effect.amplifier.min(127);
         let mut effect_event =
             crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent::new(
                 self.entity.entity_id,
@@ -905,14 +909,18 @@ impl LivingEntity {
             return;
         }
 
-        // 在存储前立即应用即时效果
+        // 在存储前立即应用即时效果。
+        // 移位量按 Java 语义掩码到 0..=31（Java 的 int 移位自动
+        // 掩码低 5 位），否则 Rust 的 1 << amplifier 在 amplifier
+        // 超界时于 debug 构建 panic。
+        let amplifier_shift = effect.amplifier & 31;
         if effect.effect_type == &StatusEffect::INSTANT_HEALTH {
-            let heal_amount = 4.0 * (1 << effect.amplifier) as f32;
+            let heal_amount = 4.0 * (1u32 << amplifier_shift) as f32;
             self.heal(heal_amount);
             // 与原版一样，即时效果从不作为活跃效果发送或存储。
             return;
         } else if effect.effect_type == &StatusEffect::INSTANT_DAMAGE {
-            let damage_amount = 6.0 * (1 << effect.amplifier) as f32;
+            let damage_amount = 6.0 * (1u32 << amplifier_shift) as f32;
             let dyn_self = self
                 .entity
                 .world
@@ -925,6 +933,22 @@ impl LivingEntity {
         }
 
         // 应用非即时效果
+
+        // 原版叠加规则：已激活效果等级更高、或等级相同但剩余
+        // 时长更长的效果不会被新效果覆盖，防止弱药水稀释强效果。
+        {
+            let effects = self
+                .active_effects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(existing) = effects.get(effect.effect_type)
+                && (existing.amplifier > effect.amplifier
+                    || (existing.amplifier == effect.amplifier
+                        && existing.duration > effect.duration))
+            {
+                return;
+            }
+        }
 
         // 修改属性（如速度）的效果也应更新
         // 实体的属性实例（服务器端），然后通知客户端。
