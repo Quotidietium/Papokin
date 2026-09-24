@@ -152,8 +152,9 @@ impl ScreenHandler for MountScreenHandler {
                 ) {
                     return ItemStack::EMPTY.clone();
                 }
-
-                return ItemStack::EMPTY.clone();
+                // 注意：这里绝不能提前返回——insert_item 已把物品复制进
+                // 目标槽位，必须落到下方把剩余数量写回源槽位，否则源槽
+                // 仍是原物品堆而目标槽多了一份（复制物品 BUG）。
             }
 
             if stack.is_empty() {
@@ -216,5 +217,168 @@ impl ScreenHandler for NautilusInventoryScreenHandler {
 
     fn quick_move(&mut self, player: &dyn InventoryPlayer, slot_index: i32) -> ItemStack {
         self.mount_handler.quick_move(player, slot_index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::Any;
+    use std::sync::Mutex;
+
+    use papokin_data::item::Item;
+    use papokin_data::screen::WindowType;
+    use papokin_data::sound::Sound;
+    use papokin_data::statistic::StatisticCategory;
+    use papokin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::inventory::SimpleInventory;
+
+    struct TestPlayer {
+        inventory: Arc<PlayerInventory>,
+    }
+
+    impl InventoryPlayer for TestPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn drop_item(&self, _item: ItemStack, _retain_ownership: bool) {}
+
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+
+        fn is_creative(&self) -> bool {
+            false
+        }
+
+        fn experience_level(&self) -> i32 {
+            0
+        }
+
+        fn add_experience_levels(&self, _levels: i32) {}
+
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+
+        fn set_enchantment_seed(&self, _seed: i32) {}
+
+        fn enqueue_inventory_packet(
+            &self,
+            _packet: &CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) {
+        }
+
+        fn enqueue_slot_packet(
+            &self,
+            _packet: &CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) {
+        }
+
+        fn enqueue_cursor_packet(&self, _packet: &CSetCursorItem) {}
+
+        fn enqueue_property_packet(&self, _packet: &CSetContainerProperty) {}
+
+        fn enqueue_slot_set_packet(&self, _packet: &CSetPlayerInventory) {}
+
+        fn enqueue_set_held_item_packet(&self, _packet: &CSetSelectedSlot) {}
+
+        fn enqueue_equipment_change(&self, _slot: &EquipmentSlot, _stack: &ItemStack) {}
+
+        fn award_experience(&self, _amount: i32) {}
+
+        fn increment_stat(&self, _category: StatisticCategory, _stat_id: i32, _amount: i32) {}
+
+        fn play_block_sound(&self, _sound: Sound, _pitch: f32) {}
+    }
+
+    fn player_inventory() -> Arc<PlayerInventory> {
+        Arc::new(PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        ))
+    }
+
+    fn horse_handler(player_inventory: &Arc<PlayerInventory>) -> MountScreenHandler {
+        MountScreenHandler::new(
+            1,
+            player_inventory,
+            Arc::new(SimpleInventory::new(0)),
+            Arc::new(SimpleInventory::new(1)),
+            Arc::new(SimpleInventory::new(1)),
+            0,
+        )
+    }
+
+    fn total_stone(handler: &MountScreenHandler) -> u32 {
+        handler
+            .get_behaviour()
+            .slots
+            .iter()
+            .filter(|s| s.get_cloned_stack().item.id == Item::STONE.id)
+            .map(|s| u32::from(s.get_cloned_stack().item_count))
+            .sum()
+    }
+
+    /// shift 点击移动后必须把剩余写回源槽位：否则目标槽多了一份而
+    /// 源槽原封不动（复制物品 BUG）。无箱子坐骑必走这条分支。
+    #[test]
+    fn quick_move_full_stack_moves_without_duplication() {
+        let player_inventory = player_inventory();
+        player_inventory.set_stack(0, ItemStack::new(64, &Item::STONE));
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        let mut handler = horse_handler(&player_inventory);
+
+        // 处理器槽位 29 对应背包快捷栏 0
+        let moved = handler.quick_move(&player, 29);
+        assert_eq!(moved.item_count, 64, "必须返回移动前的物品堆");
+        assert!(player_inventory.get_stack(0).is_empty(), "源槽位必须清空");
+        assert_eq!(total_stone(&handler), 64, "物品总数必须守恒");
+    }
+
+    /// 目标区域只能容纳一部分时：已移动的写入目标，剩余必须写回
+    /// 源槽位，两边加总等于移动前数量。
+    #[test]
+    fn quick_move_partial_stack_writes_back_remainder() {
+        let player_inventory = player_inventory();
+        // 主物品栏（背包索引 9-35）只留 10 个石头的可合并空间
+        player_inventory.set_stack(9, ItemStack::new(54, &Item::STONE));
+        for i in 10..36 {
+            player_inventory.set_stack(i, ItemStack::new(64, &Item::DIRT));
+        }
+        player_inventory.set_stack(0, ItemStack::new(64, &Item::STONE));
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        let mut handler = horse_handler(&player_inventory);
+
+        handler.quick_move(&player, 29);
+
+        assert_eq!(
+            player_inventory.get_stack(9).item_count,
+            64,
+            "可合并槽位必须被填满"
+        );
+        assert_eq!(
+            player_inventory.get_stack(0).item_count,
+            54,
+            "剩余必须写回源槽位而不是源槽原封不动"
+        );
+        assert_eq!(total_stone(&handler), 118, "物品总数必须守恒（54+64）");
     }
 }
