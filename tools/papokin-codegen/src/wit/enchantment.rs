@@ -23,7 +23,7 @@ pub fn build() -> String {
 interface enchantments {{
   use text.{{text-component}};
 
-  /// 附魔生效所在的装备槽位。
+  /// 附魔生效的装备槽位。
   enum attribute-modifier-slot {{
     any,
     main-hand,
@@ -44,21 +44,21 @@ interface enchantments {{
 
   /// 表示一个自定义附魔定义。
   record custom-enchantment {{
-    /// 附魔的唯一标识符（例如 "my_plugin:lifesteal"）。
+    /// 附魔的唯一标识符（如 "my_plugin:lifesteal"）。
     id: string,
-    /// 附魔的描述或显示名称。
+    /// 附魔的描述或显示名。
     description: text-component,
-    /// 附魔的最大等级（例如 1..=10）。
+    /// 附魔的最高等级（如 1..=10）。
     max-level: u32,
-    /// 铁砧修复/合并费用的基础倍率。
+    /// 铁砧修复/合成的基础花费倍率。
     anvil-cost: u32,
-    /// 受支持物品的标签或物品模式（例如 "#minecraft:enchantable/weapon"）。
+    /// 适用物品的标签或物品模式（如 "#minecraft:enchantable/weapon"）。
     supported-items: string,
-    /// 附魔的权重/稀有度（越高越常见，默认为 5）。
+    /// 附魔的权重/稀有度（越高越常见，默认 5）。
     weight: u32,
-    /// 此附魔生效所在的装备槽位。
+    /// 此附魔生效的装备槽位。
     slots: list<attribute-modifier-slot>,
-    /// 互斥/冲突的附魔 ID 列表。
+    /// 互斥/冲突附魔 ID 的列表。
     exclusive-set: list<string>,
   }}
 
@@ -70,10 +70,10 @@ interface enchantments {{
     /// 按 ID 获取附魔定义。
     get-enchantment: func(id: string) -> option<custom-enchantment>;
 
-    /// 检查附魔 ID 是否已注册。
+    /// 检查某个附魔 ID 是否已注册。
     has-enchantment: func(id: string) -> bool;
 
-    ///返回所有已注册的自定义附魔 ID。
+    /// 返回所有已注册的自定义附魔 ID。
     get-all-enchantment-ids: func() -> list<string>;
   }}
 }}
