@@ -55,6 +55,10 @@ impl JavaClient {
             let handler = screen_handler_arc
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // 与原版一致校验窗口 id：丢弃针对已关闭/已更换界面的过期请求
+            if i32::from(packet.container_id) != i32::from(handler.get_behaviour().sync_id) {
+                return;
+            }
             let grid_width: usize = match handler.window_type() {
                 Some(WindowType::Crafting) => 3,
                 None => 2, // 玩家物品栏 2x2
