@@ -235,19 +235,46 @@ impl<'a> StringReader<'a> {
     }
 
     /// 解析一个 [`f32`]，失败时产生 [`CommandSyntaxError`]。
+    ///
+    /// 超出 f32 范围的纯数字（如 40 位以上的十进制整数）会被
+    /// Rust 的 parse 饱和为 `inf` 而不是报错；此类值一律视为
+    /// 非法输入，防止经命令参数（如传送坐标）注入非有限浮点。
     pub fn read_float(&mut self) -> Result<f32, CommandSyntaxError> {
-        self.read_and_parse(
+        let start = self.byte_cursor;
+        let parsed: Result<f32, _> = self.read_and_parse(
             &error_types::READER_EXPECTED_FLOAT,
             &error_types::READER_INVALID_FLOAT,
-        )
+        );
+        match parsed {
+            Ok(value) if value.is_finite() => Ok(value),
+            Ok(_) => {
+                self.byte_cursor = start;
+                Err(error_types::READER_INVALID_FLOAT
+                    .create(self, TextComponent::text("数值超出浮点范围".to_owned())))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// 解析一个 [`f64`]，失败时产生 [`CommandSyntaxError`]。
+    ///
+    /// 与 [`Self::read_float`] 相同：parse 对超范围纯数字饱和为
+    /// `inf`，此处拒绝一切非有限值。
     pub fn read_double(&mut self) -> Result<f64, CommandSyntaxError> {
-        self.read_and_parse(
+        let start = self.byte_cursor;
+        let parsed: Result<f64, _> = self.read_and_parse(
             &error_types::READER_EXPECTED_DOUBLE,
             &error_types::READER_INVALID_DOUBLE,
-        )
+        );
+        match parsed {
+            Ok(value) if value.is_finite() => Ok(value),
+            Ok(_) => {
+                self.byte_cursor = start;
+                Err(error_types::READER_INVALID_DOUBLE
+                    .create(self, TextComponent::text("数值超出浮点范围".to_owned())))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// 读取不带引号的字符串（不由引号包围）
@@ -401,6 +428,25 @@ mod test {
 
         reader.skip_whitespace();
         assert_ne!(reader.expect(' '), Ok(()));
+    }
+
+    /// 超出浮点范围的纯数字会被 parse 饱和为 inf 而非报错，
+    /// 命令参数（如传送坐标）绝不能接受此类值。
+    #[test]
+    fn read_float_rejects_overflowing_digits() {
+        let huge = format!("1{}0", "0".repeat(400));
+        let mut reader = StringReader::new(&huge);
+        assert!(reader.read_double().is_err());
+
+        let mut reader = StringReader::new("99999999999999999999999999999999999999999");
+        assert!(reader.read_float().is_err());
+
+        // 正常值不受影响
+        let mut reader = StringReader::new("1.233 4.5");
+        let double_value = reader.read_double().unwrap();
+        assert!((double_value - 1.233).abs() < 1e-12);
+        reader.skip_whitespace();
+        assert!(reader.read_float().is_ok());
     }
 
     #[test]
