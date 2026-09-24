@@ -383,10 +383,19 @@ impl<P: LightProvider> LightPropagator<P> {
         let cache_x = cache.x;
         let cache_z = cache.z;
         let cache_size = cache.size;
+        let min_y = cache.bottom_y() as i32;
+        let max_y = min_y + cache.height() as i32;
 
         while let Some((pos, old_val)) = self.decrease_queue.pop_front() {
             for dir in BlockDirection::all() {
                 let neighbor_pos = pos.offset(dir.to_offset());
+
+                // 与 propagate 的垂直边界一致：越界邻居取不到光，
+                // 也不应参与递减判断（此前靠 get_light 越界返回 0 兜底）
+                let ny = neighbor_pos.0.y;
+                if ny < min_y || ny >= max_y {
+                    continue;
+                }
 
                 let (cx, _rel) = neighbor_pos.chunk_and_chunk_relative_position();
                 let rel_x = cx.x - cache_x;
@@ -807,16 +816,14 @@ impl LightEngine {
 
         if new_luminance > 0 {
             set_block_light(cache, pos, new_luminance);
-            if self
-                .block_light
-                .visited
-                .test_and_set(pos.0.x, pos.0.y, pos.0.z)
-            {
-                self.block_light.queue.push_back(PropagationEntry {
-                    pos,
-                    skip_direction: None,
-                });
-            }
+            // 此处必须无条件入队：visited 在 propagate 开头才经 ensure_capacity
+            // 扩容重置，未扩容时 test_and_set 恒返回 false，条件入队会把
+            // 引擎生命周期内的首个光源静默丢弃（光值已写入但不传播）。
+            // 重复入队由 propagate 主循环的 test_and_set 去重。
+            self.block_light.queue.push_back(PropagationEntry {
+                pos,
+                skip_direction: None,
+            });
         }
     }
 
@@ -888,5 +895,177 @@ impl LightEngine {
 impl Default for LightEngine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chunk_system::Chunk;
+    use crate::chunk_system::generation_cache::Cache;
+    use crate::generation::get_world_gen;
+    use crate::generation::proto_chunk::ProtoChunk;
+    use papokin_data::dimension::Dimension;
+    use papokin_util::world_seed::Seed;
+
+    fn empty_cache() -> Cache {
+        let world_gen = get_world_gen(
+            Seed(1_786_192_857_164_469_025),
+            Dimension::OVERWORLD,
+            false,
+            Vec::new(),
+            String::new(),
+        );
+        let mut cache = Cache::new(-1, -1, 3);
+        for cx in -1..=1 {
+            for cz in -1..=1 {
+                cache
+                    .chunks
+                    .push(Chunk::Proto(Box::new(ProtoChunk::new(cx, cz, &world_gen))));
+            }
+        }
+        cache
+    }
+
+    #[test]
+    fn visited_bitset_before_capacity_returns_false() {
+        // 引擎刚创建时位图未扩容：此时 test_and_set 恒 false、is_visited 恒 true，
+        // 这是 update_block_light 必须无条件入队的前提
+        let mut v = VisitedBitSet::new();
+        assert!(!v.test_and_set(0, 0, 0));
+        assert!(v.is_visited(0, 0, 0));
+    }
+
+    #[test]
+    fn visited_bitset_marks_once_and_clears() {
+        let mut v = VisitedBitSet::new();
+        v.ensure_capacity(0, 0, 0, 2, 2, 2);
+        assert!(v.test_and_set(1, 1, 1));
+        assert!(!v.test_and_set(1, 1, 1));
+        assert!(v.is_visited(1, 1, 1));
+        assert!(!v.is_visited(0, 0, 0));
+        v.clear();
+        assert!(!v.is_visited(1, 1, 1));
+        assert!(v.test_and_set(1, 1, 1));
+    }
+
+    #[test]
+    fn visited_bitset_out_of_bounds_is_safe() {
+        let mut v = VisitedBitSet::new();
+        // 负差经 as usize 回绕成巨大值，必须被边界检查拦截而非越界索引
+        v.ensure_capacity(-4, -4, -4, 2, 2, 2);
+        assert!(!v.test_and_set(-5, -4, -4));
+        assert!(!v.test_and_set(2, 0, 0));
+        assert!(!v.test_and_set(0, 2, 0));
+        assert!(!v.test_and_set(0, 0, 2));
+        // 越界坐标视为「已访问」：保守跳过，不入队也不索引
+        assert!(v.is_visited(-5, 0, 0));
+        assert!(v.is_visited(0, 0, 99));
+        // 界内含负坐标正常工作
+        assert!(v.test_and_set(-4, -4, -4));
+        assert!(v.test_and_set(-3, -3, -3));
+    }
+
+    #[test]
+    fn visited_bitset_ensure_capacity_resets() {
+        let mut v = VisitedBitSet::new();
+        v.ensure_capacity(0, 0, 0, 4, 4, 4);
+        assert!(v.test_and_set(3, 3, 3));
+        // 相同容量重调 ensure_capacity 会整体清零（每次传播重置访问域）
+        v.ensure_capacity(0, 0, 0, 4, 4, 4);
+        assert!(!v.is_visited(3, 3, 3));
+    }
+
+    #[test]
+    fn update_block_light_propagates_from_cold_engine() {
+        let mut cache = empty_cache();
+        let mut engine = LightEngine::new();
+        let source = BlockPos(Vector3::new(0, 64, 0));
+
+        // 全新引擎的 visited 尚未扩容，修复前 test_and_set 恒 false，
+        // 首个光源会被静默丢弃（光值写入但不向邻居传播）
+        engine.update_block_light(&mut cache, source, 0, 14);
+        engine.run_light_updates(&mut cache);
+
+        assert_eq!(get_block_light(&cache, source), 14);
+        // 相邻一格衰减 1，两格衰减 2（六向 + 水平两格）
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(-1, 64, 0))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, 65, 0))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, 63, 0))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, 64, 1))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, 64, -1))),
+            13
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(2, 64, 0))),
+            12
+        );
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, 66, 0))),
+            12
+        );
+    }
+
+    #[test]
+    fn update_block_light_removal_clears_neighbors() {
+        let mut cache = empty_cache();
+        let mut engine = LightEngine::new();
+        let source = BlockPos(Vector3::new(0, 64, 0));
+
+        engine.update_block_light(&mut cache, source, 0, 14);
+        engine.run_light_updates(&mut cache);
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))),
+            13
+        );
+
+        // 撤除光源：递减波应把此前传播出去的光全部收回
+        engine.update_block_light(&mut cache, source, 14, 0);
+        engine.run_light_updates(&mut cache);
+
+        assert_eq!(get_block_light(&cache, source), 0);
+        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))), 0);
+        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(2, 64, 0))), 0);
+        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(0, 66, 0))), 0);
+    }
+
+    #[test]
+    fn update_block_light_at_vertical_edge_does_not_panic() {
+        let mut cache = empty_cache();
+        let mut engine = LightEngine::new();
+        // 世界底界：向下邻居越界，递减/递增都不应触碰越界坐标
+        let bottom = cache.bottom_y() as i32;
+        let source = BlockPos(Vector3::new(0, bottom, 0));
+
+        engine.update_block_light(&mut cache, source, 0, 14);
+        engine.run_light_updates(&mut cache);
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, bottom + 1, 0))),
+            13
+        );
+
+        engine.update_block_light(&mut cache, source, 14, 0);
+        engine.run_light_updates(&mut cache);
+        assert_eq!(
+            get_block_light(&cache, BlockPos(Vector3::new(0, bottom + 1, 0))),
+            0
+        );
     }
 }
