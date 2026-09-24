@@ -3009,9 +3009,12 @@ impl Entity {
 
         let recipients_by_version =
             World::collect_java_recipients_by_version(java_recipients.into_iter());
-
-        for (version, recipients) in recipients_by_version {
-            if let Some(buf) = self.synched_data.pack_dirty_for_version(&version) {
+        let versions: Vec<papokin_util::version::JavaMinecraftVersion> =
+            recipients_by_version.keys().copied().collect();
+        // 打包与清脏在同一把锁内完成，防止窗口期并发的 set 写入
+        // 被清脏吞掉（见 pack_dirty_for_versions 文档）。
+        for (version, buf) in self.synched_data.pack_dirty_for_versions(&versions) {
+            if let Some(recipients) = recipients_by_version.get(&version) {
                 let packet = CSetEntityMetadata::new(self.entity_id.into(), buf);
                 if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version)
                 {
@@ -3021,7 +3024,6 @@ impl Entity {
                 }
             }
         }
-        self.synched_data.clear_dirty();
     }
 
     pub fn set_pose(&self, pose: EntityPose) {
