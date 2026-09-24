@@ -391,6 +391,13 @@ impl MobEntity {
             saddle.write_item_stack(&mut compound);
             nbt.put("SaddleItem", papokin_nbt::tag::NbtTag::Compound(compound));
         }
+        // BODY 槽（马铠/狼甲）走原版马的 ArmorItem 复合键
+        let body_armor = equipment.get(&EquipmentSlot::BODY);
+        if !body_armor.is_empty() {
+            let mut compound = NbtCompound::new();
+            body_armor.write_item_stack(&mut compound);
+            nbt.put("ArmorItem", papokin_nbt::tag::NbtTag::Compound(compound));
+        }
     }
 
     /// 从原版 NBT 恢复装备映射。列表长度超出已知槽位的多余项被
@@ -437,6 +444,12 @@ impl MobEntity {
             && !stack.is_empty()
         {
             equipment.put(&EquipmentSlot::SADDLE, stack);
+        }
+        if let Some(compound) = nbt.get_compound("ArmorItem")
+            && let Some(stack) = ItemStack::read_item_stack(compound)
+            && !stack.is_empty()
+        {
+            equipment.put(&EquipmentSlot::BODY, stack);
         }
     }
 
@@ -1772,12 +1785,17 @@ mod tests {
         );
         equipment.put(&EquipmentSlot::MAIN_HAND, ItemStack::new(3, &Item::STONE));
         equipment.put(&EquipmentSlot::SADDLE, ItemStack::new(1, &Item::SADDLE));
+        equipment.put(
+            &EquipmentSlot::BODY,
+            ItemStack::new(1, &Item::IRON_HORSE_ARMOR),
+        );
 
         let mut nbt = NbtCompound::new();
         MobEntity::write_equipment_nbt(&mut nbt, &equipment);
 
-        // 鞍仅在存在时写出（原版 SaddleItem 语义）
+        // 鞍/马铠仅在存在时写出（原版 SaddleItem/ArmorItem 语义）
         assert!(nbt.get_compound("SaddleItem").is_some());
+        assert!(nbt.get_compound("ArmorItem").is_some());
 
         let mut restored = EntityEquipment::new();
         MobEntity::read_equipment_nbt(&nbt, &mut restored);
@@ -1795,6 +1813,11 @@ mod tests {
             restored
                 .get(&EquipmentSlot::SADDLE)
                 .are_equal(&ItemStack::new(1, &Item::SADDLE))
+        );
+        assert!(
+            restored
+                .get(&EquipmentSlot::BODY)
+                .are_equal(&ItemStack::new(1, &Item::IRON_HORSE_ARMOR))
         );
         // 未涉及的槽位保持为空
         assert!(restored.get(&EquipmentSlot::HEAD).is_empty());
