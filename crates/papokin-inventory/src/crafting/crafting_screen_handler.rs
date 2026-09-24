@@ -915,4 +915,78 @@ mod tests {
         assert_eq!(contents.get_weight(), 8);
         assert_eq!(contents.items[0].item.id, Item::STONE.id);
     }
+
+    /// 合成剩余物：奶桶耗尽后桶留置槽内；蜂蜜瓶有剩余时数量减一
+    /// 且玻璃瓶返还玩家物品栏（此前两者都被吞掉）。
+    #[test]
+    fn crafting_returns_recipe_remainders() {
+        let inventory = Arc::new(CraftingInventory::new(2, 2));
+        inventory.set_stack(0, ItemStack::new(1, &Item::MILK_BUCKET));
+        inventory.set_stack(1, ItemStack::new(2, &Item::HONEY_BOTTLE));
+        let slot = ResultSlot::new(inventory.clone(), None);
+        *slot
+            .result
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = ItemStack::new(1, &Item::CAKE);
+
+        let player_inventory = Arc::new(PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        ));
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+
+        let taken = slot.safe_take(1, u8::MAX, &player);
+        assert!(!taken.is_empty());
+
+        // 奶桶耗尽 → 空桶留置槽内
+        assert_eq!(inventory.get_stack(0).item.id, Item::BUCKET.id);
+        assert_eq!(inventory.get_stack(0).item_count, 1);
+        // 蜂蜜瓶仍有剩余 → 数量减一，玻璃瓶进入玩家物品栏
+        assert_eq!(inventory.get_stack(1).item.id, Item::HONEY_BOTTLE.id);
+        assert_eq!(inventory.get_stack(1).item_count, 1);
+        assert_eq!(player_inventory.get_stack(0).item.id, Item::GLASS_BOTTLE.id);
+        assert_eq!(player_inventory.get_stack(0).item_count, 1);
+    }
+
+    /// 嬗变配方必须恰好一个输入 + 一个材料：两只潜影盒（无染料）
+    /// 不得匹配染色配方（原版行为）。
+    #[test]
+    fn transmute_requires_both_input_and_material() {
+        let inventory = Arc::new(CraftingInventory::new(3, 3));
+        inventory.set_stack(0, ItemStack::new(1, &Item::SHULKER_BOX));
+        inventory.set_stack(1, ItemStack::new(1, &Item::SHULKER_BOX));
+        assert!(
+            match_crafting_recipe(&*inventory, None).is_none(),
+            "两个输入而无材料时不得匹配任何配方"
+        );
+    }
+
+    /// 嬗变染色必须保留输入组件：装有物品的收纳袋染成黑色后，
+    /// 袋内物品不得丢失（此前结果按全新堆叠构建，内容被剥离）。
+    #[test]
+    fn transmute_preserves_input_components() {
+        use papokin_data::data_component_impl::BundleContentsImpl;
+
+        let inventory = Arc::new(CraftingInventory::new(3, 3));
+        let mut bundle = ItemStack::new(1, &Item::BUNDLE);
+        assert!(
+            bundle
+                .get_data_component_mut::<BundleContentsImpl>()
+                .expect("收纳袋应默认带有内容组件")
+                .try_insert(&mut ItemStack::new(8, &Item::STONE))
+        );
+        inventory.set_stack(0, bundle);
+        inventory.set_stack(1, ItemStack::new(1, &Item::BLACK_DYE));
+
+        let slot = ResultSlot::new(inventory, None);
+        let result = slot.refill_output();
+        assert_eq!(result.item.id, Item::BLACK_BUNDLE.id);
+        let contents = result
+            .get_data_component::<BundleContentsImpl>()
+            .expect("染色后的收纳袋必须保留原内容组件");
+        assert_eq!(contents.get_weight(), 8, "袋内 8 块石头不得丢失");
+        assert_eq!(contents.items[0].item.id, Item::STONE.id);
+    }
 }
