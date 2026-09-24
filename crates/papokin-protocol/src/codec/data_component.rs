@@ -222,6 +222,10 @@ pub fn proto_to_data_sound(id_or: &crate::IdOr<crate::SoundEvent>) -> Option<IdO
 fn deserialize_idset<T: IDSetContent>(
     seq: &mut impl NetworkReadExt,
 ) -> Result<IDSet<T>, ReadingError> {
+    // 注册表 id 空间为 u16，合法集合不可能超出；同时封堵伪造
+    // 长度触发的巨量预分配（分配失败会直接 abort 进程）
+    const MAX_ID_SET_ENTRIES: usize = 65536;
+
     let id_type = seq.get_var_int()?.0;
 
     match id_type.cmp(&0) {
@@ -231,6 +235,9 @@ fn deserialize_idset<T: IDSetContent>(
         }
         std::cmp::Ordering::Greater => {
             let len = id_type - 1;
+            if len as usize > MAX_ID_SET_ENTRIES {
+                return Err(ReadingError::Message("Too many entries in IDSet".into()));
+            }
             let mut content_vec = Vec::with_capacity(len as usize);
 
             for _ in 0..len {
@@ -1851,23 +1858,47 @@ impl DataComponentCodec<Self> for CustomModelDataImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let floats_len = seq.get_var_int()?.0 as usize;
-        let mut floats = Vec::with_capacity(floats_len);
+        // 原版无显式上限；4096 对合法模型数据已极度宽裕，
+        // 主要用于封堵伪造 count 触发的巨量预分配
+        const MAX_MODEL_DATA_ENTRIES: i32 = 4096;
+
+        let floats_len = seq.get_var_int()?.0;
+        if !(0..=MAX_MODEL_DATA_ENTRIES).contains(&floats_len) {
+            return Err(ReadingError::Message(
+                "Too many floats in CustomModelData".into(),
+            ));
+        }
+        let mut floats = Vec::with_capacity(floats_len as usize);
         for _ in 0..floats_len {
             floats.push(seq.get_f32()?);
         }
-        let flags_len = seq.get_var_int()?.0 as usize;
-        let mut flags = Vec::with_capacity(flags_len);
+        let flags_len = seq.get_var_int()?.0;
+        if !(0..=MAX_MODEL_DATA_ENTRIES).contains(&flags_len) {
+            return Err(ReadingError::Message(
+                "Too many flags in CustomModelData".into(),
+            ));
+        }
+        let mut flags = Vec::with_capacity(flags_len as usize);
         for _ in 0..flags_len {
             flags.push(seq.get_bool()?);
         }
-        let strings_len = seq.get_var_int()?.0 as usize;
-        let mut strings = Vec::with_capacity(strings_len);
+        let strings_len = seq.get_var_int()?.0;
+        if !(0..=MAX_MODEL_DATA_ENTRIES).contains(&strings_len) {
+            return Err(ReadingError::Message(
+                "Too many strings in CustomModelData".into(),
+            ));
+        }
+        let mut strings = Vec::with_capacity(strings_len as usize);
         for _ in 0..strings_len {
             strings.push(seq.get_str()?.to_string());
         }
-        let colors_len = seq.get_var_int()?.0 as usize;
-        let mut colors = Vec::with_capacity(colors_len);
+        let colors_len = seq.get_var_int()?.0;
+        if !(0..=MAX_MODEL_DATA_ENTRIES).contains(&colors_len) {
+            return Err(ReadingError::Message(
+                "Too many colors in CustomModelData".into(),
+            ));
+        }
+        let mut colors = Vec::with_capacity(colors_len as usize);
         for _ in 0..colors_len {
             colors.push(seq.get_i32()?);
         }
@@ -1993,8 +2024,15 @@ impl DataComponentCodec<Self> for ToolImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let rules_len = seq.get_var_int()?.0 as usize;
-        let mut rules = Vec::with_capacity(rules_len);
+        // 原版规则数极少；4096 已极度宽裕，用于封堵伪造 count
+        // 触发的巨量预分配
+        const MAX_TOOL_RULES: i32 = 4096;
+
+        let rules_len = seq.get_var_int()?.0;
+        if !(0..=MAX_TOOL_RULES).contains(&rules_len) {
+            return Err(ReadingError::Message("Too many rules in Tool".into()));
+        }
+        let mut rules = Vec::with_capacity(rules_len as usize);
         for _ in 0..rules_len {
             let blocks = deserialize_idset(seq)?;
             let speed = if seq.get_bool()? {
@@ -2456,8 +2494,16 @@ impl DataComponentCodec<Self> for WritableBookContentImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
-        let mut pages = Vec::with_capacity(len);
+        // 原版上限 100 页；同时封堵伪造页数触发的巨量预分配
+        const MAX_BOOK_PAGES: i32 = 100;
+
+        let len = seq.get_var_int()?.0;
+        if !(0..=MAX_BOOK_PAGES).contains(&len) {
+            return Err(ReadingError::Message(
+                "Too many pages in WritableBookContent".into(),
+            ));
+        }
+        let mut pages = Vec::with_capacity(len as usize);
         for _ in 0..len {
             let raw = seq.get_str()?.to_string();
             let has_filtered = seq.get_bool()?;
@@ -2486,14 +2532,22 @@ impl DataComponentCodec<Self> for WrittenBookContentImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        // 原版上限 100 页；同时封堵伪造页数触发的巨量预分配
+        const MAX_BOOK_PAGES: i32 = 100;
+
         let title = seq.get_str()?.to_string();
         if seq.get_bool()? {
             let _ = seq.get_str()?;
         }
         let author = seq.get_str()?.to_string();
         let _generation = seq.get_var_int()?.0;
-        let pages_len = seq.get_var_int()?.0 as usize;
-        let mut pages = Vec::with_capacity(pages_len);
+        let pages_len = seq.get_var_int()?.0;
+        if !(0..=MAX_BOOK_PAGES).contains(&pages_len) {
+            return Err(ReadingError::Message(
+                "Too many pages in WrittenBookContent".into(),
+            ));
+        }
+        let mut pages = Vec::with_capacity(pages_len as usize);
         for _ in 0..pages_len {
             let tag = seq.get_nbt_with_version(&JavaMinecraftVersion::V_26_2)?;
             let comp = tag.as_ref().map_or_else(
@@ -2884,8 +2938,17 @@ impl DataComponentCodec<Self> for BannerPatternsImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
-        let mut layers = Vec::with_capacity(len);
+        // 原版合法纹样层数极少；256 已极度宽裕，用于封堵伪造
+        // 层数触发的巨量预分配
+        const MAX_BANNER_LAYERS: i32 = 256;
+
+        let len = seq.get_var_int()?.0;
+        if !(0..=MAX_BANNER_LAYERS).contains(&len) {
+            return Err(ReadingError::Message(
+                "Too many layers in BannerPatterns".into(),
+            ));
+        }
+        let mut layers = Vec::with_capacity(len as usize);
         for _ in 0..len {
             let pattern_id = seq.get_var_int()?.0;
             let color_id = seq.get_var_int()?.0 as u8;
@@ -2975,8 +3038,17 @@ impl DataComponentCodec<Self> for BlockStateImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
-        let mut properties = Vec::with_capacity(len);
+        // 单个方块状态的属性数极少；256 已极度宽裕，用于封堵
+        // 伪造属性数触发的巨量预分配
+        const MAX_BLOCK_STATE_PROPERTIES: i32 = 256;
+
+        let len = seq.get_var_int()?.0;
+        if !(0..=MAX_BLOCK_STATE_PROPERTIES).contains(&len) {
+            return Err(ReadingError::Message(
+                "Too many properties in BlockState".into(),
+            ));
+        }
+        let mut properties = Vec::with_capacity(len as usize);
         for _ in 0..len {
             let k = seq.get_str()?.to_string();
             let v = seq.get_str()?.to_string();
@@ -3273,5 +3345,38 @@ mod tests {
         assert_eq!(bytes, [4]);
         let mut reader = &bytes[..];
         let _ = InstrumentImpl::deserialize(&mut reader).unwrap();
+    }
+
+    /// 伪造的超大容器 count 必须在预分配前被拒绝：一旦按伪造值执行
+    /// `Vec::with_capacity`，分配失败会直接 abort 整个服务器进程。
+    #[test]
+    fn forged_huge_counts_are_rejected_before_allocation() {
+        // i32::MAX 的 VarInt 编码
+        let huge = [0xFFu8, 0xFF, 0xFF, 0xFF, 0x07];
+
+        let mut reader = &huge[..];
+        assert!(deserialize_idset::<papokin_data::Block>(&mut reader).is_err());
+
+        let mut reader = &huge[..];
+        assert!(WritableBookContentImpl::deserialize(&mut reader).is_err());
+
+        // WrittenBookContent：标题、filtered 标志、作者、世代之后再给伪造页数
+        // （VarInt 0 即空串/零值，单字节 0x00）
+        let mut bytes = vec![0, 0, 0, 0];
+        bytes.extend_from_slice(&huge);
+        let mut reader = &bytes[..];
+        assert!(WrittenBookContentImpl::deserialize(&mut reader).is_err());
+
+        let mut reader = &huge[..];
+        assert!(BannerPatternsImpl::deserialize(&mut reader).is_err());
+
+        let mut reader = &huge[..];
+        assert!(BlockStateImpl::deserialize(&mut reader).is_err());
+
+        let mut reader = &huge[..];
+        assert!(ToolImpl::deserialize(&mut reader).is_err());
+
+        let mut reader = &huge[..];
+        assert!(CustomModelDataImpl::deserialize(&mut reader).is_err());
     }
 }
