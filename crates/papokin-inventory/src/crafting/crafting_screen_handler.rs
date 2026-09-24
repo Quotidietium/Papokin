@@ -754,4 +754,111 @@ mod tests {
         assert_eq!(inventory.get_stack(0).item_count, 1);
         assert_eq!(inventory.get_stack(1).item_count, 0);
     }
+
+    /// 收纳袋右键交互不得作用于结果槽：吸入结果会绕过 `on_take_item`
+    /// （不消耗原料），且结果被配方重算补满，形成无限复制。门控后
+    /// 右键点击结果槽应保持结果、原料与袋内容三方均不变。
+    #[test]
+    fn bundle_cursor_interaction_is_blocked_on_result_slot() {
+        use papokin_data::data_component_impl::BundleContentsImpl;
+        use papokin_protocol::java::server::play::SlotActionType;
+
+        let player_inventory = Arc::new(PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        ));
+        let player = TestPlayer {
+            inventory: player_inventory,
+        };
+        let mut handler = CraftingTableScreenHandler::new(1, &player.inventory, None);
+
+        // 竖排两块橡木木板 = 木棍配方（3x3 网格的 0 与 3 号位）
+        let grid = handler.get_behaviour().slots[1].get_inventory();
+        grid.set_stack(0, ItemStack::new(1, &Item::OAK_PLANKS));
+        grid.set_stack(3, ItemStack::new(1, &Item::OAK_PLANKS));
+        handler.send_content_updates();
+        let result_slot = handler.get_behaviour().slots[0].clone();
+        assert_eq!(result_slot.get_cloned_stack().item.id, Item::STICK.id);
+
+        // 光标放一只装有 8 块石头的收纳袋
+        let mut bundle = ItemStack::new(1, &Item::BUNDLE);
+        assert!(
+            bundle
+                .get_data_component_mut::<BundleContentsImpl>()
+                .expect("收纳袋应默认带有内容组件")
+                .try_insert(&mut ItemStack::new(8, &Item::STONE))
+        );
+        *handler
+            .get_behaviour_mut()
+            .cursor_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
+
+        handler.on_slot_click(0, 1, SlotActionType::Pickup, &player);
+
+        // 结果槽、原料网格与袋内容都必须保持不变
+        assert_eq!(result_slot.get_cloned_stack().item.id, Item::STICK.id);
+        assert_eq!(result_slot.get_cloned_stack().item_count, 4);
+        assert_eq!(grid.get_stack(0).item_count, 1);
+        assert_eq!(grid.get_stack(3).item_count, 1);
+        let cursor = handler
+            .get_behaviour()
+            .cursor_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let contents = cursor
+            .get_data_component::<BundleContentsImpl>()
+            .expect("光标应仍是收纳袋");
+        assert_eq!(contents.items.len(), 1);
+        assert_eq!(contents.items[0].item.id, Item::STONE.id);
+        assert_eq!(contents.items[0].item_count, 8);
+    }
+
+    /// 对照组：普通存储槽上的收纳袋右键吸入必须仍然可用，
+    /// 且数量守恒（槽位清空、袋内增加相同数量）。
+    #[test]
+    fn bundle_cursor_sucks_items_from_plain_storage_slot() {
+        use papokin_data::data_component_impl::BundleContentsImpl;
+        use papokin_protocol::java::server::play::SlotActionType;
+
+        let player_inventory = Arc::new(PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        ));
+        // 主物品栏第一格（界面槽位 10）放 8 块石头
+        player_inventory.set_stack(9, ItemStack::new(8, &Item::STONE));
+        let player = TestPlayer {
+            inventory: player_inventory,
+        };
+        let mut handler = CraftingTableScreenHandler::new(1, &player.inventory, None);
+
+        let mut bundle = ItemStack::new(1, &Item::BUNDLE);
+        bundle
+            .get_data_component_mut::<BundleContentsImpl>()
+            .expect("收纳袋应默认带有内容组件");
+        *handler
+            .get_behaviour_mut()
+            .cursor_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = bundle;
+
+        handler.on_slot_click(10, 1, SlotActionType::Pickup, &player);
+
+        assert!(
+            handler.get_behaviour().slots[10]
+                .get_cloned_stack()
+                .is_empty(),
+            "石头应被吸入光标收纳袋"
+        );
+        let cursor = handler
+            .get_behaviour()
+            .cursor_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let contents = cursor
+            .get_data_component::<BundleContentsImpl>()
+            .expect("光标应仍是收纳袋");
+        assert_eq!(contents.get_weight(), 8);
+        assert_eq!(contents.items[0].item.id, Item::STONE.id);
+    }
 }

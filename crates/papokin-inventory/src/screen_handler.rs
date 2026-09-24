@@ -1050,14 +1050,23 @@ pub trait ScreenHandler: Send + Sync {
 
                     if !cursor_stack.is_empty() {
                         let mut inner_slot_stack = slot.get_stack();
-                        if let Some(bundle) = inner_slot_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>()
+                        // 装入槽内收纳袋会改写槽位堆叠本身：仅限允许插入的
+                        // 普通存储槽。结果槽 `can_insert` 恒为 false，借此排除——
+                        // 否则写入会被结果重算吞掉（物品凭空消失）。
+                        if slot.can_insert(&cursor_stack)
+                            && let Some(bundle) = inner_slot_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>()
                             && bundle.try_insert(&mut cursor_stack) {
                                 slot.set_stack(inner_slot_stack);
                                 intercepted = true;
                             }
                     }
 
+                    // 从槽位吸入物品到光标收纳袋：`can_insert` 排除结果槽，
+                    // 否则会绕过 `on_take_item`（不消耗原料/不支付货款）
+                    // 且结果被重算补满，形成无限复制。
                     if !intercepted && !slot_stack.is_empty()
+                        && slot.can_take_items(player)
+                        && slot.can_insert(&slot_stack)
                         && let Some(bundle) = cursor_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>() {
                             let mut inner_slot_stack = slot.get_stack();
                             if bundle.try_insert(&mut inner_slot_stack) {
@@ -1069,7 +1078,13 @@ pub trait ScreenHandler: Send + Sync {
                             }
                         }
 
-                    if !intercepted && cursor_stack.is_empty() {
+                    // 从槽内收纳袋取出到光标：同样排除结果槽（数据包可让
+                    // 配方输出带内容的收纳袋，取出会绕过原料消耗）。
+                    if !intercepted
+                        && cursor_stack.is_empty()
+                        && slot.can_take_items(player)
+                        && slot.can_insert(&slot_stack)
+                    {
                         let mut inner_slot_stack = slot.get_stack();
                         if let Some(bundle) = inner_slot_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>()
                             && let Some(extracted) = bundle.try_extract() {
@@ -1079,12 +1094,21 @@ pub trait ScreenHandler: Send + Sync {
                             }
                     }
 
-                    if !intercepted && slot_stack.is_empty()
-                        && let Some(bundle) = cursor_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>()
-                        && let Some(extracted) = bundle.try_extract() {
-                            slot.set_stack(extracted);
-                            intercepted = true;
-                        }
+                    // 从光标收纳袋取出放入空槽：先确认袋顶物品允许放入该槽，
+                    // 再实际取出，避免取出后无处可放而吞物品。
+                    if !intercepted && slot_stack.is_empty() {
+                        let can_place_top = cursor_stack
+                            .get_data_component::<papokin_data::data_component_impl::BundleContentsImpl>()
+                            .is_some_and(|bundle| {
+                                bundle.items.first().is_some_and(|top| slot.can_insert(top))
+                            });
+                        if can_place_top
+                            && let Some(bundle) = cursor_stack.get_data_component_mut::<papokin_data::data_component_impl::BundleContentsImpl>()
+                            && let Some(extracted) = bundle.try_extract() {
+                                slot.set_stack(extracted);
+                                intercepted = true;
+                            }
+                    }
 
                     if intercepted {
                         if cursor_stack.item_count == 0 {
