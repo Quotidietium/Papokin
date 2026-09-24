@@ -461,8 +461,9 @@ impl PlayerInventory {
                 break;
             }
 
-            let items_fit =
-                stack.get_max_stack_size() - self.get_stack(room_for_stack as usize).item_count;
+            let items_fit = stack
+                .get_max_stack_size()
+                .saturating_sub(self.get_stack(room_for_stack as usize).item_count);
             if self.insert_stack(room_for_stack, &mut stack.split(items_fit)) && notify_client {
                 player.enqueue_slot_set_packet(&CSetPlayerInventory::new(
                     i32::from(room_for_stack).into(),
