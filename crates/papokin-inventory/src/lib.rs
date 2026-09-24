@@ -50,6 +50,7 @@ pub mod grindstone_screen_handler;
 pub mod gui_builder;
 pub mod inventory;
 pub mod lectern_screen_handler;
+pub mod llama_screen_handler;
 pub mod loom_screen_handler;
 pub mod merchant;
 pub mod mount_screen_handler;

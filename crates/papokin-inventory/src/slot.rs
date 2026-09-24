@@ -353,6 +353,7 @@ impl Slot for ArmorSlot {
                     || {
                         stack.item.registry_key.ends_with("_horse_armor")
                             || stack.item.registry_key.ends_with("_nautilus_armor")
+                            || stack.item.registry_key.ends_with("_carpet")
                             || stack.item == &Item::WOLF_ARMOR
                     },
                     |equippable| matches!(equippable.slot, EquipmentSlot::Body(_)),
