@@ -20,9 +20,10 @@ impl JavaClient {
             .currently_editing_player()
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(editor_id) = currently_editing
-            && editor_id != player.gameprofile.id
-        {
+        // 编辑会话必须由服务端建立（放置或右键打开编辑器时写入）：
+        // 无会话（如磁盘加载的既有告示牌）或会话属于他人均拒绝，
+        // 防止客户端伪造更新包改写任意位置的告示牌文本
+        if currently_editing != Some(player.gameprofile.id) {
             return;
         }
 
