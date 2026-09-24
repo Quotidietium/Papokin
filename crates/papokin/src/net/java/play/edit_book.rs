@@ -43,7 +43,17 @@ impl JavaClient {
             written_book
                 .patch
                 .push((DataComponent::WrittenBookContent, Some(content.to_dyn())));
-            player.inventory().set_held_item(written_book);
+            // 对齐原版：签名消耗一本可写书（手持堆扣 1，剩余保留），
+            // 成品书给予玩家（背包满则掉落）。此前直接以成书覆盖手持
+            // 槽，手持堆多于一本时其余可写书会被凭空销毁
+            if held_stack.item_count > 1 {
+                let mut remainder = held_stack;
+                remainder.item_count -= 1;
+                player.inventory().set_held_item(remainder);
+                player.inventory().offer_or_drop_stack(written_book, player);
+            } else {
+                player.inventory().set_held_item(written_book);
+            }
         } else {
             let mut writable_book = held_stack;
             let content = WritableBookContentImpl { pages };
