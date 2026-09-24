@@ -263,11 +263,17 @@ pub trait NetworkReadExt {
             }
             let mut compressed = vec![0u8; length as usize];
             self.read_bytes_to_buf(&mut compressed)?;
-            let mut decoder = flate2::read::GzDecoder::new(&compressed[..]);
+            // 压缩数据本身 ≤32 KiB，但 gzip 可千倍放大（zip bomb），
+            // 解压量必须限制在协议全局数据上限内
+            let mut decoder = flate2::read::GzDecoder::new(&compressed[..])
+                .take(crate::MAX_PACKET_DATA_SIZE as u64 + 1);
             let mut decompressed = Vec::new();
             decoder
                 .read_to_end(&mut decompressed)
                 .map_err(|e| ReadingError::Message(e.to_string()))?;
+            if decompressed.len() > crate::MAX_PACKET_DATA_SIZE {
+                return Err(ReadingError::TooLarge("Decompressed NBT".to_string()));
+            }
             let mut cursor = std::io::Cursor::new(decompressed);
             let mut helper = papokin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
             let tag_id = helper
@@ -517,11 +523,17 @@ impl<'a> NetworkReadSliceExt<'a> for &'a [u8] {
             }
             let compressed = &(*self)[..length];
             *self = &(*self)[length..];
-            let mut decoder = flate2::read::GzDecoder::new(compressed);
+            // 压缩数据本身 ≤32 KiB，但 gzip 可千倍放大（zip bomb），
+            // 解压量必须限制在协议全局数据上限内
+            let mut decoder = flate2::read::GzDecoder::new(compressed)
+                .take(crate::MAX_PACKET_DATA_SIZE as u64 + 1);
             let mut decompressed = Vec::new();
             decoder
                 .read_to_end(&mut decompressed)
                 .map_err(|e| ReadingError::Message(e.to_string()))?;
+            if decompressed.len() > crate::MAX_PACKET_DATA_SIZE {
+                return Err(ReadingError::TooLarge("Decompressed NBT".to_string()));
+            }
             let mut cursor = std::io::Cursor::new(decompressed);
             let mut helper = papokin_nbt::deserializer::NbtReadHelperJava::new(&mut cursor);
             let tag_id = helper
@@ -890,11 +902,17 @@ pub fn read_nbt_payload(
             }
             let compressed = &bytebuf[..length as usize];
             *bytebuf = &bytebuf[length as usize..];
-            let mut decoder = flate2::read::GzDecoder::new(compressed);
+            // 压缩数据本身 ≤32 KiB，但 gzip 可千倍放大（zip bomb），
+            // 解压量必须限制在协议全局数据上限内
+            let mut decoder = flate2::read::GzDecoder::new(compressed)
+                .take(crate::MAX_PACKET_DATA_SIZE as u64 + 1);
             let mut decompressed = Vec::new();
             decoder
                 .read_to_end(&mut decompressed)
                 .map_err(|e| ReadingError::Message(e.to_string()))?;
+            if decompressed.len() > crate::MAX_PACKET_DATA_SIZE {
+                return Err(ReadingError::TooLarge("Decompressed NBT".to_string()));
+            }
             if decompressed.len() >= 3
                 && decompressed[0] == 0x0A
                 && decompressed[1] == 0
@@ -1267,5 +1285,34 @@ impl<W: Write> NetworkWriteExt for W {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    /// 旧版（<1.8）gzip NBT 的解压量必须封顶：构造解压后超过协议
+    /// 上限的「解压炸弹」，解码必须报错而不是全额分配内存。
+    /// （用最高压缩等级使压缩后长度能装进协议 i16 长度字段）
+    #[test]
+    fn legacy_gzip_nbt_decompression_is_capped() {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+        encoder
+            .write_all(&vec![0u8; crate::MAX_PACKET_DATA_SIZE + 1024])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(compressed.len() as i16).to_be_bytes());
+        bytes.extend_from_slice(&compressed);
+
+        let mut reader = &bytes[..];
+        let result =
+            reader.get_nbt_with_version(&papokin_util::version::JavaMinecraftVersion::V_1_7_6);
+        assert!(result.is_err(), "解压炸弹必须被拒绝而不是全额解压");
     }
 }
