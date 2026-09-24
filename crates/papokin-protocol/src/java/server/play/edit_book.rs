@@ -25,7 +25,14 @@ impl<'a> ServerPacket<'a> for SEditBook<'a> {
             } else {
                 200
             };
-            let count = count.min(max_pages);
+            // 页数超限直接拒绝而非截断：截断会让未读取的页字节
+            // 残留在流中，后续字段（标题等）会错读页数据，
+            // 造成解析错乱
+            if count > max_pages {
+                return Err(ReadingError::TooLarge(format!(
+                    "book has too many pages ({count} > {max_pages})"
+                )));
+            }
             let char_limit = if *version >= JavaMinecraftVersion::V_1_21_2 {
                 1024
             } else {
@@ -81,5 +88,39 @@ impl crate::ClientPacket for SEditBook<'_> {
             write.write_bool(false)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ser::NetworkWriteExt;
+
+    #[test]
+    fn edit_book_rejects_too_many_pages() {
+        // 1.21.11 上限 100 页：声称超限页数必须直接拒绝，
+        // 而非截断后让标题等后续字段错读页数据
+        let mut buf = Vec::new();
+        buf.write_var_int(&VarInt(36)).unwrap();
+        buf.write_var_int(&VarInt(101)).unwrap();
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let mut slice = buf.as_slice();
+        let result = SEditBook::read(&mut slice, &version);
+        assert!(matches!(result, Err(ReadingError::TooLarge(_))));
+    }
+
+    #[test]
+    fn edit_book_roundtrip_minimal() {
+        let mut buf = Vec::new();
+        buf.write_var_int(&VarInt(36)).unwrap();
+        buf.write_var_int(&VarInt(1)).unwrap();
+        buf.write_string_bounded("page", 1024).unwrap();
+        buf.write_bool(false).unwrap();
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let mut slice = buf.as_slice();
+        let packet = SEditBook::read(&mut slice, &version).unwrap();
+        assert_eq!(packet.pages.len(), 1);
+        assert_eq!(packet.pages[0], "page");
+        assert!(packet.title.is_none());
     }
 }
