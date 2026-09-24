@@ -290,7 +290,7 @@ pub fn open_llama_screen(
     )));
     player.open_mount_screen(
         handler,
-        1 + chest_slots as i32,
+        LlamaScreenHandler::packet_slot_count(chest_slots),
         mount.get_entity().entity_id,
     );
 }

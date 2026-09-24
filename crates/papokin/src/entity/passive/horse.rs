@@ -211,11 +211,14 @@ pub fn open_equipment_screen(
         chest_columns,
         has_armor_slot,
     )));
-    // 原版 MOUNT_SCREEN_OPEN 的 slot_count 为马侧总槽数（鞍 + 马铠 +
-    // 箱子格），客户端据此构造占位物品栏；偏小会使鞍/马铠槽访问越界。
+    // 原版 MOUNT_SCREEN_OPEN 的 slot_count 为马侧总槽数（鞍 + 可选
+    // 马铠 + 箱子格），客户端据此构造占位物品栏并推导箱格数。取值
+    // 与 `MountScreenHandler` 实际布局同源计算：无马铠槽的坐骑
+    // （驴/骡/骷髅马/骆驼）若误报含马铠的槽数，客户端菜单会整体
+    // 错位一位（点击错槽、幻影箱格）。
     player.open_mount_screen(
         handler,
-        2 + chest_inventory.size() as i32,
+        MountScreenHandler::packet_slot_count(has_armor_slot, chest_inventory.size()),
         mount.get_entity().entity_id,
     );
 }
