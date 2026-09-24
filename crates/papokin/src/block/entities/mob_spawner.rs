@@ -221,6 +221,14 @@ impl BlockEntity for MobSpawnerBlockEntity {
     where
         Self: Sized,
     {
+        // 数值字段来自存档 NBT（可被外部编辑），且 get_int 回退接受
+        // 全域 i32：若不钳制，update_spawns 的 `max_delay - min_delay`
+        // 与 `min_delay + 随机数` 会整数溢出 panic，单轮生成尝试数与
+        // 生成半径也会被放大到卡死 tick。统一钳制到 i16 short 语义
+        // （原版字段本身即 short）。
+        const FIELD_CAP: i32 = i16::MAX as i32;
+        const SPAWN_COUNT_CAP: i32 = 255;
+        const SPAWN_RANGE_CAP: i32 = 64;
         let get_num = |name: &str| {
             nbt.get_short(name)
                 .map(i32::from)
@@ -228,15 +236,27 @@ impl BlockEntity for MobSpawnerBlockEntity {
                 .or_else(|| nbt.get_byte(name).map(i32::from))
         };
 
-        let delay = get_num("Delay").unwrap_or(Self::DEFAULT_DELAY);
-        let min_delay = get_num("MinSpawnDelay").unwrap_or(Self::DEFAULT_MIN_SPAWN_DELAY);
-        let max_delay = get_num("MaxSpawnDelay").unwrap_or(Self::DEFAULT_MAX_SPAWN_DELAY);
-        let spawn_count = get_num("SpawnCount").unwrap_or(Self::DEFAULT_SPAWN_COUNT);
-        let spawn_range = get_num("SpawnRange").unwrap_or(Self::DEFAULT_SPAWN_RANGE);
-        let max_nearby_entities =
-            get_num("MaxNearbyEntities").unwrap_or(Self::DEFAULT_MAX_NEARBY_ENTITIES);
-        let required_player_range =
-            get_num("RequiredPlayerRange").unwrap_or(Self::DEFAULT_REQUIRED_PLAYER_RANGE);
+        let delay = get_num("Delay")
+            .unwrap_or(Self::DEFAULT_DELAY)
+            .clamp(-1, FIELD_CAP);
+        let min_delay = get_num("MinSpawnDelay")
+            .unwrap_or(Self::DEFAULT_MIN_SPAWN_DELAY)
+            .clamp(0, FIELD_CAP);
+        let max_delay = get_num("MaxSpawnDelay")
+            .unwrap_or(Self::DEFAULT_MAX_SPAWN_DELAY)
+            .clamp(min_delay, FIELD_CAP);
+        let spawn_count = get_num("SpawnCount")
+            .unwrap_or(Self::DEFAULT_SPAWN_COUNT)
+            .clamp(0, SPAWN_COUNT_CAP);
+        let spawn_range = get_num("SpawnRange")
+            .unwrap_or(Self::DEFAULT_SPAWN_RANGE)
+            .clamp(0, SPAWN_RANGE_CAP);
+        let max_nearby_entities = get_num("MaxNearbyEntities")
+            .unwrap_or(Self::DEFAULT_MAX_NEARBY_ENTITIES)
+            .clamp(0, FIELD_CAP);
+        let required_player_range = get_num("RequiredPlayerRange")
+            .unwrap_or(Self::DEFAULT_REQUIRED_PLAYER_RANGE)
+            .clamp(0, FIELD_CAP);
 
         let entity_type = nbt
             .get_compound("SpawnData")
@@ -309,5 +329,31 @@ impl BlockEntity for MobSpawnerBlockEntity {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 编辑存档可注入全域 i32：装载时必须钳制，否则 `update_spawns`
+    /// 的 `max_delay - min_delay` 与 `min_delay + 随机数` 会整数
+    /// 溢出 panic，单轮生成尝试数也会被放大到卡死 tick。
+    #[test]
+    fn extreme_nbt_values_are_clamped() {
+        let mut nbt = NbtCompound::new();
+        nbt.put_int("Delay", i32::MIN);
+        nbt.put_int("MinSpawnDelay", i32::MIN);
+        nbt.put_int("MaxSpawnDelay", i32::MAX);
+        nbt.put_int("SpawnCount", i32::MAX);
+        nbt.put_int("SpawnRange", i32::MAX);
+
+        let spawner = MobSpawnerBlockEntity::from_nbt(&nbt, BlockPos::new(0, 0, 0));
+
+        assert_eq!(spawner.delay.load(Ordering::Relaxed), -1);
+        assert_eq!(spawner.min_delay, 0);
+        assert_eq!(spawner.max_delay, i16::MAX as i32);
+        assert_eq!(spawner.spawn_count, 255);
+        assert_eq!(spawner.spawn_range, 64);
     }
 }
