@@ -20,6 +20,7 @@ use papokin_data::item_stack::ItemStack;
 use papokin_data::tag::{self, Taggable};
 use papokin_data::tracked_data;
 use papokin_data::{Block, BlockDirection};
+use papokin_inventory::entity_equipment::EntityEquipment;
 use papokin_nbt::compound::NbtCompound;
 use papokin_protocol::java::client::play::{CHeadRot, CUpdateEntityRot};
 use papokin_util::Difficulty;
@@ -307,6 +308,16 @@ impl MobEntity {
         self.set_guaranteed_drop(slot);
     }
 
+    /// 读取指定装备槽的物品（无则返回空物品堆）。
+    #[must_use]
+    pub fn get_item_in_slot(&self, slot: &EquipmentSlot) -> ItemStack {
+        self.living_entity
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(slot)
+    }
+
     fn write_drop_chances(&self, nbt: &mut NbtCompound) {
         let chances = self
             .living_entity
@@ -342,6 +353,93 @@ impl MobEntity {
         }
     }
 
+    /// 将装备映射序列化为原版 NBT 格式：`ArmorItems`/`HandItems` 始终
+    /// 写出（空槽位为空复合标签，与原版一致），`SaddleItem` 仅在鞍槽
+    /// 非空时写出（马系/猪/炽足兽等原版格式）。
+    fn write_equipment_nbt(nbt: &mut NbtCompound, equipment: &EntityEquipment) {
+        let to_compound = |slot: &EquipmentSlot| {
+            let mut compound = NbtCompound::new();
+            equipment.get(slot).write_item_stack(&mut compound);
+            papokin_nbt::tag::NbtTag::Compound(compound)
+        };
+        nbt.put(
+            "ArmorItems",
+            papokin_nbt::tag::NbtTag::List(
+                [
+                    EquipmentSlot::FEET,
+                    EquipmentSlot::LEGS,
+                    EquipmentSlot::CHEST,
+                    EquipmentSlot::HEAD,
+                ]
+                .iter()
+                .map(to_compound)
+                .collect(),
+            ),
+        );
+        nbt.put(
+            "HandItems",
+            papokin_nbt::tag::NbtTag::List(
+                [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND]
+                    .iter()
+                    .map(to_compound)
+                    .collect(),
+            ),
+        );
+        let saddle = equipment.get(&EquipmentSlot::SADDLE);
+        if !saddle.is_empty() {
+            let mut compound = NbtCompound::new();
+            saddle.write_item_stack(&mut compound);
+            nbt.put("SaddleItem", papokin_nbt::tag::NbtTag::Compound(compound));
+        }
+    }
+
+    /// 从原版 NBT 恢复装备映射。列表长度超出已知槽位的多余项被
+    /// 忽略（防伪造存档越界/panic），空物品堆不产生槽位条目。
+    fn read_equipment_nbt(nbt: &NbtCompound, equipment: &mut EntityEquipment) {
+        let read_list = |nbt: &NbtCompound,
+                         key: &str,
+                         slots: &[EquipmentSlot],
+                         equipment: &mut EntityEquipment| {
+            let Some(list) = nbt.get_list(key) else {
+                return;
+            };
+            for (index, tag) in list.iter().enumerate() {
+                let Some(slot) = slots.get(index) else {
+                    break;
+                };
+                if let Some(compound) = tag.extract_compound()
+                    && let Some(stack) = ItemStack::read_item_stack(compound)
+                    && !stack.is_empty()
+                {
+                    equipment.put(slot, stack);
+                }
+            }
+        };
+        read_list(
+            nbt,
+            "ArmorItems",
+            &[
+                EquipmentSlot::FEET,
+                EquipmentSlot::LEGS,
+                EquipmentSlot::CHEST,
+                EquipmentSlot::HEAD,
+            ],
+            equipment,
+        );
+        read_list(
+            nbt,
+            "HandItems",
+            &[EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND],
+            equipment,
+        );
+        if let Some(compound) = nbt.get_compound("SaddleItem")
+            && let Some(stack) = ItemStack::read_item_stack(compound)
+            && !stack.is_empty()
+        {
+            equipment.put(&EquipmentSlot::SADDLE, stack);
+        }
+    }
+
     pub fn tick_brain(&self, mob: &dyn Mob) {
         let world = self.living_entity.entity.world.load_full();
         let time = world.get_world_age();
@@ -353,6 +451,14 @@ impl MobEntity {
 
     pub fn write_mob_nbt(&self, nbt: &mut NbtCompound) {
         self.write_drop_chances(nbt);
+        Self::write_equipment_nbt(
+            nbt,
+            &self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         nbt.put_compound(
             "Brain",
             self.brain
@@ -377,6 +483,14 @@ impl MobEntity {
 
     pub fn read_mob_nbt(&self, nbt: &NbtCompound) {
         self.read_drop_chances(nbt);
+        Self::read_equipment_nbt(
+            nbt,
+            &mut self
+                .living_entity
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
         if let Some(no_ai) = nbt.get_bool("NoAI") {
             self.set_no_ai(no_ai);
         }
@@ -1639,4 +1753,97 @@ pub trait PathAwareEntity: Mob + Send + Sync {
 
 pub trait RangedAttackMob: Mob + Send + Sync {
     fn perform_ranged_attack(&self, target: &Arc<dyn EntityBase>, power: f32);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equipment_nbt_roundtrips_all_slots() {
+        let mut equipment = EntityEquipment::new();
+        equipment.put(
+            &EquipmentSlot::FEET,
+            ItemStack::new(1, &Item::IRON_CHESTPLATE),
+        );
+        equipment.put(&EquipmentSlot::MAIN_HAND, ItemStack::new(3, &Item::STONE));
+        equipment.put(&EquipmentSlot::SADDLE, ItemStack::new(1, &Item::SADDLE));
+
+        let mut nbt = NbtCompound::new();
+        MobEntity::write_equipment_nbt(&mut nbt, &equipment);
+
+        // 鞍仅在存在时写出（原版 SaddleItem 语义）
+        assert!(nbt.get_compound("SaddleItem").is_some());
+
+        let mut restored = EntityEquipment::new();
+        MobEntity::read_equipment_nbt(&nbt, &mut restored);
+        assert!(
+            restored
+                .get(&EquipmentSlot::FEET)
+                .are_equal(&ItemStack::new(1, &Item::IRON_CHESTPLATE))
+        );
+        assert!(
+            restored
+                .get(&EquipmentSlot::MAIN_HAND)
+                .are_equal(&ItemStack::new(3, &Item::STONE))
+        );
+        assert!(
+            restored
+                .get(&EquipmentSlot::SADDLE)
+                .are_equal(&ItemStack::new(1, &Item::SADDLE))
+        );
+        // 未涉及的槽位保持为空
+        assert!(restored.get(&EquipmentSlot::HEAD).is_empty());
+        assert!(restored.get(&EquipmentSlot::OFF_HAND).is_empty());
+    }
+
+    #[test]
+    fn empty_equipment_restores_nothing() {
+        let equipment = EntityEquipment::new();
+        let mut nbt = NbtCompound::new();
+        MobEntity::write_equipment_nbt(&mut nbt, &equipment);
+        // 空装备不写 SaddleItem，但 ArmorItems/HandItems 仍按原版写出
+        assert!(nbt.get_compound("SaddleItem").is_none());
+        assert!(nbt.get_list("ArmorItems").is_some());
+        assert!(nbt.get_list("HandItems").is_some());
+
+        let mut restored = EntityEquipment::new();
+        MobEntity::read_equipment_nbt(&nbt, &mut restored);
+        for slot in [
+            EquipmentSlot::FEET,
+            EquipmentSlot::LEGS,
+            EquipmentSlot::CHEST,
+            EquipmentSlot::HEAD,
+            EquipmentSlot::MAIN_HAND,
+            EquipmentSlot::OFF_HAND,
+            EquipmentSlot::SADDLE,
+        ] {
+            assert!(restored.get(&slot).is_empty());
+        }
+    }
+
+    #[test]
+    fn oversized_equipment_lists_are_ignored_beyond_known_slots() {
+        // 伪造/损坏存档可能带超长 ArmorItems：超出已知槽位的条目
+        // 必须被忽略而非越界。
+        let mut oversized = NbtCompound::new();
+        let mut feet_compound = NbtCompound::new();
+        ItemStack::new(1, &Item::STONE).write_item_stack(&mut feet_compound);
+        // 首格有效，其余 9 格为空复合标签：超出已知槽位的条目被忽略
+        let mut list: Vec<papokin_nbt::tag::NbtTag> =
+            vec![papokin_nbt::tag::NbtTag::Compound(feet_compound)];
+        for _ in 0..9 {
+            list.push(papokin_nbt::tag::NbtTag::Compound(NbtCompound::new()));
+        }
+        oversized.put("ArmorItems", papokin_nbt::tag::NbtTag::List(list));
+
+        let mut restored = EntityEquipment::new();
+        MobEntity::read_equipment_nbt(&oversized, &mut restored);
+        assert!(
+            restored
+                .get(&EquipmentSlot::FEET)
+                .are_equal(&ItemStack::new(1, &Item::STONE))
+        );
+        assert!(restored.get(&EquipmentSlot::HEAD).is_empty());
+    }
 }
