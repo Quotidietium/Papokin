@@ -28,6 +28,14 @@ impl JavaClient {
                 .fire_blocking(&server, &mut creative_event);
         }
         if creative_event.cancelled {
+            // 插件取消后必须全量重同步：创造客户端在发送该包时已
+            // 乐观地在本地应用了槽位变更，不重同步会让客户端继续
+            // 显示并不存在的幻影物品。
+            player
+                .player_screen_handler
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .send_content_updates();
             return Ok(());
         }
 
@@ -77,6 +85,14 @@ impl JavaClient {
         } else if is_negative && is_legal {
             // 物品掉落
             player.drop_item(item_stack);
+        } else {
+            // 非法堆叠或无效槽位：与插件取消同理，重同步以覆盖
+            // 改包客户端的乐观本地变更，避免幻影物品。
+            player
+                .player_screen_handler
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .send_content_updates();
         }
         Ok(())
     }
