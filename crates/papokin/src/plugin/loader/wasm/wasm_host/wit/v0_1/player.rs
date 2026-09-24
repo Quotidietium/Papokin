@@ -642,7 +642,10 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         value: bool,
     ) -> wasmtime::Result<()> {
         let player = player_from_resource(self, &player)?;
-        let server = self.server.as_ref().expect("服务器不可用");
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
         server
             .permission_manager
@@ -657,7 +660,10 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         node: String,
     ) -> wasmtime::Result<()> {
         let player = player_from_resource(self, &player)?;
-        let server = self.server.as_ref().expect("服务器不可用");
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
         server
             .permission_manager
@@ -672,7 +678,10 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         node: String,
     ) -> wasmtime::Result<Option<bool>> {
         let player = player_from_resource(self, &player)?;
-        let server = self.server.as_ref().expect("服务器不可用");
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
         Ok(server
             .permission_manager
@@ -2232,7 +2241,11 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                state.server.as_ref().expect("服务器不可用").clone(),
+                state
+                    .server
+                    .as_ref()
+                    .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?
+                    .clone(),
                 plugin_from_state(state)?,
             )
         };
@@ -2256,7 +2269,11 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                state.server.as_ref().expect("服务器不可用").clone(),
+                state
+                    .server
+                    .as_ref()
+                    .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?
+                    .clone(),
                 plugin_from_state(state)?,
             )
         };
@@ -2554,7 +2571,11 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                state.server.as_ref().expect("服务器不可用").clone(),
+                state
+                    .server
+                    .as_ref()
+                    .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?
+                    .clone(),
                 reason
                     .as_ref()
                     .map(|reason| text_component_from_resource(state, reason))
@@ -2596,7 +2617,11 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                state.server.as_ref().expect("服务器不可用").clone(),
+                state
+                    .server
+                    .as_ref()
+                    .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?
+                    .clone(),
                 reason
                     .as_ref()
                     .map(|reason| text_component_from_resource(state, reason))

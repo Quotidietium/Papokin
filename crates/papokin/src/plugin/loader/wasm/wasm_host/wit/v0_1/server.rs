@@ -157,11 +157,13 @@ impl papokin::plugin::server::HostServer for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
-        Ok(server
+        // 表满时经 Err 干净传播给插件调用方（trap 而非宿主 panic）：
+        // 恶意插件可反复调用列表接口刷满资源表
+        server
             .get_all_players()
             .into_iter()
-            .map(|player| self.add_player(player).expect("添加玩家资源失败"))
-            .collect())
+            .map(|player| self.add_player(player))
+            .collect()
     }
 
     async fn get_player_by_name(
@@ -254,12 +256,13 @@ impl papokin::plugin::server::HostServer for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
-        Ok(server
+        // 同上：表满时经 Err 传播
+        server
             .worlds
             .load()
             .iter()
-            .map(|world| self.add_world(world.clone()).expect("添加世界资源失败"))
-            .collect())
+            .map(|world| self.add_world(world.clone()))
+            .collect()
     }
 
     async fn get_world_by_name(
@@ -272,12 +275,14 @@ impl papokin::plugin::server::HostServer for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
 
-        Ok(server
+        // 同上：表满时经 Err 传播
+        server
             .worlds
             .load()
             .iter()
             .find(|world| world.get_world_name() == name || world.dimension.minecraft_name == name)
-            .map(|world| self.add_world(world.clone()).expect("添加世界资源失败")))
+            .map(|world| self.add_world(world.clone()))
+            .transpose()
     }
 
     async fn has_world(&mut self, _rep: Resource<Server>, name: String) -> wasmtime::Result<bool> {
