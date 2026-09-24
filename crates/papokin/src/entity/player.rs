@@ -5761,10 +5761,14 @@ impl Player {
         // 与装备槽交换钩子：仅限玩家物品栏界面，盔甲
         // 槽位 5..=8（头/胸/腿/脚）。触发方式是点击盔甲
         // 槽位（此时光标上持有可装备物品），或通过快捷栏交换
-        // 到盔甲槽位上。取消即否决此次交换。
+        // 到盔甲槽位上。取消即否决此次交换。Swap 的 button 必须
+        // 是合法快捷栏/副手索引——非法值在下游点击处理中会被
+        // 整体拒绝，若仍触发事件，插件会看到一次实际不会发生
+        // 的交换（事件语义与实际行为不符）。
+        let swap_button_is_valid = (0..9).contains(&packet.button) || packet.button == 40;
         if window_type.is_none()
             && (5..=8).contains(&slot)
-            && (matches!(packet.mode, SlotActionType::Swap)
+            && ((matches!(packet.mode, SlotActionType::Swap) && swap_button_is_valid)
                 || (matches!(packet.mode, SlotActionType::Pickup)
                     && cursor_item.as_ref().is_some_and(|cursor| {
                         !cursor.is_empty()
