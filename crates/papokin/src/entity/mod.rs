@@ -2360,20 +2360,12 @@ impl Entity {
                 Ordering::Relaxed,
             );
 
-            // 在传送前获取嵌套的乘客
-            let nested_passengers = passenger_entity
-                .passengers
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-
             passenger.teleport(position, passenger_yaw, None, dest_world.clone());
 
-            // 递归传送嵌套的乘客
-            for nested in nested_passengers {
-                let nested_entity = nested.get_entity();
-                Self::teleport_passengers_recursive(nested_entity, position, yaw_delta, dest_world);
-            }
+            // 递归处理该乘客自己的乘客。此前实现对“乘客的乘客”
+            // 只递归传送其下层乘客，漏掉了该层自身；骑乘链由
+            // add_passenger 的成环校验保证无环，递归深度有界。
+            Self::teleport_passengers_recursive(passenger_entity, position, yaw_delta, dest_world);
         }
     }
 
