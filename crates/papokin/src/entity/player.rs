@@ -5443,6 +5443,7 @@ impl Player {
             clicked_item,
             cursor_item,
             window_type,
+            handler_arc_before_events,
         ) = {
             let screen_handler_arc = self
                 .current_screen_handler
@@ -5485,6 +5486,7 @@ impl Player {
                 clicked_item,
                 cursor_item,
                 window_type,
+                screen_handler_arc.clone(),
             )
         };
 
@@ -5785,6 +5787,14 @@ impl Player {
         let mut screen_handler = screen_handler_arc
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        // 插件事件期间界面可能已被插件关闭/更换：此前的槽位与 sync_id
+        // 校验都针对旧界面，继续执行会以过期槽位索引新界面（越界
+        // panic）。界面已更换时按过期点击丢弃并全量重同步。
+        if !Arc::ptr_eq(&handler_arc_before_events, &screen_handler_arc) {
+            screen_handler.sync_state();
+            return;
+        }
 
         // 强制标志
         let is_container_slot = slot >= 0 && i32::from(slot) < container_slots as i32;
