@@ -3071,6 +3071,15 @@ impl World {
 
         let data_kept = u8::from(alive);
 
+        // 死亡重生时客户端已重置并脱离载具，服务端必须同步清理骑乘
+        // 状态：否则 vehicle 指针残留旧载具（状态分裂——客户端已步行、
+        // 服务端仍按乘客处理，后续移动包还会被套用到旧载具上）。
+        if let Some(vehicle) = player.get_entity().get_vehicle() {
+            vehicle
+                .get_entity()
+                .remove_passenger_sync(player.entity_id());
+        }
+
         let server = self.server.upgrade();
         let default_world = server.as_ref().map_or_else(
             || self.clone(),
