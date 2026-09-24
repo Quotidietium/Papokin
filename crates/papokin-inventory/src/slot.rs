@@ -212,9 +212,12 @@ pub trait Slot: Send + Sync {
     fn insert_stack_count(&self, mut stack: ItemStack, count: u8) -> ItemStack {
         if !stack.is_empty() && self.can_insert(&stack) {
             let mut stack_self = self.get_stack();
-            let min_count = count
-                .min(stack.item_count)
-                .min(self.get_max_item_count_for_stack(&stack) - stack_self.item_count);
+            // saturating_sub：槽位因存档损坏出现超堆叠时 u8 裸减会
+            // 下溢（debug panic/release 回绕为巨值继续塞入）
+            let min_count = count.min(stack.item_count).min(
+                self.get_max_item_count_for_stack(&stack)
+                    .saturating_sub(stack_self.item_count),
+            );
 
             if min_count != 0 {
                 if stack_self.is_empty() {
@@ -374,5 +377,25 @@ impl Slot for ArmorSlot {
     /// TODO: 检查绑定诅咒附魔。
     fn can_take_items(&self, _player: &dyn InventoryPlayer) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inventory::SimpleInventory;
+    use papokin_data::item::Item;
+
+    /// 超堆叠槽位（仅损坏存档/NBT 可达）插入同类物品时不得下溢：
+    /// u8 裸减在 debug 下 panic、release 下回绕为巨值继续塞入。
+    #[test]
+    fn insert_into_overstacked_slot_is_rejected_safely() {
+        let inventory = Arc::new(SimpleInventory::new(1));
+        inventory.set_stack(0, ItemStack::new(100, &Item::STONE)); // 超堆叠（上限 64）
+        let slot = NormalSlot::new(inventory.clone(), 0);
+
+        let remainder = slot.insert_stack_count(ItemStack::new(10, &Item::STONE), 10);
+        assert_eq!(remainder.item_count, 10, "超堆叠槽位不应再接受物品");
+        assert_eq!(inventory.get_stack(0).item_count, 100, "既有堆叠不得被改动");
     }
 }

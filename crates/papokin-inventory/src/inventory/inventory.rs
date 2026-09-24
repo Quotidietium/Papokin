@@ -24,12 +24,14 @@ pub trait Inventory: Send + Sync + Clearable {
     fn on_close(&self) {}
 
     fn count(&self, item: &Item) -> u8 {
-        let mut count = 0;
+        let mut count = 0u8;
 
         for i in 0..self.size() {
             let stack = self.get_stack(i);
             if stack.get_item().id == item.id {
-                count += stack.item_count;
+                // saturating_add：全背包同物品总数超过 255 时 u8 裸加
+                // 会溢出（debug panic/release 回绕）
+                count = count.saturating_add(stack.item_count);
             }
         }
 
@@ -147,5 +149,23 @@ impl Hash for ComparableInventory {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let ptr = Arc::as_ptr(&self.0);
         ptr.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inventory::SimpleInventory;
+
+    /// 全背包同物品总数超过 255 时计数必须封顶而不是溢出
+    /// （u8 裸加在 debug 下 panic、release 下回绕）。
+    #[test]
+    fn count_saturates_instead_of_overflowing() {
+        let inventory = SimpleInventory::new(9);
+        for i in 0..9 {
+            inventory.set_stack(i, ItemStack::new(64, &Item::STONE));
+        }
+        // 9×64=576，远超 u8 上限
+        assert_eq!(inventory.count(&Item::STONE), 255);
     }
 }

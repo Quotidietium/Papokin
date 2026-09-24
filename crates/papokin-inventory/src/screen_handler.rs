@@ -54,7 +54,6 @@ use papokin_protocol::{
     },
 };
 use papokin_util::text::TextComponent;
-use std::cmp::max;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::{any::Any, collections::HashMap, sync::Arc};
@@ -876,10 +875,12 @@ pub trait ScreenHandler: Send + Sync {
                             _ => 0,
                         };
                         inserting_count = inserting_count
-                            .min(max(
-                                0,
-                                slot.get_max_item_count_for_stack(&stack) - stack.item_count,
-                            ))
+                            // saturating_sub：槽位因存档损坏出现超堆叠
+                            // 时 u8 裸减会下溢（debug panic/release 回绕）
+                            .min(
+                                slot.get_max_item_count_for_stack(&stack)
+                                    .saturating_sub(stack.item_count),
+                            )
                             .min(cursor_stack.item_count);
                         if inserting_count > 0 {
                             let mut new_stack = stack.clone();
