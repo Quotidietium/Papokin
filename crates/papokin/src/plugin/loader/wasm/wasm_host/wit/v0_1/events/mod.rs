@@ -247,26 +247,43 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                 .store
                 .call_guest(move |mut guest| {
                     Box::pin(async move {
-                        let (wasm_event, server_res) = guest.with(|mut store| {
+                        let (wasm_event, server_res) = match guest.with(|mut store| {
+                            store.data_mut().begin_dispatch_guard();
                             let wasm_event = event.to_wasm_event(store.data_mut());
                             match store.data_mut().add_server(server) {
                                 Ok(resource) => Ok((wasm_event, resource)),
                                 Err(error) => {
+                                    // 降载服务器资源失败：按事件结构回收并重放
+                                    // 护栏兜底（重复删除为无害 no-op）。
                                     cleanup_event(&wasm_event, store.data_mut());
+                                    store.data_mut().end_dispatch_guard_failure();
                                     Err(error)
                                 }
                             }
-                        })?;
+                        }) {
+                            Ok(prepared) => prepared,
+                            Err(error) => return Err(error),
+                        };
                         // 降载会将这些资源转移给访客。仅当
                         // 成功返回的事件重新由宿主所有。
                         let result = guest
                             .call(function, (handler_id, server_res, wasm_event))
                             .await
                             .map(|(returned_event,)| returned_event);
-                        if let Ok(returned_event) = &result {
-                            guest.with(|mut store| {
-                                cleanup_event(returned_event, store.data_mut());
-                            });
+                        match &result {
+                            Ok(returned_event) => {
+                                guest.with(|mut store| {
+                                    cleanup_event(returned_event, store.data_mut());
+                                    store.data_mut().end_dispatch_guard_success();
+                                });
+                            }
+                            Err(_) => {
+                                // 访客 trap/panic：参数资源无人释放，重放
+                                // 护栏回收，防止失败派发把资源表刷满。
+                                guest.with(|mut store| {
+                                    store.data_mut().end_dispatch_guard_failure();
+                                });
+                            }
                         }
                         result.map(|_| ())
                     })
@@ -295,16 +312,21 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                 .store
                 .call_guest(move |mut guest| {
                     Box::pin(async move {
-                        let (wasm_event, server_res) = guest.with(|mut store| {
+                        let (wasm_event, server_res) = match guest.with(|mut store| {
+                            store.data_mut().begin_dispatch_guard();
                             let wasm_event = owned_event.to_wasm_event(store.data_mut());
                             match store.data_mut().add_server(server) {
                                 Ok(resource) => Ok((wasm_event, resource)),
                                 Err(error) => {
                                     cleanup_event(&wasm_event, store.data_mut());
+                                    store.data_mut().end_dispatch_guard_failure();
                                     Err(error)
                                 }
                             }
-                        })?;
+                        }) {
+                            Ok(prepared) => prepared,
+                            Err(error) => return Err(error),
+                        };
                         // 降载会将这些资源转移给访客。仅当
                         // 成功返回的事件重新由宿主所有。
                         let result = guest
@@ -323,14 +345,26 @@ impl<E: Payload + ToFromWasmEvent + Clone + 'static> EventHandler<E> for WasmPlu
                                         updated_event
                                             .apply_wasm_event(returned_event, store.data_mut());
                                     }));
-                                if applied.is_err() {
+                                if applied.is_ok() {
+                                    // from_wasm_event 的 consume_* 已按序消费全部
+                                    // 资源；只清空记录、不重放。
+                                    store.data_mut().end_dispatch_guard_success();
+                                } else {
                                     tracing::error!(
                                         "插件事件处理器返回了类型不匹配的事件变体；已忽略其全部修改"
                                     );
+                                    // 中途 panic 只消费了部分资源，重放护栏回收
+                                    // 其余部分。
+                                    store.data_mut().end_dispatch_guard_failure();
                                 }
                                 updated_event
                             })),
-                            Err(error) => Err(error),
+                            Err(error) => {
+                                guest.with(|mut store| {
+                                    store.data_mut().end_dispatch_guard_failure();
+                                });
+                                Err(error)
+                            }
                         }
                     })
                 })
