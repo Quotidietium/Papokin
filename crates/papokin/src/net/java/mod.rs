@@ -937,19 +937,21 @@ impl JavaClient {
                 });
             }
             id if id == SChatCommandSigned::to_id(version) => {
-                let mut signed_payload = payload;
-                let cmd =
-                    if let Ok(signed) = SChatCommandSigned::read(&mut signed_payload, &version) {
-                        signed.command.to_string()
-                    } else {
-                        SChatCommand::read(&mut payload, &version)?
-                            .command
-                            .to_string()
-                    };
+                // 签名命令包同时携带 lastSeen 确认（原版客户端把确认捆绑在
+                // 此包内），先应用到校验器再执行命令；解析失败的包不再宽容
+                // 地按无签名命令执行，直接断开。
+                let signed = SChatCommandSigned::read(&mut payload, &version)?;
+                let cmd = signed.command.to_string();
+                let ack = signed.acknowledged.to_vec();
+                let count = signed.message_count;
+                let checksum = signed.checksum;
                 let client = player.client.clone();
                 let player_c = player.clone();
                 let server_c = server.clone();
                 server.spawn_task(async move {
+                    client.apply_signed_command_last_seen(
+                        &server_c, &player_c, count, &ack, checksum,
+                    );
                     let packet = SChatCommand { command: &cmd };
                     client
                         .handle_chat_command(&player_c, &server_c, &packet)
