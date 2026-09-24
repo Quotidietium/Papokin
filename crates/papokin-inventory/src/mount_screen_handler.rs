@@ -15,10 +15,16 @@ pub struct MountScreenHandler {
     pub saddle_inventory: Arc<dyn Inventory>,
     pub armor_inventory: Arc<dyn Inventory>,
     pub inventory_columns: usize,
+    /// 是否含马铠槽。原版客户端 `HorseScreenHandler` 仅对普通马加
+    /// 马铠槽：驴/骡为鞍 + 箱格，骷髅马/僵尸马/骆驼仅鞍。服务端槽
+    /// 序必须与之一致——多一个槽会让后续全部槽位（含玩家物品栏）
+    /// 整体错位一位，点击错槽、操作错物品。
+    pub has_armor_slot: bool,
 }
 
 impl MountScreenHandler {
     pub const SLOT_SADDLE: usize = 0;
+    /// 马铠槽（仅 `has_armor_slot` 为真时存在；否则槽 1 起即箱格）。
     pub const SLOT_BODY_ARMOR: usize = 1;
     pub const SLOT_INVENTORY_START: usize = 2;
     pub const INVENTORY_ROWS: usize = 3;
@@ -28,6 +34,13 @@ impl MountScreenHandler {
         inventory_columns * Self::INVENTORY_ROWS
     }
 
+    /// 鞍/马铠占用的马侧前置槽位数（`quick_move` 分区与 `slot_count`
+    /// 依据；无甲时为 1）。
+    #[must_use]
+    pub const fn mount_slots_before_chest(has_armor_slot: bool) -> usize {
+        if has_armor_slot { 2 } else { 1 }
+    }
+
     pub fn new(
         sync_id: u8,
         player_inventory: &Arc<PlayerInventory>,
@@ -35,6 +48,7 @@ impl MountScreenHandler {
         saddle_inventory: Arc<dyn Inventory>,
         armor_inventory: Arc<dyn Inventory>,
         inventory_columns: usize,
+        has_armor_slot: bool,
     ) -> Self {
         let mut handler = Self {
             behaviour: ScreenHandlerBehaviour::new(sync_id, None),
@@ -42,6 +56,7 @@ impl MountScreenHandler {
             saddle_inventory: saddle_inventory.clone(),
             armor_inventory: armor_inventory.clone(),
             inventory_columns,
+            has_armor_slot,
         };
 
         handler.add_slot(Arc::new(ArmorSlot::new(
@@ -49,11 +64,13 @@ impl MountScreenHandler {
             0,
             EquipmentSlot::SADDLE,
         )));
-        handler.add_slot(Arc::new(ArmorSlot::new(
-            armor_inventory,
-            0,
-            EquipmentSlot::BODY,
-        )));
+        if has_armor_slot {
+            handler.add_slot(Arc::new(ArmorSlot::new(
+                armor_inventory,
+                0,
+                EquipmentSlot::BODY,
+            )));
+        }
 
         let mount_size = handler.mount_inventory.size();
         for i in 0..mount_size {
@@ -104,14 +121,16 @@ impl ScreenHandler for MountScreenHandler {
             clicked = stack.clone();
 
             let mount_container_size = self.mount_inventory.size();
-            let player_container_start = 2 + mount_container_size as i32;
+            let chest_start = Self::mount_slots_before_chest(self.has_armor_slot) as i32;
+            let player_container_start = chest_start + mount_container_size as i32;
             let total_slots = self.get_behaviour().slots.len() as i32;
 
             if slot_index < player_container_start {
                 if !self.insert_item(&mut stack, player_container_start, total_slots, true) {
                     return ItemStack::EMPTY.clone();
                 }
-            } else if self.get_behaviour().slots[1].can_insert(&stack)
+            } else if self.has_armor_slot
+                && self.get_behaviour().slots[1].can_insert(&stack)
                 && !self.get_behaviour().slots[1].has_stack()
             {
                 if !self.insert_item(&mut stack, 1, 2, false) {
@@ -124,7 +143,7 @@ impl ScreenHandler for MountScreenHandler {
                     return ItemStack::EMPTY.clone();
                 }
             } else if mount_container_size == 0
-                || !self.insert_item(&mut stack, 2, player_container_start, false)
+                || !self.insert_item(&mut stack, chest_start, player_container_start, false)
             {
                 let player_container_end = player_container_start + 27;
                 let player_hotbar_start = player_container_end;
@@ -189,6 +208,7 @@ impl NautilusInventoryScreenHandler {
                 saddle_inventory,
                 armor_inventory,
                 inventory_columns,
+                true,
             ),
         }
     }
@@ -320,6 +340,21 @@ mod tests {
             Arc::new(SimpleInventory::new(1)),
             Arc::new(SimpleInventory::new(1)),
             0,
+            true,
+        )
+    }
+
+    /// 带箱驴/骡形态的处理器：15 格箱子、5 列、无马铠槽（原版
+    /// 客户端对驴/骡不加马铠槽，槽序为鞍 + 箱格 + 玩家栏）。
+    fn donkey_handler(player_inventory: &Arc<PlayerInventory>) -> MountScreenHandler {
+        MountScreenHandler::new(
+            1,
+            player_inventory,
+            Arc::new(SimpleInventory::new(15)),
+            Arc::new(SimpleInventory::new(1)),
+            Arc::new(SimpleInventory::new(1)),
+            5,
+            false,
         )
     }
 
@@ -333,6 +368,7 @@ mod tests {
             Arc::new(SimpleInventory::new(1)),
             Arc::new(SimpleInventory::new(1)),
             5,
+            true,
         )
     }
 
@@ -438,5 +474,61 @@ mod tests {
             .map(|i| u32::from(player_inventory.get_stack(i).item_count))
             .sum();
         assert_eq!(dirt_in_player, 32, "泥土必须全部落入玩家背包");
+    }
+
+    /// 驴/骡形态：无马铠槽，槽序必须为鞍(0) + 箱格(1..=15) + 玩家
+    /// 36 格（总 52）。多出的马铠槽会使全部后续槽位错位一位
+    /// （点击错槽）——对齐原版客户端 `HorseScreenHandler`。
+    #[test]
+    fn donkey_layout_has_no_armor_slot() {
+        let player_inventory = player_inventory();
+        let mut handler = donkey_handler(&player_inventory);
+        assert_eq!(handler.get_behaviour().slots.len(), 1 + 15 + 36);
+
+        // 箱格首格是处理器槽 1（不是 2）
+        let chest = handler.mount_inventory.clone();
+        chest.set_stack(0, ItemStack::new(7, &Item::DIRT));
+        assert_eq!(
+            handler.get_behaviour().slots[1]
+                .get_cloned_stack()
+                .item_count,
+            7
+        );
+        assert_eq!(
+            handler.get_behaviour().slots[2]
+                .get_cloned_stack()
+                .item_count,
+            0
+        );
+
+        // quick_move 分区按无甲布局：玩家快捷栏物品落入箱格且守恒
+        player_inventory.set_stack(0, ItemStack::new(64, &Item::STONE));
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        // 1（鞍）+ 15（箱）+ 27（主物品栏）= 43 为快捷栏 0
+        handler.quick_move(&player, 43);
+        assert!(player_inventory.get_stack(0).is_empty(), "源槽位必须清空");
+        assert_eq!(total_stone(&handler), 64, "物品总数必须守恒");
+    }
+
+    /// 驴形态 `quick_move`：箱格物品（槽 1）移入玩家背包守恒。
+    #[test]
+    fn donkey_quick_move_chest_to_player() {
+        let player_inventory = player_inventory();
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        let mut handler = donkey_handler(&player_inventory);
+        let chest = handler.mount_inventory.clone();
+        chest.set_stack(0, ItemStack::new(16, &Item::DIRT));
+
+        handler.quick_move(&player, 1);
+
+        assert!(chest.get_stack(0).is_empty(), "箱子源槽位必须清空");
+        let dirt_in_player: u32 = (0..36)
+            .map(|i| u32::from(player_inventory.get_stack(i).item_count))
+            .sum();
+        assert_eq!(dirt_in_player, 16, "泥土必须全部落入玩家背包");
     }
 }
