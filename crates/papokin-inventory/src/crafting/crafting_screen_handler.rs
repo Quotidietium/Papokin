@@ -446,7 +446,31 @@ impl Slot for ResultSlot {
             stack.item_count as i32,
         );
         for i in 0..self.inventory.size() {
+            let before = self.inventory.get_stack(i);
+            if before.is_empty() {
+                continue;
+            }
             self.inventory.remove_stack_specific(i, 1);
+
+            // 原版合成剩余物：奶桶→桶、炖菜→碗、蜂蜜瓶→玻璃瓶等。
+            // 槽位耗尽时剩余物留置槽内；槽内仍有剩余时返还玩家物品栏
+            // （满则掉落），此前两者都被直接吞掉。
+            let Some(remainder_id) =
+                papokin_data::recipe_remainder::get_recipe_remainder_id(before.item.id)
+            else {
+                continue;
+            };
+            let Some(remainder_item) = papokin_data::item::Item::from_id(remainder_id) else {
+                continue;
+            };
+            if before.item_count == 1 {
+                self.inventory
+                    .set_stack(i, ItemStack::new(1, remainder_item));
+            } else {
+                player
+                    .get_inventory()
+                    .offer_or_drop_stack(ItemStack::new(1, remainder_item), player);
+            }
         }
         self.mark_dirty();
     }
