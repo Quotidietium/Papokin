@@ -3945,6 +3945,25 @@ impl World {
         }
         base_entity.removed.store(true, Ordering::Release);
 
+        // 原版 Entity.remove() 语义：移除前先脱离自身载具并弹出
+        // 全部乘客。否则乘客表/载具指针会残留指向已移除实体的强
+        // 引用——幽灵骑乘（客户端永久骑在已删实体上）且 Arc 无法释放。
+        if let Some(vehicle) = base_entity.get_vehicle() {
+            vehicle
+                .get_entity()
+                .remove_passenger_sync(base_entity.entity_id);
+        }
+        let passenger_ids: Vec<i32> = base_entity
+            .passengers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|passenger| passenger.get_entity().entity_id)
+            .collect();
+        for passenger_id in passenger_ids {
+            base_entity.remove_passenger_sync(passenger_id);
+        }
+
         self.spawn_state.load().remove_entity(self, entity);
         self.entity_tracker.remove_entity(entity, self);
         self.entities.rcu(|current_entities| {
@@ -3984,8 +4003,10 @@ impl World {
             .await;
 
         for entity in entities_to_remove {
-            self.entity_tracker.remove_entity(entity.as_ref(), self);
-            self.spawn_state.load().remove_entity(self, entity.as_ref());
+            // 统一走 remove_entity：区块卸载同样要清理骑乘状态（弹出
+            // 乘客、脱离载具）并置 removed 标记；实体表项已在上面的
+            // rcu 中移除，remove_entity 内的再次 retain 是无害空操作。
+            self.remove_entity(entity.as_ref());
         }
 
         for chunk_pos in &chunks_set {
