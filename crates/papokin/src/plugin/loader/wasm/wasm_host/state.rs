@@ -240,9 +240,18 @@ impl Default for PluginHostState {
 }
 
 impl PluginHostState {
+    /// 资源表硬上限：封顶恶意/劣质访客囤积句柄的内存面。到达后
+    /// `push` 返回表满错误（事件路径经软限与 `catch_unwind` 双防线
+    /// 优雅降级，其余路径按错误处理）。
+    pub const RESOURCE_TABLE_MAX_CAPACITY: usize = 8192;
+    /// 事件派发软限：到达后跳过后续派发并记日志，为单次派发预留
+    /// 余量（大服 `PlayerChatEvent.recipients` 等大事件可达数百条）。
+    pub const RESOURCE_TABLE_DISPATCH_SOFT_LIMIT: usize = 7168;
+
     #[must_use]
     pub fn new() -> Self {
-        let resource_table = ResourceTable::new();
+        let mut resource_table = ResourceTable::new();
+        resource_table.set_max_capacity(Self::RESOURCE_TABLE_MAX_CAPACITY);
         Self {
             wasi_ctx: WasiCtxBuilder::new()
                 .inherit_stdout() // 允许打印消息与错误
@@ -259,6 +268,17 @@ impl PluginHostState {
             marketplace_metadata: None,
             dispatch_guard: Vec::new(),
             dispatch_guard_depth: 0,
+        }
+    }
+
+    /// 事件派发前的软限检查：占用达到软限即应跳过派发（优雅降级
+    /// 而非让降载中途 `push` 失败 panic）。空表走 `is_empty` 快速
+    /// 路径，正常负载零遍历开销。
+    #[must_use]
+    pub fn resource_table_exceeds_dispatch_soft_limit(&mut self) -> bool {
+        !self.resource_table.is_empty() && {
+            let occupied = self.resource_table.iter_mut().count();
+            occupied >= Self::RESOURCE_TABLE_DISPATCH_SOFT_LIMIT
         }
     }
 
@@ -909,5 +929,46 @@ mod tests {
         // 护栏清空后可重复使用
         assert!(state.dispatch_guard.is_empty());
         assert_eq!(state.dispatch_guard_depth, 0);
+    }
+
+    /// 硬上限封顶：达到 `RESOURCE_TABLE_MAX_CAPACITY` 后 push 失败，
+    /// 恶意访客无法无限囤积句柄（内存封顶）。
+    #[test]
+    fn resource_table_hard_capacity_caps_hoarding() {
+        let mut state = PluginHostState::new();
+        for _ in 0..PluginHostState::RESOURCE_TABLE_MAX_CAPACITY {
+            let _resource = state
+                .resource_table
+                .push(TextComponentResource {
+                    provider: TextComponent::text("囤积"),
+                })
+                .expect("上限内 push 必须成功");
+        }
+        assert!(
+            state
+                .resource_table
+                .push(TextComponentResource {
+                    provider: TextComponent::text("溢出"),
+                })
+                .is_err(),
+            "达到硬上限后 push 必须失败"
+        );
+    }
+
+    /// 软限检查：占用低于软限时放行（含空表快速路径），压满软限
+    /// 后应触发跳过派发。
+    #[test]
+    fn dispatch_soft_limit_skips_when_table_is_full() {
+        let mut state = PluginHostState::new();
+        assert!(!state.resource_table_exceeds_dispatch_soft_limit());
+        for _ in 0..PluginHostState::RESOURCE_TABLE_DISPATCH_SOFT_LIMIT {
+            let _resource = state
+                .resource_table
+                .push(TextComponentResource {
+                    provider: TextComponent::text("占位"),
+                })
+                .expect("软限低于硬上限，push 必须成功");
+        }
+        assert!(state.resource_table_exceeds_dispatch_soft_limit());
     }
 }
