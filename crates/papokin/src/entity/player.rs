@@ -916,31 +916,43 @@ impl Player {
         let world = self.world();
         world.remove_player(self, true).await;
 
-        let cylindrical = self.watched_section.load();
+        // 断线路径：快照与复位注视段在 `watched_update_lock` 内完成，
+        // 差集挂到玩家任务链尾——必须等链上先前差集（可能来自断线前
+        // 最后一刻的 update_position）全部应用后再整体减一，否则减一
+        // 先于旧差集的加一执行，区块计数会残留为 1（无人注视却常驻
+        // 内存的泄漏）。同时把注视段复位为不可能值，拦住晚到的
+        // update_position 再为其加载区块。
+        let applied = {
+            let _serialized = self
+                .watched_update_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let radial_chunks = self
+                .watched_section
+                .load()
+                .all_chunks_within()
+                .collect::<Vec<_>>();
+            self.watched_section.store(Cylindrical::new(
+                Vector2::new(0, 0),
+                NonZero::new(1).unwrap_or(NonZero::<u8>::MIN),
+            ));
+            debug!(
+                "正在移除玩家 {}，取消监视 {} 个区块",
+                self.gameprofile.name,
+                radial_chunks.len()
+            );
+            self.dispatch_watched_update(&world, Vec::new(), radial_chunks, false)
+        };
+        if let Some(applied) = applied {
+            () = applied.await;
+        }
+
         self.clean_up_chunk_tickets(&world.level);
         if let Ok(mut sender) = self.chunk_sender.lock() {
             sender.reset();
         }
 
-        // 径向区块是玩家理论上正在观看的所有区块。
-        // 给定足够时间，所有这些区块都会在内存中。
-        let radial_chunks = cylindrical.all_chunks_within();
-
-        debug!(
-            "正在移除玩家 {}，取消监视 {} 个区块",
-            self.gameprofile.name,
-            radial_chunks.len()
-        );
-
         let level = &world.level;
-
-        // 递减被监视区块的值
-        let chunks_to_clean = level.mark_chunks_as_not_watched(radial_chunks).await;
-        // 从缓存中移除没有观察者的区块
-        if !chunks_to_clean.is_empty() {
-            world.remove_entities_in_chunks(&chunks_to_clean).await;
-            level.clean_entity_chunks(&chunks_to_clean);
-        }
         // 从所有可能已加载的区块中移除残留条目
         let cleaned_chunks = level.clean_memory();
         if !cleaned_chunks.is_empty() {
