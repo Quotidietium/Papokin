@@ -3666,13 +3666,39 @@ impl World {
     ) -> HashMap<uuid::Uuid, Arc<dyn EntityBase>> {
         let radius_squared = radius.powi(2);
 
-        self.entities
-            .load()
-            .iter()
+        // AI 目标选择等高频调用走分块索引（代价 O(候选数)）；
+        // 大半径（半径 64+，跨度超过索引阈值）回退全表线性扫描，
+        // 保证任意半径仍然正确。见 `entity_index` 模块文档。
+        let min_chunk = Vector2::new(
+            get_section_cord((pos.x - radius).floor() as i32),
+            get_section_cord((pos.z - radius).floor() as i32),
+        );
+        let max_chunk = Vector2::new(
+            get_section_cord((pos.x + radius).floor() as i32),
+            get_section_cord((pos.z + radius).floor() as i32),
+        );
+        let candidates: Box<dyn Iterator<Item = Arc<dyn EntityBase>>> = self
+            .entities_by_chunk
+            .query(min_chunk, max_chunk, 64)
+            .map_or_else(
+                || {
+                    Box::new(
+                        self.entities
+                            .load()
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                    )
+                },
+                |indexed| Box::new(indexed.into_iter()),
+            );
+
+        candidates
             .filter_map(|entity| {
                 let entity_pos = entity.get_entity().pos.load();
                 (entity_pos.squared_distance_to_vec(&pos) <= radius_squared)
-                    .then(|| (entity.get_entity().entity_uuid, entity.clone()))
+                    .then(|| (entity.get_entity().entity_uuid, entity))
             })
             .collect()
     }
