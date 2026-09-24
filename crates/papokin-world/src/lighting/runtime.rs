@@ -154,9 +154,12 @@ impl DynamicLightEngine {
         // 检查该位置当前的光照等级实际是多少
         let current_level = self.get_block_light_level(level, pos).unwrap_or(0);
 
-        // 仅当此位置尚未被重置为 0 时才传播减少
-        // 这防止被有意设为 0 的位置传播光照
-        if current_level == 0 && removed_light_level > 0 {
+        // 仅当此位置的光照不再超过被移除的等级时才传播减少：
+        // 全暗（== 0）与部分衰减（仍亮但不超过旧值，如 15 降为
+        // 10）都要把邻居的旧亮值清掉；若此位置在竞态中已被重新
+        // 点亮得更亮（> 旧值），它已不依赖旧光源，不应被波及。
+        // 调用方保证 removed_light_level > 0。
+        if current_level <= removed_light_level {
             // 此位置已被调暗，因此我们将黑暗传播给邻居
             for dir in BlockDirection::all() {
                 let neighbor_pos = pos.offset(dir.to_offset());
@@ -219,6 +222,13 @@ impl DynamicLightEngine {
             // 立即设为期望值，然后将递减操作排队以使邻居变暗
             self.set_block_light_level(level, &pos, expected_light).ok();
             self.queue_block_light_decrease(pos, current_light);
+            // 部分衰减（新值非零，如亮度 15 的光源被原地替换为 10）：
+            // 黑暗波清掉邻居的旧亮值后，必须以新值重新传播；否则
+            // 邻居会保留按旧亮度算出的过亮光照（旧 14 停留在 14 而
+            // 非 9）。汇合循环按「先减后增」迭代，两波会正确收敛。
+            if expected_light > 0 {
+                self.queue_block_light_increase(pos, expected_light);
+            }
         } else if expected_light > current_light {
             // 处理光照增加（放置光源）
             self.set_block_light_level(level, &pos, expected_light).ok();
@@ -456,6 +466,13 @@ impl DynamicLightEngine {
             // 光照减弱
             self.set_sky_light_level(level, &pos, expected_light).ok();
             self.queue_sky_light_decrease(pos, current_light);
+            // 部分衰减（新值非零，如开阔天眼下放置半透明方块）：
+            // 黑暗波会把依赖旧值的邻居清零，必须以新值重新传播，
+            // 否则周围会停留在 0（暗于正确值）。汇合循环按
+            // 「先减后增」迭代，两波会正确收敛。
+            if expected_light > 0 {
+                self.queue_sky_light_increase(pos, expected_light);
+            }
         } else if expected_light > current_light {
             // 光照增强
             self.set_sky_light_level(level, &pos, expected_light).ok();
