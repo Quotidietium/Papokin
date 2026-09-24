@@ -234,7 +234,6 @@ impl VisitedBitSet {
 pub struct LightPropagator<P: LightProvider> {
     pub(crate) queue: VecDeque<PropagationEntry>,
     pub(crate) visited: VisitedBitSet,
-    pub(crate) decrease_queue: VecDeque<(BlockPos, u8)>,
     _marker: std::marker::PhantomData<P>,
 }
 
@@ -244,7 +243,6 @@ impl<P: LightProvider> LightPropagator<P> {
         Self {
             queue: VecDeque::with_capacity(8192),
             visited: VisitedBitSet::new(),
-            decrease_queue: VecDeque::new(),
             _marker: std::marker::PhantomData,
         }
     }
@@ -252,7 +250,6 @@ impl<P: LightProvider> LightPropagator<P> {
     pub fn clear(&mut self) {
         self.queue.clear();
         self.visited.clear();
-        self.decrease_queue.clear();
     }
 
     #[expect(clippy::too_many_lines)]
@@ -377,66 +374,6 @@ impl<P: LightProvider> LightPropagator<P> {
                 }
             }
         }
-    }
-
-    pub fn process_decrease_queue(&mut self, cache: &mut Cache) {
-        let cache_x = cache.x;
-        let cache_z = cache.z;
-        let cache_size = cache.size;
-        let min_y = cache.bottom_y() as i32;
-        let max_y = min_y + cache.height() as i32;
-
-        while let Some((pos, old_val)) = self.decrease_queue.pop_front() {
-            for dir in BlockDirection::all() {
-                let neighbor_pos = pos.offset(dir.to_offset());
-
-                // 与 propagate 的垂直边界一致：越界邻居取不到光，
-                // 也不应参与递减判断（此前靠 get_light 越界返回 0 兜底）
-                let ny = neighbor_pos.0.y;
-                if ny < min_y || ny >= max_y {
-                    continue;
-                }
-
-                let (cx, _rel) = neighbor_pos.chunk_and_chunk_relative_position();
-                let rel_x = cx.x - cache_x;
-                let rel_z = cx.y - cache_z;
-
-                if rel_x < 0 || rel_x >= cache_size || rel_z < 0 || rel_z >= cache_size {
-                    continue;
-                }
-
-                let neighbor_light = P::get_light(cache, neighbor_pos);
-                if neighbor_light == 0 {
-                    continue;
-                }
-
-                let state = cache.get_block_state(&neighbor_pos.0).to_state();
-                let opacity = if state.can_occlude() {
-                    state.opacity.max(1)
-                } else {
-                    state.opacity
-                };
-
-                let predicted = P::propagate_level(old_val, opacity, dir);
-
-                if neighbor_light == predicted || neighbor_light < old_val {
-                    P::set_light(cache, neighbor_pos, 0);
-                    self.decrease_queue
-                        .push_back((neighbor_pos, neighbor_light));
-                } else if neighbor_light >= old_val {
-                    let nx = neighbor_pos.0.x;
-                    let ny = neighbor_pos.0.y;
-                    let nz = neighbor_pos.0.z;
-                    self.queue.push_back(PropagationEntry {
-                        pos: neighbor_pos,
-                        skip_direction: None,
-                    });
-                    self.visited.test_and_set(nx, ny, nz);
-                }
-            }
-        }
-
-        self.propagate(cache);
     }
 }
 
@@ -797,53 +734,6 @@ impl LightEngine {
         self.sky_light.clear();
     }
 
-    pub fn update_block_light(
-        &mut self,
-        cache: &mut Cache,
-        pos: BlockPos,
-        old_luminance: u8,
-        new_luminance: u8,
-    ) {
-        if old_luminance > new_luminance {
-            let current_light = get_block_light(cache, pos);
-            if current_light > 0 {
-                self.block_light
-                    .decrease_queue
-                    .push_back((pos, current_light));
-                set_block_light(cache, pos, 0);
-            }
-        }
-
-        if new_luminance > 0 {
-            set_block_light(cache, pos, new_luminance);
-            // 此处必须无条件入队：visited 在 propagate 开头才经 ensure_capacity
-            // 扩容重置，未扩容时 test_and_set 恒返回 false，条件入队会把
-            // 引擎生命周期内的首个光源静默丢弃（光值已写入但不传播）。
-            // 重复入队由 propagate 主循环的 test_and_set 去重。
-            self.block_light.queue.push_back(PropagationEntry {
-                pos,
-                skip_direction: None,
-            });
-        }
-    }
-
-    pub fn run_light_updates(&mut self, cache: &mut Cache) {
-        if !self.block_light.decrease_queue.is_empty() {
-            self.block_light.process_decrease_queue(cache);
-        }
-        if !self.block_light.queue.is_empty() {
-            self.block_light.propagate(cache);
-            self.block_light.visited.clear();
-        }
-        if !self.sky_light.decrease_queue.is_empty() {
-            self.sky_light.process_decrease_queue(cache);
-        }
-        if !self.sky_light.queue.is_empty() {
-            self.sky_light.propagate(cache);
-            self.sky_light.visited.clear();
-        }
-    }
-
     /// 检查方块状态用于光照遮挡的形状是否为空，与原版 `LightEngine.isEmptyShape` 一致。
     #[inline]
     #[must_use]
@@ -929,8 +819,8 @@ mod tests {
 
     #[test]
     fn visited_bitset_before_capacity_returns_false() {
-        // 引擎刚创建时位图未扩容：此时 test_and_set 恒 false、is_visited 恒 true，
-        // 这是 update_block_light 必须无条件入队的前提
+        // 位图未扩容时的语义：test_and_set 恒 false、is_visited 恒 true，
+        // 调用方不得依赖未扩容位图的 test_and_set 结果做入队决策
         let mut v = VisitedBitSet::new();
         assert!(!v.test_and_set(0, 0, 0));
         assert!(v.is_visited(0, 0, 0));
@@ -974,98 +864,5 @@ mod tests {
         // 相同容量重调 ensure_capacity 会整体清零（每次传播重置访问域）
         v.ensure_capacity(0, 0, 0, 4, 4, 4);
         assert!(!v.is_visited(3, 3, 3));
-    }
-
-    #[test]
-    fn update_block_light_propagates_from_cold_engine() {
-        let mut cache = empty_cache();
-        let mut engine = LightEngine::new();
-        let source = BlockPos(Vector3::new(0, 64, 0));
-
-        // 全新引擎的 visited 尚未扩容，修复前 test_and_set 恒 false，
-        // 首个光源会被静默丢弃（光值写入但不向邻居传播）
-        engine.update_block_light(&mut cache, source, 0, 14);
-        engine.run_light_updates(&mut cache);
-
-        assert_eq!(get_block_light(&cache, source), 14);
-        // 相邻一格衰减 1，两格衰减 2（六向 + 水平两格）
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(-1, 64, 0))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, 65, 0))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, 63, 0))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, 64, 1))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, 64, -1))),
-            13
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(2, 64, 0))),
-            12
-        );
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, 66, 0))),
-            12
-        );
-    }
-
-    #[test]
-    fn update_block_light_removal_clears_neighbors() {
-        let mut cache = empty_cache();
-        let mut engine = LightEngine::new();
-        let source = BlockPos(Vector3::new(0, 64, 0));
-
-        engine.update_block_light(&mut cache, source, 0, 14);
-        engine.run_light_updates(&mut cache);
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))),
-            13
-        );
-
-        // 撤除光源：递减波应把此前传播出去的光全部收回
-        engine.update_block_light(&mut cache, source, 14, 0);
-        engine.run_light_updates(&mut cache);
-
-        assert_eq!(get_block_light(&cache, source), 0);
-        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(1, 64, 0))), 0);
-        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(2, 64, 0))), 0);
-        assert_eq!(get_block_light(&cache, BlockPos(Vector3::new(0, 66, 0))), 0);
-    }
-
-    #[test]
-    fn update_block_light_at_vertical_edge_does_not_panic() {
-        let mut cache = empty_cache();
-        let mut engine = LightEngine::new();
-        // 世界底界：向下邻居越界，递减/递增都不应触碰越界坐标
-        let bottom = cache.bottom_y() as i32;
-        let source = BlockPos(Vector3::new(0, bottom, 0));
-
-        engine.update_block_light(&mut cache, source, 0, 14);
-        engine.run_light_updates(&mut cache);
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, bottom + 1, 0))),
-            13
-        );
-
-        engine.update_block_light(&mut cache, source, 14, 0);
-        engine.run_light_updates(&mut cache);
-        assert_eq!(
-            get_block_light(&cache, BlockPos(Vector3::new(0, bottom + 1, 0))),
-            0
-        );
     }
 }
