@@ -341,6 +341,9 @@ pub struct Player {
     pub experience_pick_up_delay: Mutex<u32>,
     pub chunk_sender: Mutex<crate::net::ChunkSender>,
     pub chunk_listener: Mutex<Receiver<(Vector2<i32>, Weak<ChunkData>)>>,
+    /// 区块网络编码缓存（按区块位置复用序列化字节），跨 tick 持久。
+    /// 条目以对区块数据的弱引用判新鲜度；容量超限时整体清空兜底。
+    pub chunk_encode_cache: Mutex<rustc_hash::FxHashMap<Vector2<i32>, crate::net::EncodedChunk>>,
     pub held_chunk_tickets: Mutex<Option<(Option<i8>, Option<i8>)>>,
     pub chunk_send_epoch: AtomicU32,
     pub has_played_before: AtomicBool,
@@ -573,6 +576,7 @@ impl Player {
                 sender
             }),
             chunk_listener: Mutex::new(world.level.chunk_listener.add_global_chunk_listener()),
+            chunk_encode_cache: Mutex::new(rustc_hash::FxHashMap::default()),
             held_chunk_tickets: Mutex::new(None),
             chunk_send_epoch: AtomicU32::new(0),
             last_sent_xp: AtomicI32::new(-1),
@@ -987,6 +991,11 @@ impl Player {
         self.chunk_send_epoch.fetch_add(1, Ordering::Relaxed);
         if let Ok(mut sender) = self.chunk_sender.lock() {
             sender.reset();
+        }
+        // 旧世界的编码缓存条目已全部作废，直接清空，
+        // 不必等容量兜底触发。
+        if let Ok(mut cache) = self.chunk_encode_cache.lock() {
+            cache.clear();
         }
     }
 
@@ -2458,8 +2467,24 @@ impl Player {
                     .map_or(0, |s| s.sent_chunks_count())
             },
             |batch| {
-                let mut per_player_cache = rustc_hash::FxHashMap::default();
-                let encoded = crate::net::ChunkSender::encode_batch(&batch, &mut per_player_cache);
+                // 跨 tick 复用的编码缓存：每个区块仅在数据变化
+                // （弱引用失效）或未缓存时重新序列化。容量超限时
+                // 整体清空兜底，防止跨世界移动无限积累。
+                const MAX_ENCODE_CACHE_ENTRIES: usize = 8192;
+
+                let mut cache_guard = self.chunk_encode_cache.try_lock().ok();
+                if let Some(cache) = cache_guard.as_deref_mut()
+                    && cache.len() > MAX_ENCODE_CACHE_ENTRIES
+                {
+                    cache.clear();
+                }
+                let encoded = cache_guard.as_deref_mut().map_or_else(
+                    || {
+                        let mut scratch = rustc_hash::FxHashMap::default();
+                        crate::net::ChunkSender::encode_batch(&batch, &mut scratch)
+                    },
+                    |cache| crate::net::ChunkSender::encode_batch(&batch, cache),
+                );
                 let current_epoch = self.chunk_send_epoch.load(Ordering::Relaxed);
                 let (sent, total_sent_chunks) = self.chunk_sender.try_lock().map_or_else(
                     |_| (Vec::new(), 0),

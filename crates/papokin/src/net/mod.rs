@@ -21,7 +21,7 @@ use uuid::Uuid;
 pub mod authentication;
 pub mod chat;
 pub mod chunk_sender;
-pub use chunk_sender::ChunkSender;
+pub use chunk_sender::{ChunkSender, EncodedChunk};
 pub mod java;
 pub mod lan_broadcast;
 pub mod packet_limiter;
