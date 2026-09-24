@@ -51,12 +51,21 @@ pub fn to_wit_nbt_tree(tag: NbtTag) -> WitNbtTree {
 }
 
 pub fn from_wit_nbt_tree(tree: &WitNbtTree) -> Result<NbtTag, String> {
+    /// 与 papokin-nbt 的 `MAX_NBT_DEPTH` 一致。宿主函数内的递归必须
+    /// 有深度上限：插件可传入数百万层的链式标签树，栈溢出无法被
+    /// `catch_unwind` 捕获，会直接中止整个服务器进程。
+    const MAX_WIT_NBT_DEPTH: usize = 512;
+
     fn read_tag(index: u32, tags: &[WitNbtTag], visiting: &mut Vec<u32>) -> Result<NbtTag, String> {
         let Some(tag) = tags.get(index as usize) else {
             return Err(format!("NBT 标签索引 {index} 越界"));
         };
         if visiting.contains(&index) {
             return Err(format!("NBT 标签树在索引 {index} 处存在循环"));
+        }
+        // visiting 每层递归恰好压入一个索引，其长度即当前深度
+        if visiting.len() >= MAX_WIT_NBT_DEPTH {
+            return Err("NBT 标签树嵌套深度超出限制".to_string());
         }
         visiting.push(index);
         let tag = match tag {
