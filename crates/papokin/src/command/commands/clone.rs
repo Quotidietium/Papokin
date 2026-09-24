@@ -88,7 +88,11 @@ impl CommandExecutor for CloneExecutor {
         let size_y = max_y - min_y + 1;
         let size_z = max_z - min_z + 1;
 
-        let volume = size_x * size_y * size_z;
+        // i32 跨度直接相乘可溢出（坐标来自命令参数，±3e7）；
+        // 转 i64 后仍用饱和乘法兜底，超界体积必然被上限拒绝。
+        let volume = i64::from(size_x)
+            .saturating_mul(i64::from(size_y))
+            .saturating_mul(i64::from(size_z));
 
         if volume > 32768 {
             return Err(TOOBIG_ERROR.create_without_context_args_slice(&[

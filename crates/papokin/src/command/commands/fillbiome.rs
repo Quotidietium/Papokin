@@ -51,9 +51,11 @@ impl CommandExecutor for FillBiomeExecutor {
         let biome_min_z = min_z >> 2;
         let biome_max_z = max_z >> 2;
 
-        let volume = (biome_max_x - biome_min_x + 1) as i64
-            * (biome_max_y - biome_min_y + 1) as i64
-            * (biome_max_z - biome_min_z + 1) as i64;
+        // 坐标来自命令参数（±3e7），跨度相乘可溢出 i64；
+        // 用饱和乘法让超界体积必然大于上限而被拒绝。
+        let volume = i64::from(biome_max_x - biome_min_x + 1)
+            .saturating_mul(i64::from(biome_max_y - biome_min_y + 1))
+            .saturating_mul(i64::from(biome_max_z - biome_min_z + 1));
 
         if volume > MAX_BIOME_BLOCKS {
             return Err(ERROR_TOOBIG.create_without_context_args_slice(&[

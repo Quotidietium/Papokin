@@ -66,7 +66,10 @@ fn fill_blocks(
     let x_span = i64::from(max_x - min_x + 1);
     let y_span = i64::from(max_y - min_y + 1);
     let z_span = i64::from(max_z - min_z + 1);
-    let area = x_span * y_span * z_span;
+    // 坐标来自命令参数（±3e7）：三个跨度直接相乘可溢出 i64
+    // （debug 构建下 panic，release 下回绕为负绕过上限检查），
+    // 用饱和乘法让超界体积必然大于上限而被拒绝。
+    let area = x_span.saturating_mul(y_span).saturating_mul(z_span);
 
     let world = source.world().clone();
     let max_block_modifications = {
