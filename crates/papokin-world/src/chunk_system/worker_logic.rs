@@ -192,32 +192,53 @@ pub async fn io_write_work(
                 match chunk {
                     Chunk::Level(chunk) => vec.push((pos, chunk)),
                     Chunk::Proto(chunk) => {
-                        let mut temp = Chunk::Proto(chunk);
-                        temp.upgrade_to_level_chunk(
-                            level_for_upgrade.world_gen.load().dimension(),
-                            &level_for_upgrade.lighting_config,
-                        );
-                        let Chunk::Level(chunk) = temp else { panic!() };
-                        vec.push((pos, chunk));
+                        // 单个区块的升级 panic 不得拖垮整个 IO 写线程：
+                        // 该线程是所有后续自动保存/卸载保存的唯一通道，
+                        // 一旦退出，脏区块将永远无法落盘（静默数据丢失，
+                        // 且仅有一条日志）。与 `run_generation` 的 panic
+                        // 捕获保持同样的防御等级；失败区块丢弃并记日志，
+                        // 该位置后续会按缺失重新生成/加载。
+                        let upgraded =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let mut temp = Chunk::Proto(chunk);
+                                temp.upgrade_to_level_chunk(
+                                    level_for_upgrade.world_gen.load().dimension(),
+                                    &level_for_upgrade.lighting_config,
+                                );
+                                let Chunk::Level(chunk) = temp else {
+                                    panic!("升级结果不是 Level 区块")
+                                };
+                                chunk
+                            }));
+                        match upgraded {
+                            Ok(chunk) => vec.push((pos, chunk)),
+                            Err(payload) => {
+                                let msg = payload
+                                    .downcast_ref::<&str>()
+                                    .copied()
+                                    .or_else(|| {
+                                        payload.downcast_ref::<String>().map(String::as_str)
+                                    })
+                                    .unwrap_or("未知的 panic 负载");
+                                error!("为保存升级区块失败（位置 {pos:?}，已丢弃该区块）：{msg}");
+                            }
+                        }
                     }
                 }
             }
             vec
         })
         .await;
-        let upgrade_failed = match upgrade_result {
-            Ok(vec) => {
-                if let Err(e) = level
-                    .chunk_saver
-                    .save_chunks(&level.level_folder, vec)
-                    .await
-                {
-                    error!("保存区块失败：{:?}", e);
-                }
-                false
-            }
-            Err(_) => true,
-        };
+        // 闭包内部已逐块 catch_unwind，JoinError 只会来自任务取消
+        // （通常为关停），此时保持退出以配合关停流程。
+        if let Ok(vec) = upgrade_result
+            && let Err(e) = level
+                .chunk_saver
+                .save_chunks(&level.level_folder, vec)
+                .await
+        {
+            error!("保存区块失败：{:?}", e);
+        }
 
         {
             let mut data = lock
@@ -241,11 +262,6 @@ pub async fn io_write_work(
             }
         }
         lock.1.notify_waiters();
-
-        if upgrade_failed {
-            error!("为保存升级区块失败");
-            break;
-        }
     }
 }
 
