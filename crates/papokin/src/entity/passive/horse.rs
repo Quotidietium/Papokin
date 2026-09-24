@@ -152,7 +152,11 @@ pub fn is_horse_armor(item: &Item) -> bool {
     item.registry_key.ends_with("_horse_armor")
 }
 
-/// 打开马系装备界面（鞍 + 马铠槽 + 可选箱子格）。
+/// 打开马系装备界面（鞍 + 可选马铠槽 + 可选箱子格）。
+///
+/// `has_armor_slot` 对齐原版客户端 `HorseScreenHandler`：仅普通马
+/// 加马铠槽（驴/骡为鞍 + 箱格，骷髅马/僵尸马/骆驼仅鞍）——服务端
+/// 槽序与客户端不一致会使全部后续槽位错位一位（点击错槽）。
 /// 鞍槽装卸时同步客户端装备渲染与 `FLAG_SADDLE`（经
 /// `Mob::set_saddled_flag`，骑乘控制与交互判定依赖该标志，
 /// 避免界面状态与实体状态分裂）。带箱驴/骡传入真实箱子物品栏。
@@ -160,6 +164,7 @@ pub fn open_equipment_screen(
     mount: &Arc<dyn EntityBase>,
     player: &Arc<Player>,
     chest_inventory: Option<Arc<dyn papokin_inventory::inventory::Inventory>>,
+    has_armor_slot: bool,
 ) {
     let Some(entity_equipment) = mount
         .get_living_entity()
@@ -204,6 +209,7 @@ pub fn open_equipment_screen(
         saddle_inventory,
         armor_inventory,
         chest_columns,
+        has_armor_slot,
     )));
     // 原版 MOUNT_SCREEN_OPEN 的 slot_count 为马侧总槽数（鞍 + 马铠 +
     // 箱子格），客户端据此构造占位物品栏；偏小会使鞍/马铠槽访问越界。
@@ -354,7 +360,7 @@ impl Mob for HorseEntity {
             let ent = &self.mob_entity.living_entity.entity;
             if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                 if self.is_tame() && !player.get_entity().is_sneaking() {
-                    open_equipment_screen(&vehicle, player, None);
+                    open_equipment_screen(&vehicle, player, None, true);
                 } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
                     ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }

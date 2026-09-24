@@ -300,7 +300,7 @@ impl Mob for MuleEntity {
                         .has_chest()
                         .then(|| self.chest_inventory.clone())
                         .map(|inventory| inventory as Arc<dyn Inventory>);
-                    super::horse::open_equipment_screen(&vehicle, player, chest_inventory);
+                    super::horse::open_equipment_screen(&vehicle, player, chest_inventory, false);
                 } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
                     ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }
