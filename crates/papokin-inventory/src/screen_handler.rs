@@ -781,7 +781,11 @@ pub trait ScreenHandler: Send + Sync {
                 .cursor_stack
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut to_pick_up = cursor_stack.get_max_stack_size() - cursor_stack.item_count;
+            // 用 saturating_sub 防御：若光标物品堆数量异常超过堆叠上限
+            // （如外部编辑的存档），裸减法会下溢 panic。
+            let mut to_pick_up = cursor_stack
+                .get_max_stack_size()
+                .saturating_sub(cursor_stack.item_count);
 
             for slot in &behavior.slots {
                 if to_pick_up == 0 {
@@ -799,7 +803,9 @@ pub trait ScreenHandler: Send + Sync {
 
                 let taken_stack = slot.safe_take(
                     item_stack.item_count.min(to_pick_up),
-                    cursor_stack.get_max_stack_size() - cursor_stack.item_count,
+                    cursor_stack
+                        .get_max_stack_size()
+                        .saturating_sub(cursor_stack.item_count),
                     player,
                 );
                 to_pick_up -= taken_stack.item_count;
