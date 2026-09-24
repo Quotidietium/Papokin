@@ -323,6 +323,19 @@ mod tests {
         )
     }
 
+    /// 带箱驴/骡形态的处理器：15 格箱子、5 列（原版 5×3 布局）。
+    fn chested_horse_handler(player_inventory: &Arc<PlayerInventory>) -> MountScreenHandler {
+        assert_eq!(MountScreenHandler::get_inventory_size(5), 15);
+        MountScreenHandler::new(
+            1,
+            player_inventory,
+            Arc::new(SimpleInventory::new(15)),
+            Arc::new(SimpleInventory::new(1)),
+            Arc::new(SimpleInventory::new(1)),
+            5,
+        )
+    }
+
     fn total_stone(handler: &MountScreenHandler) -> u32 {
         handler
             .get_behaviour()
@@ -380,5 +393,50 @@ mod tests {
             "剩余必须写回源槽位而不是源槽原封不动"
         );
         assert_eq!(total_stone(&handler), 118, "物品总数必须守恒（54+64）");
+    }
+
+    /// 带箱驴/骡形态：15 格箱子 + 5 列，shift 点击快捷栏物品必须
+    /// 落进箱子格且总量守恒（不能复制也不能凭空消失）。
+    #[test]
+    fn quick_move_moves_player_stack_into_chest_slots() {
+        let player_inventory = player_inventory();
+        player_inventory.set_stack(0, ItemStack::new(64, &Item::STONE));
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        let mut handler = chested_horse_handler(&player_inventory);
+
+        // 2（鞍+马铠）+ 15（箱子）+ 27（主物品栏）= 44 为快捷栏 0
+        handler.quick_move(&player, 44);
+
+        assert!(player_inventory.get_stack(0).is_empty(), "源槽位必须清空");
+        assert_eq!(total_stone(&handler), 64, "物品总数必须守恒");
+        let stone_only: u32 = handler.get_behaviour().slots[2..17]
+            .iter()
+            .filter(|s| s.get_cloned_stack().item.id == Item::STONE.id)
+            .map(|s| u32::from(s.get_cloned_stack().item_count))
+            .sum();
+        assert_eq!(stone_only, 64, "石头必须全部落入箱子格");
+    }
+
+    /// 带箱形态：shift 点击箱子格物品必须移入玩家背包且总量守恒。
+    #[test]
+    fn quick_move_moves_chest_stack_to_player() {
+        let player_inventory = player_inventory();
+        let player = TestPlayer {
+            inventory: player_inventory.clone(),
+        };
+        let mut handler = chested_horse_handler(&player_inventory);
+        let chest = handler.mount_inventory.clone();
+        chest.set_stack(0, ItemStack::new(32, &Item::DIRT));
+
+        // 箱子格 0 对应处理器槽位 2
+        handler.quick_move(&player, 2);
+
+        assert!(chest.get_stack(0).is_empty(), "箱子源槽位必须清空");
+        let dirt_in_player: u32 = (0..36)
+            .map(|i| u32::from(player_inventory.get_stack(i).item_count))
+            .sum();
+        assert_eq!(dirt_in_player, 32, "泥土必须全部落入玩家背包");
     }
 }

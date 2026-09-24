@@ -168,4 +168,31 @@ mod tests {
         // 9×64=576，远超 u8 上限
         assert_eq!(inventory.count(&Item::STONE), 255);
     }
+
+    /// 伪造/损坏存档可能带越界 Slot 字节：读取必须忽略越界条目
+    /// 而不是越界写入（驴/骡驮箱等固定尺寸物品栏的读取防线）。
+    #[test]
+    fn read_items_from_nbt_ignores_out_of_range_slots() {
+        let mut nbt = NbtCompound::new();
+        let mut in_range = NbtCompound::new();
+        in_range.put_byte("Slot", 1);
+        ItemStack::new(5, &Item::STONE).write_item_stack(&mut in_range);
+        let mut out_of_range = NbtCompound::new();
+        out_of_range.put_byte("Slot", 99);
+        ItemStack::new(7, &Item::DIRT).write_item_stack(&mut out_of_range);
+        nbt.put(
+            "Items",
+            NbtTag::List(vec![
+                NbtTag::Compound(in_range),
+                NbtTag::Compound(out_of_range),
+            ]),
+        );
+
+        let mut stacks = vec![ItemStack::EMPTY.clone(); 3];
+        sync_read_items_from_nbt(&nbt, &mut stacks);
+
+        assert!(stacks[0].is_empty());
+        assert_eq!(stacks[1].item_count, 5);
+        assert!(stacks[2].is_empty(), "越界 Slot 条目必须被忽略");
+    }
 }
