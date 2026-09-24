@@ -2206,6 +2206,7 @@ impl papokin::plugin::context::HostContext for PluginHostState {
                 }
             },
             children,
+            from_config: false,
         };
 
         let context_res = self

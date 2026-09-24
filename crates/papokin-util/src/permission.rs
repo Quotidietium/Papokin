@@ -24,6 +24,12 @@ pub struct Permission {
     pub default: PermissionDefault,
     /// 受此权限影响的子节点。
     pub children: HashMap<String, bool>,
+    /// 是否由 `permissions.toml` 预声明（而非代码注册）。
+    ///
+    /// 预声明的节点享有覆盖优先级：内置代码后续注册同名节点时
+    /// 跳过插入并沿用文件声明的默认值，而不是视为冲突。
+    #[serde(skip)]
+    pub from_config: bool,
 }
 
 impl Permission {
@@ -43,6 +49,7 @@ impl Permission {
             description: description.to_string(),
             default,
             children: HashMap::new(),
+            from_config: false,
         }
     }
 
@@ -102,12 +109,20 @@ impl PermissionRegistry {
     ///
     /// # Panics
     ///
-    /// 如果权限无法注册（已存在相同节点的权限）则 panic。
+    /// 如果权限无法注册则 panic。唯一的例外是同名节点由
+    /// `permissions.toml` 预声明（`from_config`）：此时跳过插入并
+    /// 沿用文件声明的默认值——服务器所有者预声明节点正是为了
+    /// 覆盖内置注册，这不构成编程错误，不得让服务器无法启动。
     ///
     /// # Parameters
     /// - `permission`：要添加的 `Permission` 实例。
     #[allow(clippy::expect_used)]
     pub fn register_permission_or_panic(&self, permission: Permission) {
+        if let Some(existing) = self.permissions.get(&permission.node)
+            && existing.from_config
+        {
+            return;
+        }
         self.register_permission(permission)
             .expect("权限应当已成功注册");
     }
@@ -450,5 +465,47 @@ impl<'de> Deserialize<'de> for PermissionLvl {
                 "Invalid value for OpLevel: {value}"
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_predeclared_node_does_not_panic_builtin_registration() {
+        let registry = PermissionRegistry::new();
+        // permissions.toml 预声明节点（from_config = true）
+        let mut declared =
+            Permission::new("papokin:command.test", "预声明", PermissionDefault::Allow);
+        declared.from_config = true;
+        registry.register_permission(declared).unwrap();
+
+        // 内置命令随后注册同名节点：不得 panic，且沿用文件声明的默认值
+        registry.register_permission_or_panic(Permission::new(
+            "papokin:command.test",
+            "内置注册",
+            PermissionDefault::Deny,
+        ));
+
+        let permission = registry.get_permission("papokin:command.test").unwrap();
+        assert_eq!(permission.default, PermissionDefault::Allow);
+    }
+
+    #[test]
+    #[should_panic(expected = "权限应当已成功注册")]
+    fn duplicate_builtin_registration_still_panics() {
+        let registry = PermissionRegistry::new();
+        registry.register_permission_or_panic(Permission::new(
+            "papokin:command.dup",
+            "第一次",
+            PermissionDefault::Deny,
+        ));
+        // 两次都来自代码注册：重复即编程错误，防呆 panic 保留
+        registry.register_permission_or_panic(Permission::new(
+            "papokin:command.dup",
+            "第二次",
+            PermissionDefault::Allow,
+        ));
     }
 }

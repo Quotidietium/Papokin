@@ -97,6 +97,7 @@ pub fn load_permissions_file(manager: &PermissionManager, path: &Path) -> Result
             let _ = manager.set_default(node, default);
         } else {
             let mut permission = Permission::new(node, &declaration.description, default);
+            permission.from_config = true;
             for (child, value) in &declaration.children {
                 permission.add_child(child, *value);
             }
