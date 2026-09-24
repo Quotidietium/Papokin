@@ -884,6 +884,10 @@ pub trait Mob: EntityBase + Send + Sync {
         rand::rng()
     }
 
+    /// 坐骑界面鞍槽装卸时同步鞍具标志（置/清 `FLAG_SADDLE`）。
+    /// 仅马系等可鞍生物覆写；默认空实现保证其余生物不受影响。
+    fn set_saddled_flag(&self, _saddled: bool) {}
+
     fn can_attack(&self, target: &crate::entity::living::LivingEntity) -> bool {
         if target.entity.entity_type == &EntityType::GHAST {
             return false;
