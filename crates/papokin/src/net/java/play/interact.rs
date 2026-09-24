@@ -39,6 +39,15 @@ impl JavaClient {
                 player.try_send_client_packet(&CSetCamera::new(entity_id));
                 return;
             }
+            // 原版 canInteractWithEntity：攻击/交互前先确认目标在
+            // 实体交互范围内，防止改过的客户端超距打击实体。
+            if !player.can_interact_with_entity(target.as_ref()) {
+                warn!(
+                    "玩家 {} 试图与超出交互范围的实体 {} 交互",
+                    player.gameprofile.name, entity_id.0
+                );
+                return;
+            }
             send_cancellable_blocking! {{
                 server;
                 PlayerInteractEntityEvent::new(
