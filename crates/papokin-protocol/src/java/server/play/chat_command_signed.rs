@@ -29,7 +29,16 @@ impl<'a> ServerPacket<'a> for SChatCommandSigned<'a> {
         let command = read.get_str_bounded_borrowed(256)?;
         let timestamp = read.get_i64_be()?;
         let salt = read.get_i64_be()?;
-        let arg_count = read.get_var_int()?.0 as usize;
+        let arg_count = read.get_var_int()?.0;
+        // arg_count 直接来自网络，不可信。每个条目至少占 257 字节
+        // （名字长度 VarInt ≥ 1 + 256 字节签名），先对照剩余包体长度
+        // 校验，避免 with_capacity 在任何读取失败之前产生巨额分配。
+        if arg_count < 0 || arg_count as usize > read.len() / 257 {
+            return Err(ReadingError::Message(format!(
+                "参数签名数量超出包体长度允许的范围：{arg_count}"
+            )));
+        }
+        let arg_count = arg_count as usize;
         let mut argument_signatures = Vec::with_capacity(arg_count);
         for _ in 0..arg_count {
             let name = read.get_str_bounded_borrowed(16)?;
