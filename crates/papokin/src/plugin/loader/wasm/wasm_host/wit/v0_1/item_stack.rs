@@ -549,10 +549,10 @@ impl HostItemStack for PluginHostState {
         res: Resource<ItemStackHandle>,
         lore: Vec<Resource<WitTextComponent>>,
     ) -> wasmtime::Result<()> {
-        let lore = lore
+        let lore: Vec<_> = lore
             .iter()
             .map(|line| text_component_from_resource(self, line))
-            .collect();
+            .collect::<wasmtime::Result<Vec<_>>>()?;
         let stack = self.get_item_stack(&res)?;
         stack.lock().await.set_lore(lore);
         Ok(())
@@ -563,7 +563,7 @@ impl HostItemStack for PluginHostState {
         res: Resource<ItemStackHandle>,
         line: Resource<WitTextComponent>,
     ) -> wasmtime::Result<()> {
-        let line = text_component_from_resource(self, &line);
+        let line = text_component_from_resource(self, &line)?;
         let stack = self.get_item_stack(&res)?;
         stack.lock().await.add_lore(line);
         Ok(())
@@ -594,7 +594,7 @@ impl HostItemStack for PluginHostState {
         let stack = self.get_item_stack(&res)?;
         let mut stack = stack.lock().await;
         if let Some(name_res) = name {
-            let name = text_component_from_resource(self, &name_res);
+            let name = text_component_from_resource(self, &name_res)?;
             if let Some((_, data)) = stack
                 .patch
                 .iter_mut()

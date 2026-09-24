@@ -351,8 +351,8 @@ impl papokin::plugin::server::HostServer for PluginHostState {
         header: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
         footer: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let header = text_component_from_resource(self, &header);
-        let footer = text_component_from_resource(self, &footer);
+        let header = text_component_from_resource(self, &header)?;
+        let footer = text_component_from_resource(self, &footer)?;
         let server = self
             .server
             .as_ref()
@@ -1297,6 +1297,7 @@ impl papokin::plugin::server::HostBanManagerWithStore<PluginHostState>
                 .reason
                 .as_ref()
                 .map(|res| text_component_from_resource(state, res))
+                .transpose()?
                 .map_or_else(
                     || "被插件封禁。".to_string(),
                     papokin_util::text::TextComponent::to_pretty_console,
@@ -1374,6 +1375,7 @@ impl papokin::plugin::server::HostBanManagerWithStore<PluginHostState>
                 .reason
                 .as_ref()
                 .map(|res| text_component_from_resource(state, res))
+                .transpose()?
                 .map_or_else(
                     || "被插件封禁。".to_string(),
                     papokin_util::text::TextComponent::to_pretty_console,

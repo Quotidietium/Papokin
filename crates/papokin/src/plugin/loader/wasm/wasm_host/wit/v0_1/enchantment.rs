@@ -15,7 +15,7 @@ impl HostEnchantmentManager for PluginHostState {
         enchantment: WitCustomEnchantment,
     ) -> wasmtime::Result<Result<(), String>> {
         let description =
-            super::player::text_component_from_resource(self, &enchantment.description);
+            super::player::text_component_from_resource(self, &enchantment.description)?;
         let entry = CustomEnchantmentEntry {
             id: enchantment.id,
             description,

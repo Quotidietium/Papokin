@@ -47,7 +47,15 @@ fn map_command_result(
                 .create_without_context(TextComponent::text("权限被拒绝")))
         }
         Err(CommandErrorWit::CommandFailed(resource)) => {
-            Err(DISPATCHER_PARSE_EXCEPTION.create_without_context(resource.consume(state).provider))
+            // consume 失败（句柄无效）时退化为普通失败信息，不让
+            // panic 跨越宿主边界。
+            match resource.consume(state) {
+                Ok(consumed) => {
+                    Err(DISPATCHER_PARSE_EXCEPTION.create_without_context(consumed.provider))
+                }
+                Err(_) => Err(DISPATCHER_PARSE_EXCEPTION
+                    .create_without_context(TextComponent::text("无效的命令资源句柄"))),
+            }
         }
     }
 }
@@ -208,9 +216,18 @@ impl SuggestionProvider for WasmCommandSuggestionProvider {
                                     let mut builder = builder;
                                     for suggestion in response.values {
                                         if let Some(tooltip) = suggestion.tooltip {
-                                            let text = tooltip.consume(store.data_mut()).provider;
-                                            builder = builder
-                                                .suggest_with_tooltip(suggestion.value, text);
+                                            // 句柄无效时退化为无提示的建议项
+                                            match tooltip.consume(store.data_mut()) {
+                                                Ok(consumed) => {
+                                                    builder = builder.suggest_with_tooltip(
+                                                        suggestion.value,
+                                                        consumed.provider,
+                                                    );
+                                                }
+                                                Err(_) => {
+                                                    builder = builder.suggest(suggestion.value);
+                                                }
+                                            }
                                         } else {
                                             builder = builder.suggest(suggestion.value);
                                         }

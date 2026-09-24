@@ -619,10 +619,13 @@ impl WasmPlugin {
     }
 }
 
+/// 将 WIT 资源句柄安全地降取为宿主资源。全部方法返回 `Result`：
+/// 插件（不可信代码）可以传入任意 rep，校验失败必须转化为 guest
+/// 可见的错误，绝不能让 panic 跨越宿主调用边界。
 pub trait DowncastResourceExt<E> {
-    fn downcast_ref<'a>(&'a self, state: &'a mut PluginHostState) -> &'a E;
-    fn downcast_mut<'a>(&'a self, state: &'a mut PluginHostState) -> &'a mut E;
-    fn consume(self, state: &mut PluginHostState) -> E;
+    fn downcast_ref<'a>(&'a self, state: &'a mut PluginHostState) -> wasmtime::Result<&'a E>;
+    fn downcast_mut<'a>(&'a self, state: &'a mut PluginHostState) -> wasmtime::Result<&'a mut E>;
+    fn consume(self, state: &mut PluginHostState) -> wasmtime::Result<E>;
 }
 
 #[cfg(test)]

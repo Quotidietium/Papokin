@@ -13,7 +13,7 @@ use crate::{
         },
     },
     plugin::loader::wasm::wasm_host::{
-        DowncastResourceExt, WasmPlugin,
+        WasmPlugin,
         state::{
             GuiResource, PlayerResource, PluginHostState, TextComponentResource, WorldResource,
         },
@@ -237,25 +237,23 @@ pub fn player_from_resource(
 pub(crate) fn text_component_from_resource(
     state: &PluginHostState,
     text: &Resource<papokin::plugin::text::TextComponent>,
-) -> papokin_util::text::TextComponent {
+) -> wasmtime::Result<papokin_util::text::TextComponent> {
     state
         .resource_table
         .get::<TextComponentResource>(&Resource::new_own(text.rep()))
-        .expect("无效的文本组件资源句柄")
-        .provider
-        .clone()
+        .map_err(|_| wasmtime::Error::msg("无效的文本组件资源句柄"))
+        .map(|resource| resource.provider.clone())
 }
 
 fn world_from_resource(
     state: &PluginHostState,
     world: &Resource<papokin::plugin::world::World>,
-) -> std::sync::Arc<crate::world::World> {
+) -> wasmtime::Result<std::sync::Arc<crate::world::World>> {
     state
         .resource_table
         .get::<WorldResource>(&Resource::new_own(world.rep()))
-        .expect("无效的世界资源句柄")
-        .provider
-        .clone()
+        .map_err(|_| wasmtime::Error::msg("无效的世界资源句柄"))
+        .map(|resource| resource.provider.clone())
 }
 
 fn plugin_from_state(state: &PluginHostState) -> wasmtime::Result<Arc<WasmPlugin>> {
@@ -317,40 +315,6 @@ pub(crate) fn parse_ban_expiry(
         }
     }
     None
-}
-
-impl DowncastResourceExt<PlayerResource> for Resource<Player> {
-    fn downcast_ref<'a>(&'a self, state: &'a mut PluginHostState) -> &'a PlayerResource {
-        state
-            .resource_table
-            .get_any_mut(self.rep())
-            .map_err(|_| wasmtime::Error::msg("无效的玩家资源句柄"))
-            .expect("有效的玩家资源句柄")
-            .downcast_ref::<PlayerResource>()
-            .ok_or("资源类型不匹配")
-            .map_err(wasmtime::Error::msg)
-            .expect("资源类型不匹配")
-    }
-
-    fn downcast_mut<'a>(&'a self, state: &'a mut PluginHostState) -> &'a mut PlayerResource {
-        state
-            .resource_table
-            .get_any_mut(self.rep())
-            .map_err(|_| wasmtime::Error::msg("无效的玩家资源句柄"))
-            .expect("有效的玩家资源句柄")
-            .downcast_mut::<PlayerResource>()
-            .ok_or("资源类型不匹配")
-            .map_err(wasmtime::Error::msg)
-            .expect("资源类型不匹配")
-    }
-
-    fn consume(self, state: &mut PluginHostState) -> PlayerResource {
-        state
-            .resource_table
-            .delete::<PlayerResource>(Resource::new_own(self.rep()))
-            .map_err(|_| wasmtime::Error::msg("无效的玩家资源句柄"))
-            .expect("无效的玩家资源句柄")
-    }
 }
 
 impl papokin::plugin::player::Host for PluginHostState {
@@ -730,7 +694,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         player: Resource<Player>,
         display_name: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let display_name = text_component_from_resource(self, &display_name);
+        let display_name = text_component_from_resource(self, &display_name)?;
         let player = player_from_resource(self, &player)?;
         player.set_display_name(Some(display_name));
         Ok(())
@@ -757,7 +721,9 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         player: Resource<Player>,
         name: Option<wasmtime::component::Resource<papokin::plugin::text::TextComponent>>,
     ) -> wasmtime::Result<()> {
-        let name = name.map(|n| text_component_from_resource(self, &n));
+        let name = name
+            .map(|n| text_component_from_resource(self, &n))
+            .transpose()?;
         let player = player_from_resource(self, &player)?;
         player.set_tab_list_name(name);
         Ok(())
@@ -769,7 +735,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         text: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
         overlay: bool,
     ) -> wasmtime::Result<()> {
-        let component = text_component_from_resource(self, &text);
+        let component = text_component_from_resource(self, &text)?;
         let player = player_from_resource(self, &player)?;
         player.send_system_message_raw(&component, overlay);
         Ok(())
@@ -1663,8 +1629,8 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         header: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
         footer: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let header = text_component_from_resource(self, &header);
-        let footer = text_component_from_resource(self, &footer);
+        let header = text_component_from_resource(self, &header)?;
+        let footer = text_component_from_resource(self, &footer)?;
         let player = player_from_resource(self, &player)?;
         player.set_tab_list_header_footer(&header, &footer);
         Ok(())
@@ -1705,7 +1671,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         player: Resource<Player>,
         text: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let component = text_component_from_resource(self, &text);
+        let component = text_component_from_resource(self, &text)?;
         let player = player_from_resource(self, &player)?;
         player.show_title(&component, &TitleMode::Title);
         Ok(())
@@ -1716,7 +1682,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         player: Resource<Player>,
         text: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let component = text_component_from_resource(self, &text);
+        let component = text_component_from_resource(self, &text)?;
         let player = player_from_resource(self, &player)?;
         player.show_title(&component, &TitleMode::SubTitle);
         Ok(())
@@ -1727,7 +1693,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
         player: Resource<Player>,
         text: wasmtime::component::Resource<papokin::plugin::text::TextComponent>,
     ) -> wasmtime::Result<()> {
-        let component = text_component_from_resource(self, &text);
+        let component = text_component_from_resource(self, &text)?;
         let player = player_from_resource(self, &player)?;
         player.show_title(&component, &TitleMode::ActionBar);
         Ok(())
@@ -2430,7 +2396,7 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                world_from_resource(state, &world),
+                world_from_resource(state, &world)?,
                 plugin_from_state(state)?,
             )
         };
@@ -2457,7 +2423,7 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                world_from_resource(state, &world),
+                world_from_resource(state, &world)?,
                 plugin_from_state(state)?,
             )
         };
@@ -2484,7 +2450,7 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
             let state = host.get();
             (
                 player_from_resource(state, &player)?,
-                world_from_resource(state, &world),
+                world_from_resource(state, &world)?,
                 plugin_from_state(state)?,
             )
         };
@@ -2591,7 +2557,8 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
                 state.server.as_ref().expect("服务器不可用").clone(),
                 reason
                     .as_ref()
-                    .map(|reason| text_component_from_resource(state, reason)),
+                    .map(|reason| text_component_from_resource(state, reason))
+                    .transpose()?,
                 plugin_from_state(state)?,
             )
         };
@@ -2632,7 +2599,8 @@ impl papokin::plugin::player::HostPlayerWithStore<PluginHostState> for HasSelf<P
                 state.server.as_ref().expect("服务器不可用").clone(),
                 reason
                     .as_ref()
-                    .map(|reason| text_component_from_resource(state, reason)),
+                    .map(|reason| text_component_from_resource(state, reason))
+                    .transpose()?,
                 plugin_from_state(state)?,
             )
         };
@@ -3091,7 +3059,8 @@ impl papokin::plugin::player::HostJavaPlayer for PluginHostState {
         let prompt_message = pack
             .prompt_message
             .as_ref()
-            .map(|p| text_component_from_resource(self, p));
+            .map(|p| text_component_from_resource(self, p))
+            .transpose()?;
 
         player
             .client
@@ -3364,7 +3333,7 @@ impl papokin::plugin::player::HostJavaPlayerWithStore<PluginHostState>
                 .map_err(|_| wasmtime::Error::msg("无效的 java-player 资源句柄"))?
                 .provider
                 .clone();
-            let reason = text_component_from_resource(state, &options.reason);
+            let reason = text_component_from_resource(state, &options.reason)?;
             let plugin = state
                 .plugin
                 .as_ref()

@@ -50,29 +50,35 @@ impl PluginHostState {
 }
 
 impl DowncastResourceExt<TextComponentResource> for wasmtime::component::Resource<TextComponent> {
-    fn downcast_ref<'a>(&'a self, state: &'a mut PluginHostState) -> &'a TextComponentResource {
+    fn downcast_ref<'a>(
+        &'a self,
+        state: &'a mut PluginHostState,
+    ) -> wasmtime::Result<&'a TextComponentResource> {
         state
             .resource_table
             .get_any_mut(self.rep())
-            .expect("无效的句柄")
-            .downcast_ref()
-            .expect("类型不匹配")
+            .map_err(|_| wasmtime::Error::msg("无效的文本组件资源句柄"))?
+            .downcast_ref::<TextComponentResource>()
+            .ok_or_else(|| wasmtime::Error::msg("资源类型不匹配"))
     }
 
-    fn downcast_mut<'a>(&'a self, state: &'a mut PluginHostState) -> &'a mut TextComponentResource {
+    fn downcast_mut<'a>(
+        &'a self,
+        state: &'a mut PluginHostState,
+    ) -> wasmtime::Result<&'a mut TextComponentResource> {
         state
             .resource_table
             .get_any_mut(self.rep())
-            .expect("无效的句柄")
-            .downcast_mut()
-            .expect("类型不匹配")
+            .map_err(|_| wasmtime::Error::msg("无效的文本组件资源句柄"))?
+            .downcast_mut::<TextComponentResource>()
+            .ok_or_else(|| wasmtime::Error::msg("资源类型不匹配"))
     }
 
-    fn consume(self, state: &mut PluginHostState) -> TextComponentResource {
+    fn consume(self, state: &mut PluginHostState) -> wasmtime::Result<TextComponentResource> {
         state
             .resource_table
             .delete(wasmtime::component::Resource::new_own(self.rep()))
-            .expect("无效的句柄")
+            .map_err(|_| wasmtime::Error::msg("无效的文本组件资源句柄"))
     }
 }
 
