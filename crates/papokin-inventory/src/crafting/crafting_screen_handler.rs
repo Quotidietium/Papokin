@@ -51,6 +51,9 @@ pub struct ResultSlot {
 pub struct RecipeResult {
     pub item_id: String,
     pub count: u8,
+    /// 嬗变配方（染色等）的输入堆叠：结果需在其上换物品 id 以保留
+    /// 组件（潜影盒内容物、收纳袋内容、自定义名称等），非嬗变配方为 None。
+    pub transmute_source: Option<ItemStack>,
 }
 
 /// 检查配方图案是否水平对称。
@@ -171,6 +174,7 @@ fn recipe_matches(
             matched.then_some(RecipeResult {
                 item_id: result.id.to_string(),
                 count: result.count,
+                transmute_source: None,
             })
         }
         GenericRecipe::Vanilla(CraftingRecipeTypes::CraftingShapeless {
@@ -198,6 +202,7 @@ fn recipe_matches(
             Some(RecipeResult {
                 item_id: result.id.to_string(),
                 count: result.count,
+                transmute_source: None,
             })
         }
         GenericRecipe::Vanilla(CraftingRecipeTypes::CraftingTransmute {
@@ -209,18 +214,31 @@ fn recipe_matches(
             if count != 2 {
                 return None;
             }
-            'item_stack: for i in 0..inventory.size() {
+            // 原版要求恰好一个输入与一个材料：两个都匹配输入（例如
+            // 两只潜影盒而无染料）不得合成。输入堆叠需记录下来，
+            // 供结果继承其组件。
+            let mut source: Option<ItemStack> = None;
+            let mut has_material = false;
+            for i in 0..inventory.size() {
                 let slot = inventory.get_stack(i);
                 if slot.is_empty() {
-                    continue 'item_stack;
+                    continue;
                 }
-                if !material.match_item(slot.item) && !input.match_item(slot.item) {
+                if source.is_none() && input.match_item(slot.item) {
+                    source = Some(slot);
+                } else if !has_material && material.match_item(slot.item) {
+                    has_material = true;
+                } else {
                     return None;
                 }
+            }
+            if source.is_none() || !has_material {
+                return None;
             }
             Some(RecipeResult {
                 item_id: result.id.to_string(),
                 count: result.count,
+                transmute_source: source,
             })
         }
         GenericRecipe::Vanilla(CraftingRecipeTypes::CraftingDecoratedPot { .. }) => {
@@ -240,6 +258,7 @@ fn recipe_matches(
             Some(RecipeResult {
                 item_id: "minecraft:decorated_pot".to_string(),
                 count: 1,
+                transmute_source: None,
             })
         }
         GenericRecipe::Dynamic(OwnedCraftingRecipe::Shaped {
@@ -291,6 +310,7 @@ fn recipe_matches(
             matched.then_some(RecipeResult {
                 item_id: result.item_id.clone(),
                 count: result.count,
+                transmute_source: None,
             })
         }
         GenericRecipe::Dynamic(OwnedCraftingRecipe::Shapeless {
@@ -318,6 +338,7 @@ fn recipe_matches(
             Some(RecipeResult {
                 item_id: result.item_id.clone(),
                 count: result.count,
+                transmute_source: None,
             })
         }
         _ => None,
@@ -414,7 +435,16 @@ impl ResultSlot {
                 .unwrap_or(&matched.item_id);
             let item = papokin_data::item::Item::from_registry_key(key)
                 .unwrap_or(&papokin_data::item::Item::AIR);
-            ItemStack::new(matched.count, item)
+            if let Some(source) = matched.transmute_source {
+                // 嬗变配方（染色潜影盒/收纳袋等）：在输入堆叠上仅更换
+                // 物品与数量，保留全部组件（内容物、自定义名称等）。
+                // copy_with_count 会生成新的堆叠 uid，避免与网格输入撞 id。
+                let mut stack = source.copy_with_count(matched.count);
+                stack.item = item;
+                stack
+            } else {
+                ItemStack::new(matched.count, item)
+            }
         } else {
             ItemStack::EMPTY.clone()
         };
