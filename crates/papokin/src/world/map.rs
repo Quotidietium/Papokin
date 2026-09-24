@@ -291,7 +291,7 @@ mod tests {
         let manager = MapManager::new();
         let ids = 0..(MapManager::MAX_TRACKED_MAPS + 8) as i32;
         for id in ids {
-            manager.create_map(id, Dimension::OVERWORLD, 0, 0, 0);
+            let _ = manager.create_map(id, Dimension::OVERWORLD, 0, 0, 0);
         }
 
         assert!(manager.maps.len() <= MapManager::MAX_TRACKED_MAPS);
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn get_map_refreshes_last_access() {
         let manager = MapManager::new();
-        manager.create_map(7, Dimension::OVERWORLD, 0, 0, 0);
+        let _ = manager.create_map(7, Dimension::OVERWORLD, 0, 0, 0);
         let before = {
             let map = manager.get_map(7).unwrap();
             let data = map.lock().unwrap();
