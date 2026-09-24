@@ -18,7 +18,7 @@ pub fn build() -> String {
     potions.sort_by_key(|(_, raw)| raw.id);
 
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));

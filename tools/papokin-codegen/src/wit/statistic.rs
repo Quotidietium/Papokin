@@ -22,7 +22,7 @@ pub fn build() -> String {
         serde_json::from_str(&stats_json).expect("解析 stats.json 失败");
 
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));

@@ -15,7 +15,7 @@ pub fn build() -> String {
     names.sort();
 
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));

@@ -12,7 +12,7 @@ pub fn build() -> String {
             .expect("解析 game_rules.json 失败");
 
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));

@@ -24,7 +24,7 @@ use std::{
 };
 
 pub const WIT_OUT_DIR: &str = "../../crates/papokin-plugin-wit/v0.1";
-pub const MAPPING_OUT_DIR: &str = "../../crates/pumpkin/src/plugin/loader/wasm/wasm_host/wit/v0_1";
+pub const MAPPING_OUT_DIR: &str = "../../crates/papokin/src/plugin/loader/wasm/wasm_host/wit/v0_1";
 
 pub fn main() {
     fs::create_dir_all(WIT_OUT_DIR).expect("创建 WIT 输出目录失败");

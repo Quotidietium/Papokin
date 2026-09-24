@@ -11,7 +11,7 @@ use wit_encoder::{
 
 pub fn build() -> String {
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));
@@ -252,6 +252,9 @@ fn collect_fields(
     named_fields
         .into_iter()
         .filter(|field| extract_type_name(&field.ty) != "DynamicRecipe")
+        // `merged` 是 CUpdateTags 的服务端内部合并标签通道，
+        // 插件侧无对应概念（静态路径 None 时字节一致），不对外暴露
+        .filter(|field| field.ident.as_ref().is_none_or(|i| i != "merged"))
         .map(|field| {
             let field_name = field.ident.as_ref().unwrap().to_string().to_kebab_case();
             let field_type = map_type_with_defined(&field.ty, Some(defined_types));

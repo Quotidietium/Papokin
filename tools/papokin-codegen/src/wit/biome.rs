@@ -14,7 +14,7 @@ pub fn build() -> String {
     biome_vec.sort();
 
     let mut package = Package::new(PackageName::new(
-        "pumpkin",
+        "papokin",
         "plugin",
         Some(Version::new(0, 1, 0)),
     ));
