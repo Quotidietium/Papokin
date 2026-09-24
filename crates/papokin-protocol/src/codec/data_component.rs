@@ -1,6 +1,7 @@
 #![allow(clippy::wildcard_imports)]
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex, RwLock};
 
@@ -17,6 +18,46 @@ use papokin_nbt::{serializer::NbtWriteHelperJava, tag::NbtTag};
 use papokin_util::version::JavaMinecraftVersion;
 
 const MAX_STATUS_EFFECTS: usize = 128;
+
+/// 嵌套物品堆组件（bundle/容器等）允许的最大递归深度。
+/// 合法客户端最多产生几层嵌套；超出即视为恶意包直接拒绝，
+/// 防止深度递归解析耗尽线程栈导致整个进程崩溃。
+const MAX_NESTED_STACK_DEPTH: u32 = 16;
+
+// clippy 1.98 的 missing_const_for_thread_local 对已是 const 块的
+// 初始化器仍会误报，此处模块级显式豁免（外层属性不穿透宏展开）。
+mod nested_stack_depth {
+    #![allow(clippy::missing_const_for_thread_local)]
+    use std::cell::Cell;
+    thread_local! {
+        /// 当前嵌套物品堆模板的解析深度。
+        pub(super) static DEPTH: Cell<u32> = const { Cell::new(0) };
+    }
+}
+use nested_stack_depth::DEPTH;
+
+/// 进入一层嵌套物品堆解析的 RAII 守卫，离开作用域时自动递减深度。
+struct NestedStackDepthGuard;
+
+impl NestedStackDepthGuard {
+    fn enter() -> Option<Self> {
+        DEPTH.with(|depth| {
+            let current = depth.get();
+            if current >= MAX_NESTED_STACK_DEPTH {
+                None
+            } else {
+                depth.set(current + 1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for NestedStackDepthGuard {
+    fn drop(&mut self) {
+        DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
 
 // ── 同步注册表 id 解析 ───────────────────────────────────────────
 //
@@ -1407,9 +1448,19 @@ fn deserialize_item_stack_template(
 ) -> Result<papokin_data::item_stack::ItemStack, ReadingError> {
     const MAX_COMPONENTS: i32 = 256;
 
+    // 嵌套物品堆（bundle/容器等组件内）按层计数，超限直接拒绝，
+    // 避免恶意包以每层约 6 字节的代价构造百万层递归导致栈溢出。
+    let Some(_depth_guard) = NestedStackDepthGuard::enter() else {
+        return Err(ReadingError::Message("嵌套物品堆深度超出允许的限制".into()));
+    };
+
     let item_id = seq.get_var_int()?.0 as u16;
 
-    let count = seq.get_var_int()?.0 as u8;
+    let count_raw = seq.get_var_int()?.0;
+    if !(0..=u8::MAX as i32).contains(&count_raw) {
+        return Err(ReadingError::Message("物品堆数量超出合法范围".into()));
+    }
+    let count = count_raw as u8;
 
     let num_to_add = seq.get_var_int()?.0;
     let num_to_remove = seq.get_var_int()?.0;
@@ -2366,7 +2417,15 @@ impl DataComponentCodec<Self> for ChargedProjectilesImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
+        const MAX_PROJECTILES: usize = 64;
+
+        let len = seq.get_var_int()?.0;
+        if len < 0 || len as usize > MAX_PROJECTILES {
+            return Err(ReadingError::Message(
+                "Too many projectiles in ChargedProjectiles".into(),
+            ));
+        }
+        let len = len as usize;
         let mut projectiles = Vec::with_capacity(len);
         for _ in 0..len {
             let _ = deserialize_item_stack_template(seq)?;
@@ -2886,7 +2945,15 @@ impl DataComponentCodec<Self> for ContainerImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
-        let len = seq.get_var_int()?.0 as usize;
+        // 上限 256：合法容器最多 27+ 槽（潜影盒等），同时保证
+        // slot as u8 不截断，并防止无界预分配。
+        const MAX_CONTAINER_ITEMS: usize = 256;
+
+        let len = seq.get_var_int()?.0;
+        if len < 0 || len as usize > MAX_CONTAINER_ITEMS {
+            return Err(ReadingError::Message("Too many items in Container".into()));
+        }
+        let len = len as usize;
         let mut items = Vec::with_capacity(len);
         for slot in 0..len {
             if seq.get_bool()? {
@@ -2992,6 +3059,65 @@ impl DataComponentCodec<Self> for BreakSoundImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 深度守卫基于线程局部计数；验证 32 层嵌套 bundle
+    /// 会被拒绝而不是无限递归导致栈溢出，且拒绝后计数归零。
+    #[test]
+    fn nested_stack_depth_is_bounded() {
+        fn push_varint(buf: &mut Vec<u8>, value: i32) {
+            let mut v = value;
+            loop {
+                let mut byte = (v & 0x7F) as u8;
+                v >>= 7;
+                if v != 0 {
+                    byte |= 0x80;
+                }
+                buf.push(byte);
+                if v == 0 {
+                    break;
+                }
+            }
+        }
+
+        let bundle_id = i32::from(DataComponent::BundleContents.to_id());
+        let mut bytes = Vec::new();
+        for _ in 0..32 {
+            // deserialize_item_stack_template 的每一层：
+            // item_id、count、新增组件数、移除组件数
+            push_varint(&mut bytes, 1);
+            push_varint(&mut bytes, 1);
+            push_varint(&mut bytes, 1);
+            push_varint(&mut bytes, 0);
+            // 组件条目：组件 id、字节长度占位（当前实现忽略）
+            push_varint(&mut bytes, bundle_id);
+            push_varint(&mut bytes, 0);
+            // BundleContentsImpl::deserialize：内嵌物品堆数量
+            push_varint(&mut bytes, 1);
+        }
+        // 最内层叶子物品堆：无组件
+        push_varint(&mut bytes, 1);
+        push_varint(&mut bytes, 1);
+        push_varint(&mut bytes, 0);
+        push_varint(&mut bytes, 0);
+
+        let mut reader = &bytes[..];
+        let result = deserialize_item_stack_template(&mut reader);
+        assert!(
+            result.is_err(),
+            "超过深度上限的嵌套物品堆必须被拒绝，而不是递归解析"
+        );
+        // 拒绝后深度计数必须归零，后续独立解析不受影响
+        let mut single = Vec::new();
+        push_varint(&mut single, 1);
+        push_varint(&mut single, 1);
+        push_varint(&mut single, 0);
+        push_varint(&mut single, 0);
+        let mut reader = &single[..];
+        assert!(
+            deserialize_item_stack_template(&mut reader).is_ok(),
+            "深度归零后应能正常解析无嵌套的物品堆"
+        );
+    }
 
     #[test]
     fn vanilla_registry_tables_match_native_data() {

@@ -302,6 +302,12 @@ impl ItemStackSerializer<'_> {
         if item_count.0 == 0 {
             return Ok(ItemStackSerializer(Cow::Borrowed(ItemStack::EMPTY)));
         }
+        // 数量直接来自网络，不可信：拒绝负值与超出 u8 的值，
+        // 避免裸截断回绕产生凭空的超量物品堆。
+        let item_count_u8: u8 = item_count
+            .0
+            .try_into()
+            .map_err(|_| ReadingError::Message("Invalid item count!".into()))?;
 
         let item_id = read.get_var_int()?;
         let num_to_add = read.get_var_int()?.0;
@@ -350,7 +356,7 @@ impl ItemStackSerializer<'_> {
 
         Ok(ItemStackSerializer(Cow::Owned(
             ItemStack::new_with_component(
-                item_count.0 as u8,
+                item_count_u8,
                 Item::from_id(item_id_u16).unwrap_or(&Item::AIR),
                 patch,
             ),
