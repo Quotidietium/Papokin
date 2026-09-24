@@ -186,8 +186,9 @@ impl RCONClient {
         }
     }
 
-    /// 返回客户端是否已关闭。
-    pub async fn handle(
+    /// 返回客户端是否已关闭。仅由本模块的 accept 循环调用，
+    /// 不对外暴露（签名含模块私有的 `AuthThrottle`）。
+    async fn handle(
         &mut self,
         server: &Arc<Server>,
         password: &str,

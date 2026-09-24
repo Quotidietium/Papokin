@@ -38,7 +38,7 @@ impl<V: ?Sized + Send + Sync + 'static> ChunkedEntityIndex<V> {
     /// 将实体插入其当前所在区块的桶。
     pub fn insert(&self, chunk: Vector2<i32>, entity: &Arc<V>) {
         let weak = Arc::downgrade(entity);
-        let mut bucket = self
+        let bucket = self
             .buckets
             .entry(chunk)
             .or_insert_with(|| Mutex::new(Vec::new()));
