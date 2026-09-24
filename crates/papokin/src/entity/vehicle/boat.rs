@@ -23,7 +23,9 @@ pub struct BoatEntity {
 }
 
 impl BoatEntity {
-    pub const fn new(entity: Entity) -> Self {
+    pub const fn new(mut entity: Entity) -> Self {
+        // 原版船最多承载 2 名乘客（add_passenger 的座位上限校验依据）。
+        entity.max_seats = 2;
         Self {
             vehicle: VehicleEntity::new(entity),
             ticks_underwater: AtomicCell::new(0.0),

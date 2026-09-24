@@ -39,7 +39,9 @@ pub struct CamelEntity {
 }
 
 impl CamelEntity {
-    pub fn new(entity: Entity) -> Arc<Self> {
+    pub fn new(mut entity: Entity) -> Arc<Self> {
+        // 原版骆驼有两个座位（add_passenger 的座位上限校验依据）。
+        entity.max_seats = 2;
         let mob_entity = MobEntity::new(entity);
         let camel = Self {
             mob_entity,
