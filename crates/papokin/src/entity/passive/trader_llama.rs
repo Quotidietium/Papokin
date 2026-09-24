@@ -4,11 +4,14 @@ use std::sync::{
 };
 
 use crossbeam::atomic::AtomicCell;
+use papokin_data::data_component_impl::EquipmentSlot;
 use papokin_data::entity::EntityType;
 use papokin_data::item::Item;
 use papokin_data::item_stack::ItemStack;
 use papokin_data::sound::{Sound, SoundCategory};
 use papokin_data::tag::{self, Taggable};
+use papokin_inventory::inventory::{Inventory, SimpleInventory};
+use papokin_inventory::llama_screen_handler::LlamaScreenHandler;
 use papokin_nbt::compound::NbtCompound;
 use papokin_protocol::codec::var_int::VarInt;
 use rand::RngExt;
@@ -80,7 +83,10 @@ pub struct TraderLlamaEntity {
     pub ageable_data: AgeableData,
     pub variant: AtomicI32,
     pub strength: AtomicI32,
-    pub carpet_color: AtomicCell<Option<u8>>,
+    /// 驮箱内容（原版带箱羊驼按 strength 3-15 格；15 格上限常驻，
+    /// 界面按 strength 截断暴露，避免 strength 变化时迁移数据）。
+    /// 驮物（地毯）不在此处：存 `BODY` 装备槽（通用 `ArmorItem` NBT）。
+    pub chest_inventory: Arc<SimpleInventory>,
     pub flags: AtomicU8,
     pub has_chest: AtomicBool,
     pub temper: AtomicI32,
@@ -99,7 +105,7 @@ impl TraderLlamaEntity {
             ageable_data: AgeableData::default(),
             variant: AtomicI32::new(variant.id()),
             strength: AtomicI32::new(strength),
-            carpet_color: AtomicCell::new(None),
+            chest_inventory: Arc::new(SimpleInventory::new(15)),
             flags: AtomicU8::new(0),
             has_chest: AtomicBool::new(false),
             temper: AtomicI32::new(0),
@@ -277,6 +283,9 @@ impl Mob for TraderLlamaEntity {
         nbt.put_int("Variant", self.get_variant().id());
         nbt.put_int("Strength", self.get_strength());
         nbt.put_bool("ChestedHorse", self.has_chest());
+        // 驮箱内容走原版 Items 列表（Slot 字节 + 物品堆），空箱不
+        // 写出；驼物（地毯）由通用装备层存 BODY 槽（ArmorItem 键）。
+        self.chest_inventory.write_inventory_nbt(nbt, false);
         nbt.put_bool("Tame", self.is_tame());
         nbt.put_int("Temper", self.temper.load(Ordering::Relaxed));
         if let Some(owner) = self.owner.load() {
@@ -295,6 +304,14 @@ impl Mob for TraderLlamaEntity {
         if let Some(chested) = nbt.get_bool("ChestedHorse") {
             self.set_has_chest(chested);
         }
+        // 恢复驮箱内容：越界 Slot 字节被忽略（防伪造存档越界写入）
+        let mut stacks = vec![ItemStack::EMPTY.clone(); self.chest_inventory.size()];
+        self.chest_inventory.read_data(nbt, &mut stacks);
+        for (index, stack) in stacks.into_iter().enumerate() {
+            if !stack.is_empty() {
+                self.chest_inventory.set_stack(index, stack);
+            }
+        }
         if let Some(tame) = nbt.get_bool("Tame") {
             self.set_tame(tame);
         }
@@ -303,6 +320,24 @@ impl Mob for TraderLlamaEntity {
         }
         if let Some(owner) = nbt.get_uuid("Owner") {
             self.owner.store(Some(owner));
+        }
+    }
+
+    fn drop_mount_chest(&self) {
+        if !self.has_chest() {
+            return;
+        }
+        // 箱子本体必掉（原版语义）；内容受 doMobLoot 游戏规则管控。
+        // 驼物（地毯）在 BODY 装备槽、必掉标记已设，走通用装备掉落。
+        self.mob_entity
+            .spawn_at_location(ItemStack::new(1, &Item::CHEST));
+        let world = self.get_entity().world.load();
+        if !world.level_info.load().game_rules.mob_drops {
+            return;
+        }
+        for index in 0..self.chest_inventory.size() {
+            let stack = self.chest_inventory.remove_stack(index);
+            self.mob_entity.spawn_at_location(stack);
         }
     }
 
@@ -356,9 +391,16 @@ impl Mob for TraderLlamaEntity {
 
         if self.is_tame()
             && !self.is_baby()
-            && let Some(color) = get_carpet_color_from_item(item)
+            && get_carpet_color_from_item(item).is_some()
+            && self
+                .mob_entity
+                .get_item_in_slot(&EquipmentSlot::BODY)
+                .is_empty()
         {
-            self.carpet_color.store(Some(color));
+            // 驼物（地毯）存入 BODY 装备槽并标记必掉：客户端经装备
+            // 同步渲染地毯（1.21.2+ 语义），死亡/界面卸下物品不湮灭。
+            self.mob_entity
+                .set_item_slot_and_drop_when_killed(&EquipmentSlot::BODY, item_stack.clone());
             item_stack.decrement_unless_creative(player.gamemode.load(), 1);
             let entity = self.get_entity();
             let world = entity.world.load();
@@ -371,12 +413,26 @@ impl Mob for TraderLlamaEntity {
         }
 
         if !self.is_baby() && !self.is_food(item_stack) {
+            // 原版交互分流：已驯服且非潜行打开驼物界面（装/卸地毯与
+            // 驮箱存取），潜行或未驯服时上马（羊驼无需鞍即可骑）。
             let world = player.world();
             let ent = &self.mob_entity.living_entity.entity;
-            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id)
-                && let Some(passenger) = world.get_player_by_id(player.entity_id())
-            {
-                ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
+            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
+                if self.is_tame() && !player.get_entity().is_sneaking() {
+                    let chest_slots = if self.has_chest() {
+                        LlamaScreenHandler::get_chest_slot_count(self.get_strength())
+                    } else {
+                        0
+                    };
+                    super::llama::open_llama_screen(
+                        &vehicle,
+                        player,
+                        self.chest_inventory.clone(),
+                        chest_slots,
+                    );
+                } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
+                    ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
+                }
                 return true;
             }
         }
