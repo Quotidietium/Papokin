@@ -136,27 +136,32 @@ macro_rules! impl_cooking_block_entity_base {
                     return false;
                 };
 
-                let is_top_items_empty = items[0].is_empty();
-                let side_item_stack = &items[2];
-
-                if side_item_stack.is_empty() {
-                    return !is_top_items_empty;
+                if items[0].is_empty() {
+                    return false;
                 }
 
-                if let Some(recipe_output_item) = papokin_data::item::Item::from_registry_key(
+                let Some(output_item) = papokin_data::item::Item::from_registry_key(
                     recipe
                         .result
                         .id
                         .strip_prefix("minecraft:")
                         .unwrap_or(&recipe.result.id),
-                ) && !is_top_items_empty
-                    && recipe_output_item.id == side_item_stack.item.id
-                    && side_item_stack.item_count < max_count
-                    && side_item_stack.item_count < side_item_stack.get_max_stack_size()
-                {
+                ) else {
+                    return false;
+                };
+                let output_stack = ItemStack::new(recipe.result.count, output_item);
+
+                let side_item_stack = &items[2];
+                if side_item_stack.is_empty() {
                     return true;
                 }
-                false
+
+                // 必须组件级一致且能容纳完整产出数量：仅比对物品 id 会让
+                // 产物槽中带有组件的同种物品（如铁砧改名锭）在产出时被
+                // 静默吞掉原料；只查 < max 会让 count > 1 的配方产出超堆叠
+                side_item_stack.are_items_and_components_equal(&output_stack)
+                    && u16::from(side_item_stack.item_count) + u16::from(recipe.result.count)
+                        <= u16::from(max_count.min(side_item_stack.get_max_stack_size()))
             }
             fn craft_recipe(&self, recipe: Option<&papokin_data::recipes::CookingRecipe>) -> bool {
                 let can_accept_output =
@@ -177,10 +182,22 @@ macro_rules! impl_cooking_block_entity_base {
                         };
                         let output_item_stack = ItemStack::new(recipe.result.count, output_item);
 
-                        if items[2].are_equal(ItemStack::EMPTY) {
+                        // 产物必须实际落槽才能消耗原料：预检（读锁）与
+                        // 此处写锁之间产物槽可能被界面线程改动，若不做
+                        // 放置确认会吞掉原料而不产出（复制/吞物缝隙）。
+                        let placed = if items[2].are_equal(ItemStack::EMPTY) {
                             items[2] = output_item_stack;
+                            true
                         } else if items[2].are_items_and_components_equal(&output_item_stack) {
-                            items[2].increment(1);
+                            // 叠加完整产出数量：数据包配方 result.count 可大于 1，
+                            // 只加 1 会让原料消耗与产出不守恒
+                            items[2].increment(recipe.result.count);
+                            true
+                        } else {
+                            false
+                        };
+                        if !placed {
+                            return false;
                         }
 
                         // 跟踪配方使用情况以计算经验值（原版 RecipesUsed 格式）
@@ -691,4 +708,130 @@ macro_rules! impl_block_entity_for_cooking {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use papokin_data::item::Item;
+    use papokin_data::recipes::{
+        CookingRecipe, CookingRecipeKind, RecipeCategoryTypes, RecipeIngredientTypes,
+        RecipeResultStruct, get_cooking_recipe_with_ingredient,
+    };
+    use papokin_util::math::position::BlockPos;
+
+    use super::*;
+    use crate::block::entities::furnace::FurnaceBlockEntity;
+
+    fn furnace_with(input: ItemStack, output: ItemStack) -> FurnaceBlockEntity {
+        let entity = FurnaceBlockEntity::new(BlockPos::new(0, 0, 0));
+        let mut items = entity.items.write().unwrap();
+        items[0] = input;
+        items[2] = output;
+        drop(items);
+        entity
+    }
+
+    fn raw_iron_recipe() -> &'static CookingRecipe {
+        get_cooking_recipe_with_ingredient(&Item::RAW_IRON, CookingRecipeKind::Smelting)
+            .expect("粗铁烧炼配方必须存在")
+    }
+
+    /// 基本守恒：空产物槽时产出一个结果、原料恰减一，并记录配方用量。
+    #[test]
+    fn craft_recipe_consumes_one_input_and_produces_result() {
+        let entity = furnace_with(ItemStack::new(3, &Item::RAW_IRON), ItemStack::EMPTY.clone());
+        assert!(entity.craft_recipe(Some(raw_iron_recipe())));
+        let items = entity.items.read().unwrap();
+        assert_eq!(items[0].item_count, 2);
+        assert_eq!(items[2].item.id, Item::IRON_INGOT.id);
+        assert_eq!(items[2].item_count, 1);
+        drop(items);
+        assert_eq!(entity.recipes_used.lock().unwrap().values().sum::<u32>(), 1);
+    }
+
+    /// 数据包配方 result.count 可大于 1：叠加时必须加上完整数量，
+    /// 否则原料消耗与产出不守恒。
+    #[test]
+    fn craft_recipe_stacks_full_result_count() {
+        let multi_recipe = CookingRecipe {
+            recipe_id: "test:multi_output",
+            category: RecipeCategoryTypes::Misc,
+            group: None,
+            ingredient: RecipeIngredientTypes::Simple("minecraft:raw_iron"),
+            cookingtime: 100,
+            experience: 0.0,
+            result: RecipeResultStruct {
+                id: "minecraft:iron_ingot",
+                count: 4,
+            },
+        };
+        let entity = furnace_with(
+            ItemStack::new(2, &Item::RAW_IRON),
+            ItemStack::new(1, &Item::IRON_INGOT),
+        );
+        assert!(entity.craft_recipe(Some(&multi_recipe)));
+        let items = entity.items.read().unwrap();
+        assert_eq!(items[2].item_count, 5, "1 已有 + 4 产出");
+        assert_eq!(items[0].item_count, 1);
+    }
+
+    /// 产物槽剩余空间不足完整产出时必须拒绝，不得造成超堆叠。
+    #[test]
+    fn craft_recipe_rejects_when_output_cannot_fit_full_count() {
+        let multi_recipe = CookingRecipe {
+            recipe_id: "test:multi_output",
+            category: RecipeCategoryTypes::Misc,
+            group: None,
+            ingredient: RecipeIngredientTypes::Simple("minecraft:raw_iron"),
+            cookingtime: 100,
+            experience: 0.0,
+            result: RecipeResultStruct {
+                id: "minecraft:iron_ingot",
+                count: 4,
+            },
+        };
+        let entity = furnace_with(
+            ItemStack::new(2, &Item::RAW_IRON),
+            ItemStack::new(62, &Item::IRON_INGOT),
+        );
+        assert!(
+            !entity.craft_recipe(Some(&multi_recipe)),
+            "62 + 4 超过 64 上限时必须拒绝"
+        );
+        let items = entity.items.read().unwrap();
+        assert_eq!(items[0].item_count, 2, "拒绝时原料不得消耗");
+        assert_eq!(items[2].item_count, 62);
+    }
+
+    /// 产物槽是同种物品但带组件（如铁砧改名锭）时不得产出：
+    /// 仅比对物品 id 会让产出无处落槽而吞掉原料。
+    #[test]
+    fn craft_recipe_rejects_component_mismatched_output() {
+        let mut renamed = ItemStack::new(1, &Item::IRON_INGOT);
+        renamed
+            .get_data_component_mut::<papokin_data::data_component_impl::ItemNameImpl>()
+            .expect("默认组件应存在")
+            .name = "改名铁锭".into();
+        let entity = furnace_with(ItemStack::new(2, &Item::RAW_IRON), renamed);
+        assert!(!entity.craft_recipe(Some(raw_iron_recipe())));
+        let items = entity.items.read().unwrap();
+        assert_eq!(items[0].item_count, 2, "拒绝时原料不得消耗");
+        assert_eq!(items[2].item_count, 1);
+    }
+
+    /// 烧炼经验按配方累计：粗铁 0.7 xp/个，两个后 floor(1.4) = 1，
+    /// 提取后映射必须清空（原版 `RecipesUsed` 语义）。
+    #[test]
+    fn experience_accumulates_per_recipe_and_clears_on_extract() {
+        let entity = furnace_with(ItemStack::new(4, &Item::RAW_IRON), ItemStack::EMPTY.clone());
+        let recipe = raw_iron_recipe();
+        assert!(entity.craft_recipe(Some(recipe)));
+        assert!(entity.craft_recipe(Some(recipe)));
+        assert_eq!(entity.extract_experience_from_recipes(), 1);
+        assert!(
+            entity.recipes_used.lock().unwrap().is_empty(),
+            "提取后配方用量映射必须清空"
+        );
+        assert_eq!(entity.extract_experience_from_recipes(), 0);
+    }
 }
