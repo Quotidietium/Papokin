@@ -2,7 +2,9 @@ use crate::entity::player::Player;
 use dashmap::DashMap;
 use papokin_data::dimension::Dimension;
 use papokin_util::math::{position::BlockPos, vector2::Vector2};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub struct MapManager {
     pub maps: DashMap<i32, Arc<Mutex<MapData>>>,
@@ -15,6 +17,13 @@ impl Default for MapManager {
 }
 
 impl MapManager {
+    /// 内存中保留的地图数据上限。每张地图含 128×128 颜色数组
+    /// （16 KiB），普通玩家用空地图右键即可高频创建新地图（无
+    /// 权限门槛），无上界会让恶意玩家以约 0.5 MiB/s 的速度耗尽
+    /// 内存。超出后按最近访问时间驱逐，活跃地图每刻都会被持图
+    /// 玩家的 `get_map` 刷新访问时间，不会被误驱逐。
+    pub const MAX_TRACKED_MAPS: usize = 2048;
+
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -24,7 +33,15 @@ impl MapManager {
 
     #[must_use]
     pub fn get_map(&self, id: i32) -> Option<Arc<Mutex<MapData>>> {
-        self.maps.get(&id).map(|m| m.clone())
+        // 刷新访问时间供上界驱逐使用；try_lock 失败说明正被
+        // 持有（活跃中），跳过即可，驱逐时同样视其为活跃。
+        if let Some(map) = self.maps.get(&id) {
+            if let Ok(data) = map.value().try_lock() {
+                data.last_access.store(current_millis(), Ordering::Relaxed);
+            }
+            return Some(map.value().clone());
+        }
+        None
     }
 
     #[must_use]
@@ -38,8 +55,44 @@ impl MapManager {
     ) -> Arc<Mutex<MapData>> {
         let map = Arc::new(Mutex::new(MapData::new(dimension, x, z, scale)));
         self.maps.insert(id, map.clone());
+        if self.maps.len() > Self::MAX_TRACKED_MAPS {
+            self.evict_stale_maps();
+        }
         map
     }
+
+    /// 超出上限时逐出最久未访问的地图数据。正被他人持锁的地图
+    /// 视为活跃（跳过）；无候选可逐时立即返回，避免死循环。
+    fn evict_stale_maps(&self) {
+        while self.maps.len() > Self::MAX_TRACKED_MAPS {
+            let now = current_millis();
+            let mut oldest: Option<(i32, i64)> = None;
+            for entry in &self.maps {
+                let last = match entry.value().try_lock() {
+                    Ok(data) => data.last_access.load(Ordering::Relaxed),
+                    Err(_) => {
+                        // 正被持有：视为活跃，绝不作为驱逐候选
+                        continue;
+                    }
+                };
+                // 荒谬的未来时间戳按当前时间处理，防止其永久免疫驱逐
+                let last = if last > now { now } else { last };
+                if oldest.is_none_or(|(_, best)| last < best) {
+                    oldest = Some((*entry.key(), last));
+                }
+            }
+            let Some((victim, _)) = oldest else {
+                break;
+            };
+            self.maps.remove(&victim);
+        }
+    }
+}
+
+fn current_millis() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 pub struct MapData {
@@ -52,6 +105,8 @@ pub struct MapData {
     pub decorations: Vec<MapDecoration>,
     pub dirty: bool,
     pub fully_updated: bool,
+    /// 最近一次被访问的毫秒时间戳，供上界驱逐排序使用。
+    pub last_access: AtomicI64,
 }
 
 impl MapData {
@@ -67,6 +122,7 @@ impl MapData {
             decorations: Vec::new(),
             dirty: true,
             fully_updated: false,
+            last_access: AtomicI64::new(current_millis()),
         }
     }
 
@@ -221,4 +277,49 @@ pub struct MapDecoration {
     pub z: i8,
     pub direction: i8,
     pub display_name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use papokin_data::dimension::Dimension;
+
+    /// 超出上限后逐出最旧条目：总量回到上限内，最新创建的保留，
+    /// 被显式标记为最久未访问的必被逐出。
+    #[test]
+    fn stale_maps_are_evicted_beyond_cap() {
+        let manager = MapManager::new();
+        let ids = 0..(MapManager::MAX_TRACKED_MAPS + 8) as i32;
+        for id in ids {
+            manager.create_map(id, Dimension::OVERWORLD, 0, 0, 0);
+        }
+
+        assert!(manager.maps.len() <= MapManager::MAX_TRACKED_MAPS);
+        // 最新创建的地图必须保留
+        assert!(
+            manager
+                .maps
+                .contains_key(&(MapManager::MAX_TRACKED_MAPS as i32 + 7))
+        );
+    }
+
+    /// `get_map` 会刷新访问时间戳，供驱逐排序区分新旧。
+    #[test]
+    fn get_map_refreshes_last_access() {
+        let manager = MapManager::new();
+        manager.create_map(7, Dimension::OVERWORLD, 0, 0, 0);
+        let before = {
+            let map = manager.get_map(7).unwrap();
+            let data = map.lock().unwrap();
+            data.last_access.fetch_sub(10_000, Ordering::Relaxed)
+        };
+
+        drop(manager.get_map(7));
+
+        let map = manager.get_map(7).unwrap();
+        let data = map.lock().unwrap();
+        // touch 后时间戳必须回到被人为拨旧的值之上（同毫秒内
+        // 创建与访问相等，故不能断言严格大于创建时刻）。
+        assert!(data.last_access.load(Ordering::Relaxed) > before - 10_000);
+    }
 }
