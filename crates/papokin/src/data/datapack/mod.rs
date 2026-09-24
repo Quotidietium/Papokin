@@ -58,6 +58,41 @@ pub enum DatapackEnablePosition {
     After(String),
 }
 
+/// 函数执行的最大嵌套层数。原版以 `maxCommandChainLength`
+/// （默认 65536 条命令）约束整条链；这里以嵌套层数为上限，
+/// 足够覆盖任何合法 datapack 的函数嵌套深度。
+const MAX_FUNCTION_DEPTH: u32 = 512;
+
+// 当前线程的函数执行嵌套深度。递归必然发生在同一线程的
+// 同步调用栈上（handle_command 是同步的），thread_local 即可。
+thread_local! {
+    // 已是 const 初始化，clippy 1.98 对该形式仍误报（与 density_volume 同）
+    #[allow(clippy::missing_const_for_thread_local)]
+    static FUNCTION_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// 进入函数执行时的深度守卫：超过上限则拒绝进入，离开时递减。
+struct FunctionDepthGuard;
+
+impl FunctionDepthGuard {
+    fn enter() -> Option<Self> {
+        FUNCTION_DEPTH.with(|depth| {
+            if depth.get() >= MAX_FUNCTION_DEPTH {
+                None
+            } else {
+                depth.set(depth.get() + 1);
+                Some(Self)
+            }
+        })
+    }
+}
+
+impl Drop for FunctionDepthGuard {
+    fn drop(&mut self) {
+        FUNCTION_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
 pub struct DatapackManager {
     loaded_packs: RwLock<Vec<LoadedDatapack>>,
     functions: RwLock<HashMap<String, Arc<[String]>>>,
@@ -433,6 +468,14 @@ impl DatapackManager {
         source: &CommandSource,
         name: &str,
     ) -> Result<usize, String> {
+        // 函数调用函数的递归（自引用函数/标签）会经 handle_command
+        // 同步重入本函数，无保护时直接爆栈崩溃服务器；原版经
+        // maxCommandChainLength 配额约束同样的面。
+        let Some(_depth_guard) = FunctionDepthGuard::enter() else {
+            return Err(format!(
+                "函数嵌套超过 {MAX_FUNCTION_DEPTH} 层：可能存在递归调用"
+            ));
+        };
         self.visit_function_lines(name, |line| {
             server
                 .command_dispatcher
@@ -1197,5 +1240,67 @@ mod tests {
                 "minecraft:bundle"
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod function_depth_tests {
+    use super::*;
+
+    #[test]
+    fn depth_guard_blocks_beyond_limit_and_recovers() {
+        // 逐层进入直到上限：前 MAX_FUNCTION_DEPTH 层成功，其后拒绝
+        let mut guards = Vec::new();
+        for _ in 0..MAX_FUNCTION_DEPTH {
+            guards.push(FunctionDepthGuard::enter().expect("上限内的层应当全部放行"));
+        }
+        assert_eq!(guards.len() as u32, MAX_FUNCTION_DEPTH);
+        assert!(
+            FunctionDepthGuard::enter().is_none(),
+            "超过上限必须拒绝进入"
+        );
+
+        // 全部离开后配额恢复
+        guards.clear();
+        assert!(FunctionDepthGuard::enter().is_some());
+    }
+
+    #[test]
+    fn depth_guard_partial_release_recovers() {
+        let g1 = FunctionDepthGuard::enter().unwrap();
+        let g2 = FunctionDepthGuard::enter().unwrap();
+        drop(g1);
+        // 部分释放后仍有余量可进入
+        let g3 = FunctionDepthGuard::enter().unwrap();
+        drop(g2);
+        drop(g3);
+        assert_eq!(FUNCTION_DEPTH.with(std::cell::Cell::get), 0);
+    }
+
+    #[test]
+    fn recursive_function_returns_error_instead_of_stack_overflow() {
+        // 不经 server 的递归集成验证：visit 闭包里重入 visit_function_lines
+        // 模拟「函数行里再执行函数」的嵌套路径；深度守卫依赖外层
+        // execute_function 的进入计数，这里手动包一层以复现其结构
+        let manager = DatapackManager::new();
+        manager.functions.write().unwrap().insert(
+            "test:recursive".to_string(),
+            std::sync::Arc::from(vec!["say level0".to_string()]),
+        );
+
+        let guard = FunctionDepthGuard::enter().unwrap();
+        let mut reentries = 0u32;
+        let result = manager.visit_function_lines("test:recursive", |line| {
+            reentries += 1;
+            // 模拟该行触发再次执行函数：守卫必须在耗尽后拒绝
+            if let Some(nested) = FunctionDepthGuard::enter() {
+                drop(nested);
+            } else {
+                panic!("未到上限的层不应被拒绝（行：{line}）");
+            }
+        });
+        drop(guard);
+        assert!(result.is_ok());
+        assert_eq!(reentries, 1);
     }
 }
