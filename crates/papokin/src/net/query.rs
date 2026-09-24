@@ -17,6 +17,11 @@ use tracing::{error, info};
 
 use crate::{SHOULD_STOP, STOP_INTERRUPT, server::Server};
 
+/// 挑战令牌表上限。UDP 可伪造源 IP，若无上限，攻击者可在 30 秒
+/// 清理窗口内以线速握手包把表撑到数百万条（内存放大）。
+/// 合法客户端同时挂起的握手数远低于此上限。
+const MAX_CHALLENGE_TOKENS: usize = 1024;
+
 pub async fn start_query_handler(server: Arc<Server>, query_addr: SocketAddr) {
     let Ok(socket) = UdpSocket::bind(query_addr).await else {
         error!("无法绑定 Query UDP 套接字");
@@ -24,7 +29,8 @@ pub async fn start_query_handler(server: Arc<Server>, query_addr: SocketAddr) {
     };
     let socket = Arc::new(socket);
 
-    // 挑战令牌绑定到 IP 地址和端口
+    // 挑战令牌绑定到 IP 地址和端口。
+    // 表的上限见模块级 MAX_CHALLENGE_TOKENS。
     let valid_challenge_tokens = Arc::new(RwLock::new(HashMap::new()));
     let valid_challenge_tokens_clone = valid_challenge_tokens.clone();
     // 所有已创建的挑战令牌每 30 秒全部过期
@@ -109,7 +115,12 @@ async fn handle_packet(
                         let _ = socket.send_to(encoded.as_slice(), addr).await;
                     }
 
-                    clients.write().await.insert(challenge_token, addr);
+                    // 表满时不再接受新握手，防止伪造源 IP 的
+                    // 握手洪流撑爆内存；旧令牌仍可完成状态查询
+                    let mut tokens = clients.write().await;
+                    if tokens.len() < MAX_CHALLENGE_TOKENS {
+                        tokens.insert(challenge_token, addr);
+                    }
                 }
             }
             PacketType::Status => {
