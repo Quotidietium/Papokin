@@ -14,7 +14,8 @@ impl JavaClient {
         }
 
         let world = player.world();
-        let minecart_improvements_enabled = world.server.upgrade().map_or_else(
+        let server_arc = world.server.upgrade();
+        let minecart_improvements_enabled = server_arc.as_ref().map_or_else(
             || {
                 world
                     .level_info
@@ -51,6 +52,15 @@ impl JavaClient {
                 GameRuleValue::Int(_) => {
                     if let Ok(val) = entry.value.parse::<i64>() {
                         player.world().set_game_rule(rule, GameRuleValue::Int(val));
+                        // 与 /gamerule 命令路径一致：通知插件规则已更改
+                        if let Some(server) = &server_arc {
+                            let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
+                                world.clone(),
+                                rule.to_string(),
+                                val.to_string(),
+                            );
+                            server.plugin_manager.fire_blocking(server, &mut event);
+                        }
                         info!(
                             "玩家 {} 将游戏规则 {} 设置为 {}",
                             player.gameprofile.name, key, val
@@ -65,6 +75,14 @@ impl JavaClient {
                 GameRuleValue::Bool(_) => {
                     if let Ok(val) = entry.value.parse::<bool>() {
                         player.world().set_game_rule(rule, GameRuleValue::Bool(val));
+                        if let Some(server) = &server_arc {
+                            let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
+                                world.clone(),
+                                rule.to_string(),
+                                val.to_string(),
+                            );
+                            server.plugin_manager.fire_blocking(server, &mut event);
+                        }
                         info!(
                             "玩家 {} 将游戏规则 {} 设置为 {}",
                             player.gameprofile.name, key, val
