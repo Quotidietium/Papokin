@@ -978,6 +978,10 @@ pub struct Entity {
     pub removal_reason: AtomicCell<Option<RemovalReason>>,
     // 该实体拥有的乘客
     pub passengers: std::sync::Mutex<Vec<Arc<dyn EntityBase>>>,
+
+    /// 该实体可同时搭载的乘客数上限（原版 canAddPassenger/maxPassengers）。
+    /// 绝大多数实体为 1（马、猪、炽足兽、矿车等），船与骆驼为 2。
+    pub max_seats: usize,
     /// 该实体所在的载具
     pub vehicle: std::sync::Mutex<Option<Arc<dyn EntityBase>>>,
     /// 此实体被附着/拴系到的实体（如有）
@@ -1127,6 +1131,7 @@ impl Entity {
             was_in_powder_snow: AtomicBool::new(false),
             removal_reason: AtomicCell::new(None),
             passengers: std::sync::Mutex::new(Vec::new()),
+            max_seats: 1,
             vehicle: std::sync::Mutex::new(None),
             leashed_to: std::sync::Mutex::new(None),
 
@@ -3437,6 +3442,79 @@ impl Entity {
     }
 
     pub fn add_passenger(&self, vehicle: Arc<dyn EntityBase>, passenger: Arc<dyn EntityBase>) {
+        self.add_passenger_checked(vehicle, passenger, false);
+    }
+
+    /// 强制上坐骑（对齐原版 `startRiding(entity, force)`）：
+    /// 绕过骑乘冷却（供 `/ride` 与断线重连恢复载具使用），
+    /// 但完整性校验（自骑、重复、满座、成环）不可绕过。
+    pub fn add_passenger_force(
+        &self,
+        vehicle: Arc<dyn EntityBase>,
+        passenger: Arc<dyn EntityBase>,
+    ) {
+        self.add_passenger_checked(vehicle, passenger, true);
+    }
+
+    fn add_passenger_checked(
+        &self,
+        vehicle: Arc<dyn EntityBase>,
+        passenger: Arc<dyn EntityBase>,
+        force: bool,
+    ) {
+        let passenger_entity = passenger.get_entity();
+
+        // —— 完整性校验（force 也不可绕过）——
+
+        // 自骑即长度为 1 的环，teleport_passengers_recursive 会无界递归。
+        if self.entity_id == passenger_entity.entity_id {
+            return;
+        }
+
+        {
+            let passengers = self
+                .passengers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // 重复挂载会破坏乘客表（CSetPassengers 出现重复、下骑后残留幽灵条目）。
+            if passengers
+                .iter()
+                .any(|p| p.get_entity().entity_id == passenger_entity.entity_id)
+            {
+                return;
+            }
+            // 座位上限（原版 canAddPassenger）：马/猪/矿车为 1，船/骆驼为 2。
+            if passengers.len() >= self.max_seats {
+                return;
+            }
+        }
+
+        if self.would_create_vehicle_cycle(passenger_entity.entity_id) {
+            tracing::warn!(
+                "拒绝实体 {} 挂载到 {}：将构成骑乘环",
+                passenger_entity.entity_id,
+                self.entity_id
+            );
+            return;
+        }
+
+        // —— 常规校验（force 可绕过，对齐原版语义）——
+        if !force {
+            if let Some(current) = passenger_entity.get_vehicle()
+                && current.get_entity().entity_id != self.entity_id
+            {
+                // 乘客已在其他载具上：先自动下骑（原版 stopRiding 后再 startRiding），
+                // 避免出现“vehicle 指向新载具、旧载具乘客表仍含该乘客”的分裂状态。
+                current
+                    .get_entity()
+                    .remove_passenger_sync(passenger_entity.entity_id);
+            }
+            // 原版 ridingCooldown > 0 时禁止 startRiding（防止下骑后立即重复上骑）。
+            if passenger_entity.riding_cooldown.load(Relaxed) > 0 {
+                return;
+            }
+        }
+
         let mut mount_event =
             crate::plugin::api::events::entity::entity_mount::EntityMountEvent::new(
                 passenger.get_entity().entity_id,
@@ -3459,7 +3537,6 @@ impl Entity {
             return;
         }
 
-        let passenger_entity = passenger.get_entity();
         *passenger_entity
             .vehicle
             .lock()
@@ -3484,6 +3561,44 @@ impl Entity {
         );
     }
 
+    /// 检查把 `passenger_id` 挂到 `self` 上是否会构成骑乘环：
+    /// 从 `self` 沿其载具链向上走，若途中遇到该乘客即成环。
+    /// 环一旦形成，`teleport_passengers_recursive` 会栈溢出崩服。
+    fn would_create_vehicle_cycle(&self, passenger_id: i32) -> bool {
+        let mut current = self.get_vehicle();
+        vehicle_chain_reaches(
+            || {
+                let entity = current.take()?;
+                let id = entity.get_entity().entity_id;
+                current = entity.get_entity().get_vehicle();
+                Some(id)
+            },
+            passenger_id,
+        )
+    }
+}
+
+/// 沿载具链逐跳取实体 id，判断链上是否出现 `passenger_id`。
+/// 纯函数便于单测；`next` 每调用一次返回链上的下一跳（链尽返回 `None`）。
+/// 跳数硬上限防御并发窗口或异常状态下的超长/退化链。
+fn vehicle_chain_reaches(mut next: impl FnMut() -> Option<i32>, passenger_id: i32) -> bool {
+    let mut hops = 0;
+    while let Some(id) = next() {
+        if id == passenger_id {
+            return true;
+        }
+        hops += 1;
+        if hops >= MAX_VEHICLE_CHAIN_HOPS {
+            return true;
+        }
+    }
+    false
+}
+
+/// 载具链跳数上限：正常骑乘链远短于此；到达上限按成环处理。
+const MAX_VEHICLE_CHAIN_HOPS: u32 = 128;
+
+impl Entity {
     pub(crate) fn remove_passenger_on_disconnect(&self, passenger_id: i32) {
         let mut passengers = self
             .passengers
@@ -4266,5 +4381,38 @@ mod tests {
 
         let normal = sanitize_loaded_motion(Vector3::new(-3.0, 0.5, 2.0));
         assert_eq!(normal, Vector3::new(-3.0, 0.5, 2.0));
+    }
+
+    #[test]
+    fn vehicle_chain_reaches_detects_cycles() {
+        // 线性链 B→A（A 为链尾）查找 C：不可达，不成环。
+        let mut linear_chain = vec![2, 1];
+        assert!(!vehicle_chain_reaches(|| linear_chain.pop(), 3));
+
+        // 环 A→B→A 查找 A：可达，成环。
+        let cycle = [2, 1];
+        let mut next_index = 0usize;
+        assert!(vehicle_chain_reaches(
+            || {
+                let id = cycle[next_index % cycle.len()];
+                next_index += 1;
+                Some(id)
+            },
+            1
+        ));
+    }
+
+    #[test]
+    fn vehicle_chain_reaches_caps_degenerate_chains() {
+        // 无环但超过跳数上限的退化链按成环处理，遍历必然终止。
+        let mut remaining = MAX_VEHICLE_CHAIN_HOPS;
+        assert!(vehicle_chain_reaches(
+            || {
+                remaining -= 1;
+                Some(remaining as i32)
+            },
+            i32::MAX
+        ));
+        assert_eq!(remaining, 0);
     }
 }
