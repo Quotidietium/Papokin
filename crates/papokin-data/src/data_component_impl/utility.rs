@@ -186,16 +186,18 @@ impl BundleContentsImpl {
         Some(Self { items })
     }
     pub fn get_weight(&self) -> u32 {
-        self.items
-            .iter()
-            .map(|item| item.item_count as u32 * (64 / item.get_max_stack_size() as u32).max(1))
-            .sum()
+        self.items.iter().fold(0u32, |acc, item| {
+            // max(1) 防止除零；saturating 防止伪造内容在 debug 下溢出 panic
+            let weight = u32::from(item.item_count)
+                .saturating_mul((64 / u32::from(item.get_max_stack_size()).max(1)).max(1));
+            acc.saturating_add(weight)
+        })
     }
     pub fn try_insert(&mut self, stack: &mut crate::item_stack::ItemStack) -> bool {
         if stack.is_empty() || stack.get_data_component::<BundleContentsImpl>().is_some() {
             return false;
         }
-        let weight_per_item = (64 / stack.get_max_stack_size() as u32).max(1);
+        let weight_per_item = (64 / u32::from(stack.get_max_stack_size()).max(1)).max(1);
         let mut inserted_anything = false;
         while stack.item_count > 0 && self.get_weight() + weight_per_item <= 64 {
             if let Some(top) = self.items.first_mut()
@@ -630,4 +632,99 @@ impl RecipesImpl {
 }
 impl DataComponentImpl for RecipesImpl {
     default_impl!(Recipes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data_component::DataComponent;
+    use crate::data_component_impl::MaxStackSizeImpl;
+    use crate::item::Item;
+    use crate::item_stack::ItemStack;
+
+    /// 装入与取出的数量必须守恒：装满后多余的装入请求被拒绝
+    /// 且源堆叠不变；取出顺序为后进先出，取空后返回 None。
+    #[test]
+    fn insert_and_extract_conserve_item_counts() {
+        let mut contents = BundleContentsImpl { items: Vec::new() };
+        let mut stone = ItemStack::new(64, &Item::STONE);
+        assert!(contents.try_insert(&mut stone));
+        assert_eq!(stone.item_count, 0);
+        assert_eq!(contents.get_weight(), 64);
+
+        // 已满：再装入被拒，源堆叠数量不变
+        let mut more = ItemStack::new(5, &Item::STONE);
+        assert!(!contents.try_insert(&mut more));
+        assert_eq!(more.item_count, 5);
+
+        // 取出最近装入的堆叠，随后取空
+        let extracted = contents.try_extract().expect("袋内应有物品");
+        assert_eq!(extracted.item.id, Item::STONE.id);
+        assert_eq!(extracted.item_count, 64);
+        assert!(contents.try_extract().is_none());
+    }
+
+    /// 不同物品的堆叠各自占据独立条目，后进先出。
+    #[test]
+    fn extract_returns_most_recently_inserted_stack() {
+        let mut contents = BundleContentsImpl { items: Vec::new() };
+        let mut stone = ItemStack::new(4, &Item::STONE);
+        let mut dirt = ItemStack::new(4, &Item::DIRT);
+        contents.try_insert(&mut stone);
+        contents.try_insert(&mut dirt);
+        assert_eq!(stone.item_count, 0);
+        assert_eq!(dirt.item_count, 0);
+
+        assert_eq!(
+            contents.try_extract().expect("袋内应有物品").item.id,
+            Item::DIRT.id
+        );
+        assert_eq!(
+            contents.try_extract().expect("袋内应有物品").item.id,
+            Item::STONE.id
+        );
+        assert!(contents.try_extract().is_none());
+    }
+
+    /// 不可堆叠到 64 的物品按重量计价：末影珍珠（最大堆叠 16）
+    /// 每件占 4 点重量，16 件装满收纳袋。
+    #[test]
+    fn insert_respects_weight_budget_for_small_stacks() {
+        let mut contents = BundleContentsImpl { items: Vec::new() };
+        let mut pearls = ItemStack::new(16, &Item::ENDER_PEARL);
+        assert!(contents.try_insert(&mut pearls));
+        assert_eq!(pearls.item_count, 0);
+
+        let mut extra = ItemStack::new(1, &Item::ENDER_PEARL);
+        assert!(!contents.try_insert(&mut extra));
+        assert_eq!(extra.item_count, 1);
+    }
+
+    /// 收纳袋不得嵌套：带有 BundleContents 组件（包括默认空内容）
+    /// 的物品堆必须被拒绝装入。
+    #[test]
+    fn insert_rejects_bundle_stacks() {
+        let mut contents = BundleContentsImpl { items: Vec::new() };
+        let mut bundle = ItemStack::new(1, &Item::BUNDLE);
+        assert!(!contents.try_insert(&mut bundle));
+        assert!(contents.items.is_empty());
+        assert_eq!(bundle.item_count, 1);
+    }
+
+    /// 伪造的 max_stack_size = 0 组件不得在重量计算中触发除零 panic。
+    #[test]
+    fn weight_computation_tolerates_forged_zero_max_stack_size() {
+        let mut contents = BundleContentsImpl { items: Vec::new() };
+        let mut forged = ItemStack::new_with_component(
+            8,
+            &Item::STONE,
+            vec![(
+                DataComponent::MaxStackSize,
+                Some(MaxStackSizeImpl { size: 0 }.to_dyn()),
+            )],
+        );
+        contents.try_insert(&mut forged);
+        // 不应 panic；重量按 max(1) 兜底计算
+        let _ = contents.get_weight();
+    }
 }
