@@ -7069,6 +7069,12 @@ impl From<LastSeen> for Vec<Box<[u8]>> {
     }
 }
 
+impl From<Vec<Box<[u8]>>> for LastSeen {
+    fn from(entries: Vec<Box<[u8]>>) -> Self {
+        Self(entries)
+    }
+}
+
 impl AsRef<[Box<[u8]>]> for LastSeen {
     fn as_ref(&self) -> &[Box<[u8]>] {
         &self.0

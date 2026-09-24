@@ -1,7 +1,10 @@
 use papokin_util::{Hand, PermissionLvl};
+use rsa::RsaPublicKey;
 use rsa::pkcs1v15::{Signature as RsaPkcs1v15Signature, VerifyingKey};
+use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier;
 use sha1::Sha1;
+use sha2::Sha256;
 use std::num::NonZero;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
