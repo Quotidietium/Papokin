@@ -108,6 +108,39 @@ pub(crate) const fn finite_f64_or(value: f64, default: f64) -> f64 {
     if value.is_finite() { value } else { default }
 }
 
+/// 装载坐标的世界水平边界（与跨世界传送校验一致）。
+pub(crate) const LOADED_POS_HORIZONTAL_LIMIT: f64 = 2.999_99E7;
+/// 装载坐标的垂直边界：覆盖 i8 section 范围（±128 区段 × 16 格）。
+pub(crate) const LOADED_POS_VERTICAL_LIMIT: f64 = 2048.0;
+/// 装载速度分量的幅度上限：巨大速度会把实体在单刻内推出
+/// 上述边界（原版没有哪种机制能产生上百格/刻的速度）。
+pub(crate) const LOADED_MOTION_LIMIT: f64 = 100.0;
+
+/// 钳制从存档装载的坐标：编辑存档可注入任意有限值，越界坐标
+/// 会让后续区块坐标换算（`chunk << 4`、section 索引等）整数
+/// 溢出 panic 或越界索引。
+#[must_use]
+pub(crate) fn sanitize_loaded_position(pos: Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        pos.x
+            .clamp(-LOADED_POS_HORIZONTAL_LIMIT, LOADED_POS_HORIZONTAL_LIMIT),
+        pos.y
+            .clamp(-LOADED_POS_VERTICAL_LIMIT, LOADED_POS_VERTICAL_LIMIT),
+        pos.z
+            .clamp(-LOADED_POS_HORIZONTAL_LIMIT, LOADED_POS_HORIZONTAL_LIMIT),
+    )
+}
+
+/// 钳制从存档装载的速度分量，防止单刻内被推出世界边界。
+#[must_use]
+pub(crate) fn sanitize_loaded_motion(motion: Vector3<f64>) -> Vector3<f64> {
+    Vector3::new(
+        motion.x.clamp(-LOADED_MOTION_LIMIT, LOADED_MOTION_LIMIT),
+        motion.y.clamp(-LOADED_MOTION_LIMIT, LOADED_MOTION_LIMIT),
+        motion.z.clamp(-LOADED_MOTION_LIMIT, LOADED_MOTION_LIMIT),
+    )
+}
+
 /// 校验来自存档的单精度浮点：要求有限但允许任意符号（如旋转角）。
 #[must_use]
 pub(crate) const fn finite_f32_or(value: f32, default: f32) -> f32 {
@@ -3979,20 +4012,22 @@ impl Entity {
         if let Some(position) = nbt.get_list("Pos")
             && position.len() >= 3
         {
-            let x = finite_f64_or(position[0].extract_double().unwrap_or(0.0), 0.0);
-            let y = finite_f64_or(position[1].extract_double().unwrap_or(0.0), 0.0);
-            let z = finite_f64_or(position[2].extract_double().unwrap_or(0.0), 0.0);
-            let pos = Vector3::new(x, y, z);
+            let pos = sanitize_loaded_position(Vector3::new(
+                finite_f64_or(position[0].extract_double().unwrap_or(0.0), 0.0),
+                finite_f64_or(position[1].extract_double().unwrap_or(0.0), 0.0),
+                finite_f64_or(position[2].extract_double().unwrap_or(0.0), 0.0),
+            ));
             self.set_pos(pos);
             self.last_sent_pos.store(pos);
         }
         if let Some(velocity) = nbt.get_list("Motion")
             && velocity.len() >= 3
         {
-            let x = finite_f64_or(velocity[0].extract_double().unwrap_or(0.0), 0.0);
-            let y = finite_f64_or(velocity[1].extract_double().unwrap_or(0.0), 0.0);
-            let z = finite_f64_or(velocity[2].extract_double().unwrap_or(0.0), 0.0);
-            self.velocity.store(Vector3::new(x, y, z));
+            self.velocity.store(sanitize_loaded_motion(Vector3::new(
+                finite_f64_or(velocity[0].extract_double().unwrap_or(0.0), 0.0),
+                finite_f64_or(velocity[1].extract_double().unwrap_or(0.0), 0.0),
+                finite_f64_or(velocity[2].extract_double().unwrap_or(0.0), 0.0),
+            )));
         }
         if let Some(rotation) = nbt.get_list("Rotation")
             && rotation.len() >= 2
@@ -4206,5 +4241,28 @@ mod tests {
         assert_eq!(finite_non_negative_f32_or(f32::INFINITY, 0.5), 0.5);
         assert_eq!(finite_non_negative_f32_or(-1.0, 0.5), 0.5);
         assert_eq!(finite_non_negative_f32_or(0.05, 0.5), 0.05);
+    }
+
+    #[test]
+    fn loaded_position_is_clamped_to_world_bounds() {
+        // 编辑存档注入的极端有限坐标必须被钳制，正常坐标原样通过。
+        let clamped = sanitize_loaded_position(Vector3::new(1.0e300, -1.0e300, 5.0e9));
+        assert_eq!(clamped.x, LOADED_POS_HORIZONTAL_LIMIT);
+        assert_eq!(clamped.y, -LOADED_POS_VERTICAL_LIMIT);
+        assert_eq!(clamped.z, LOADED_POS_HORIZONTAL_LIMIT);
+
+        let normal = sanitize_loaded_position(Vector3::new(-123.5, 64.0, 321.0));
+        assert_eq!(normal, Vector3::new(-123.5, 64.0, 321.0));
+    }
+
+    #[test]
+    fn loaded_motion_is_clamped_to_sane_magnitude() {
+        let clamped = sanitize_loaded_motion(Vector3::new(1.0e300, -500.0, 42.0));
+        assert_eq!(clamped.x, LOADED_MOTION_LIMIT);
+        assert_eq!(clamped.y, -LOADED_MOTION_LIMIT);
+        assert_eq!(clamped.z, 42.0);
+
+        let normal = sanitize_loaded_motion(Vector3::new(-3.0, 0.5, 2.0));
+        assert_eq!(normal, Vector3::new(-3.0, 0.5, 2.0));
     }
 }
