@@ -15,7 +15,11 @@ pub struct SChatCommand<'a> {
 impl<'a> ServerPacket<'a> for SChatCommand<'a> {
     fn read(bytebuf: &mut &'a [u8], _version: &JavaMinecraftVersion) -> Result<Self, ReadingError> {
         Ok(Self {
-            command: bytebuf.get_str_borrowed()?,
+            // 与原版一致：命令字符串上限 256 字符（签名命令包
+            // CHAT_COMMAND_SIGNED 同限）。经此入口的 /teammsg 等
+            // 广播型命令的消息长度随之受限，防止以 32KB 级超长
+            // 命令向队伍/全服放大消息组件序列化。
+            command: bytebuf.get_str_bounded_borrowed(256)?,
         })
     }
 }
