@@ -20,10 +20,9 @@ struct ChunkTickSchedulerInner<T> {
 
 impl<'a, T: std::hash::Hash + Eq> ChunkTickScheduler<&'a T> {
     pub fn step_tick(&self) -> Vec<OrderedTick<&'a T>> {
-        // 对偏移量进行原子更新
+        // fetch_add 原子推进环形偏移；不得再显式 store 回写，
+        // 否则并发调用会把偏移倒退、错位环形槽位。
         let current_offset = self.offset.fetch_add(1, Ordering::SeqCst) % MAX_TICK_DELAY;
-        let next_offset = (current_offset + 1) % MAX_TICK_DELAY;
-        self.offset.store(next_offset, Ordering::SeqCst);
 
         let mut inner_guard = self
             .inner
@@ -33,7 +32,11 @@ impl<'a, T: std::hash::Hash + Eq> ChunkTickScheduler<&'a T> {
             return Vec::new();
         };
 
-        let res = std::mem::take(&mut inner.tick_queue[current_offset]);
+        let mut res = std::mem::take(&mut inner.tick_queue[current_offset]);
+
+        // 同一刻可能聚集不同优先级的刻（红石时序依赖优先级
+        // 顺序）；按优先级与调度次序排序，与原版 LevelTicks 对齐。
+        res.sort_unstable();
 
         if !res.is_empty() {
             for next_tick in &res {
@@ -181,5 +184,71 @@ impl<T> Default for ChunkTickScheduler<T> {
             inner: Mutex::new(None),
             offset: AtomicUsize::new(0),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tick::{ScheduledTick, TickPriority};
+
+    fn unit_tick(delay: u8, priority: TickPriority, pos: i32) -> ScheduledTick<&'static ()> {
+        ScheduledTick {
+            delay,
+            priority,
+            position: BlockPos::new(pos, 0, 0),
+            value: &(),
+        }
+    }
+
+    #[test]
+    fn step_tick_orders_by_priority_then_schedule_order() {
+        let scheduler = ChunkTickScheduler::<&()>::default();
+        // 调度次序与优先级故意相反：排序必须以优先级为先。
+        // 去重键是 (position, value)，各刻使用不同坐标。
+        scheduler.schedule_tick(&unit_tick(0, TickPriority::Normal, 0), 1);
+        scheduler.schedule_tick(&unit_tick(0, TickPriority::Normal, 1), 2);
+        scheduler.schedule_tick(&unit_tick(0, TickPriority::High, 2), 3);
+        scheduler.schedule_tick(&unit_tick(0, TickPriority::ExtremelyHigh, 3), 4);
+
+        let batch = scheduler.step_tick();
+        let priorities: Vec<TickPriority> = batch.iter().map(|t| t.priority).collect();
+        assert_eq!(
+            priorities,
+            vec![
+                TickPriority::ExtremelyHigh,
+                TickPriority::High,
+                TickPriority::Normal,
+                TickPriority::Normal,
+            ]
+        );
+        assert_eq!(batch[2].sub_tick_order, 1);
+        assert_eq!(batch[3].sub_tick_order, 2);
+    }
+
+    #[test]
+    fn scheduled_tick_fires_exactly_after_delay() {
+        let scheduler = ChunkTickScheduler::<&()>::default();
+        scheduler.schedule_tick(&unit_tick(3, TickPriority::Normal, 0), 0);
+
+        assert!(scheduler.step_tick().is_empty(), "第 1 刻不应触发");
+        assert!(scheduler.step_tick().is_empty(), "第 2 刻不应触发");
+        assert!(scheduler.step_tick().is_empty(), "第 3 刻不应触发");
+        let batch = scheduler.step_tick();
+        assert_eq!(batch.len(), 1, "延迟 3 刻后应恰好触发一次");
+        assert!(scheduler.step_tick().is_empty(), "触发后不得重复执行");
+    }
+
+    #[test]
+    fn duplicate_scheduling_is_deduplicated() {
+        let scheduler = ChunkTickScheduler::<&()>::default();
+        // 同 (position, value) 的重复调度被去重，防止流体/红石
+        // 重复登记导致队列膨胀。
+        scheduler.schedule_tick(&unit_tick(1, TickPriority::Normal, 0), 0);
+        scheduler.schedule_tick(&unit_tick(1, TickPriority::Normal, 0), 1);
+        assert!(scheduler.step_tick().is_empty(), "第 1 刻（槽 0）应为空");
+        let batch = scheduler.step_tick();
+        assert_eq!(batch.len(), 1, "第 2 刻（槽 1）只应触发一次");
+        assert!(scheduler.step_tick().is_empty());
     }
 }
