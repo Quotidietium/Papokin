@@ -984,6 +984,12 @@ pub struct Entity {
     pub max_seats: usize,
     /// 该实体所在的载具
     pub vehicle: std::sync::Mutex<Option<Arc<dyn EntityBase>>>,
+    /// 只用于串行化 [`Self::add_velocity`] 的读改写（AtomicCell 无 f64 的 CAS）
+    velocity_lock: std::sync::Mutex<()>,
+    /// 串行化本实体乘客表的挂载/下骑提交段：`vehicle` 与 `passengers`
+    /// 两把锁先后相反的交错（下骑清零 × 并发重挂）会留下
+    /// 「一侧已清、另一侧残留」的幽灵乘客分裂状态
+    mount_lock: std::sync::Mutex<()>,
     /// 此实体被附着/拴系到的实体（如有）
     pub leashed_to: std::sync::Mutex<Option<Arc<dyn EntityBase>>>,
     /// 实体下坐骑后再次骑乘前的冷却时间
@@ -1137,6 +1143,8 @@ impl Entity {
             passengers: std::sync::Mutex::new(Vec::new()),
             max_seats: 1,
             vehicle: std::sync::Mutex::new(None),
+            velocity_lock: std::sync::Mutex::new(()),
+            mount_lock: std::sync::Mutex::new(()),
             leashed_to: std::sync::Mutex::new(None),
 
             riding_cooldown: AtomicI32::new(0),
@@ -1165,7 +1173,18 @@ impl Entity {
     }
 
     pub fn add_velocity(&self, velocity: Vector3<f64>) {
-        self.set_velocity(self.velocity.load() + velocity);
+        // 串行化并发增量：实体 tick（爆炸、钩竿拉动）与网络包
+        // 路径（攻击击退）可能在不同任务上同时命中同一实体，
+        // 简单的 load + store 会丢掉先到的一方。AtomicCell 的
+        // compare_exchange 需要 Eq（f64 不满足），故用专用锁
+        // 只保护这段读改写；set_velocity 的绝对覆盖语义不受影响
+        let guard = self
+            .velocity_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.velocity.store(self.velocity.load() + velocity);
+        drop(guard);
+        self.send_velocity();
     }
 
     pub fn set_velocity(&self, velocity: Vector3<f64>) {
@@ -3545,28 +3564,44 @@ impl Entity {
             return;
         }
 
-        *passenger_entity
-            .vehicle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(vehicle);
-
-        let mut passengers = self
-            .passengers
+        // 提交段：与所有下骑路径共享 mount_lock，防止与并发
+        // remove 的交错留下单侧残留的分裂状态
+        let _mount_guard = self
+            .mount_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        passengers.push(passenger);
+        {
+            let mut passengers = self
+                .passengers
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // 提交前复核：事件触发期间（锁外）可能有并发变更抢先
+            if passengers
+                .iter()
+                .any(|p| p.get_entity().entity_id == passenger_entity.entity_id)
+                || passengers.len() >= self.max_seats
+            {
+                return;
+            }
 
-        let passenger_ids: Vec<VarInt> = passengers
-            .iter()
-            .map(|p| VarInt(p.get_entity().entity_id))
-            .collect();
+            *passenger_entity
+                .vehicle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(vehicle);
+            passengers.push(passenger);
 
-        let world = self.world.load();
-        let chunk_pos = self.chunk_pos.load();
-        world.broadcast_to_chunk(
-            chunk_pos,
-            &CSetPassengers::new(VarInt(self.entity_id), &passenger_ids),
-        );
+            let passenger_ids: Vec<VarInt> = passengers
+                .iter()
+                .map(|p| VarInt(p.get_entity().entity_id))
+                .collect();
+
+            let world = self.world.load();
+            let chunk_pos = self.chunk_pos.load();
+            world.broadcast_to_chunk(
+                chunk_pos,
+                &CSetPassengers::new(VarInt(self.entity_id), &passenger_ids),
+            );
+        }
     }
 
     /// 检查把 `passenger_id` 挂到 `self` 上是否会构成骑乘环：
@@ -3608,6 +3643,12 @@ const MAX_VEHICLE_CHAIN_HOPS: u32 = 128;
 
 impl Entity {
     pub(crate) fn remove_passenger_on_disconnect(&self, passenger_id: i32) {
+        // 与挂载提交段共享 mount_lock，锁序保持
+        // mount_lock → passengers → vehicle 一致
+        let _mount_guard = self
+            .mount_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut passengers = self
             .passengers
             .lock()
@@ -3673,6 +3714,12 @@ impl Entity {
         }
 
         let (removed_passenger, passenger_ids) = {
+            // 与挂载提交段共享 mount_lock，锁序保持
+            // mount_lock → passengers → vehicle 一致
+            let _mount_guard = self
+                .mount_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut passengers = self
                 .passengers
                 .lock()
