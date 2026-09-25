@@ -1,8 +1,10 @@
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use super::BlockEntity;
 use papokin_data::item_stack::ItemStack;
 use papokin_nbt::compound::NbtCompound;
 use papokin_util::math::position::BlockPos;
-use std::sync::Mutex;
 
 pub struct BrushableBlockBlockEntity {
     pub position: BlockPos,
@@ -94,6 +96,19 @@ impl BlockEntity for BrushableBlockBlockEntity {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn on_block_replaced(self: Arc<Self>, world: &Arc<crate::world::World>, position: &BlockPos) {
+        // 爆炸、指令 setblock 等替换路径在方块实体移除前经此钩子掉出
+        // 内部考古物品；take 语义与 broken 路径（先执行）幂等。
+        if let Some(contained) = self
+            .item
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            world.drop_stack(position, contained);
+        }
     }
 }
 

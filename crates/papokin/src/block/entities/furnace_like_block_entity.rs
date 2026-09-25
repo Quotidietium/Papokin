@@ -643,6 +643,28 @@ macro_rules! impl_block_entity_for_cooking {
                 Some(self)
             }
 
+            fn on_block_replaced(
+                self: Arc<Self>,
+                world: &Arc<$crate::world::World>,
+                position: &papokin_util::math::position::BlockPos,
+            ) {
+                // 默认语义：散落内部物品（燃料/原料/产物）。
+                if let Some(inventory) = self.clone().get_inventory() {
+                    world.scatter_inventory(position, &inventory);
+                }
+                // 再提取累积经验，防止爆炸、指令 setblock 等替换路径
+                // 凭空丢失；extract 语义与 broken 路径（先执行）幂等。
+                let xp =
+                    $crate::block::entities::furnace_like_block_entity::ExperienceContainer::extract_experience(&*self);
+                if xp > 0 {
+                    $crate::entity::experience_orb::ExperienceOrbEntity::spawn(
+                        world,
+                        position.to_f64(),
+                        xp as u32,
+                    );
+                }
+            }
+
             fn is_comparator_dirty(&self) -> bool {
                 self.comparator_dirty.load(Ordering::Relaxed)
             }

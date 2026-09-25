@@ -11,7 +11,7 @@ use crate::block::entities::decorated_pot::DecoratedPotBlockEntity;
 use crate::block::registry::BlockActionResult;
 use crate::block::{
     BlockBehaviour, BrokenArgs, GetComparatorOutputArgs, NormalUseArgs, OnPlaceArgs,
-    OnStateReplacedArgs, PathComputationType, PlacedArgs, UseWithItemArgs,
+    PathComputationType, PlacedArgs, UseWithItemArgs,
 };
 
 #[pumpkin_block("minecraft:decorated_pot")]
@@ -99,23 +99,6 @@ impl BlockBehaviour for DecoratedPotBlock {
         );
         args.world
             .drop_stack(args.position, ItemStack::new(4, &Item::BRICK));
-    }
-
-    fn on_state_replaced(&self, args: OnStateReplacedArgs<'_>) {
-        if args.moved {
-            return;
-        }
-        // 爆炸、指令 setblock 等非玩家替换路径同样要掉出罐内物品，
-        // 否则内容物随方块实体移除凭空丢失。take 语义保证与 broken
-        // 路径（先执行）不会双重掉落。
-        if let Some(block_entity) = args.world.get_block_entity(args.position)
-            && let Some(pot_entity) = block_entity
-                .as_any()
-                .downcast_ref::<DecoratedPotBlockEntity>()
-            && let Some(contained) = pot_entity.take_item()
-        {
-            args.world.drop_stack(args.position, contained);
-        }
     }
 
     fn get_comparator_output(&self, args: GetComparatorOutputArgs<'_>) -> Option<u8> {
