@@ -5274,14 +5274,29 @@ impl World {
                 .is_some_and(|mut chunk_block_entities| {
                     chunk_block_entities.remove(block_pos).is_some()
                 });
+
+        // 同步清除持久化 NBT：`pending_block_entities` 是落盘的事实
+        // 来源，残留条目会随区块保存并在此后加载时经
+        // `migrate_pending_block_entities` 把已移除的方块实体复活成
+        // 幽灵实体——其内容物在移除时已掉落，复活后可经漏斗等再次
+        // 取出，构成物品复制。无论实体是否已唤醒到内存都要清除。
+        self.level.read_chunk_sync(&chunk_pos, |chunk| {
+            let purged = chunk
+                .pending_block_entities
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(block_pos)
+                .is_some();
+            if purged || removed {
+                chunk.mark_dirty(true);
+            }
+        });
+
         if removed {
             self.custom_block_entity_data.remove(block_pos);
             // 当区块的最后一个方块实体消失后，丢弃该区块的映射
             self.block_entities
                 .remove_if(&chunk_pos, |_, entities| entities.is_empty());
-            self.level.read_chunk_sync(&chunk_pos, |chunk| {
-                chunk.mark_dirty(true);
-            });
         }
     }
 
