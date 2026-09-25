@@ -26,6 +26,11 @@ pub struct PluginsConfig {
     /// 如果未设置，宿主将对每个插件施加 512 MB 的默认上限
     /// （沙箱不应在无配置时允许无限内存）。
     pub max_memory_mb: Option<u64>,
+    /// 单次插件调用（事件处理/生命周期回调）的超时秒数。
+    /// 超时的调用会被强制中断（trap），防止失控插件用死循环
+    /// 拖住服务器线程。默认 60 秒。
+    pub call_timeout_seconds: u32,
+    /// Pumpkin 是否应在加载前验证 WASM 插件签名。
     /// 每个插件的配置与覆盖项，以插件名称为键。
     ///
     /// 每个条目以其适用的插件命名（例如 `my_plugin`）。
@@ -62,6 +67,7 @@ impl Default for PluginsConfig {
             inherit_env: false,
             loopback_only: false,
             max_memory_mb: None,
+            call_timeout_seconds: 60,
             overrides: HashMap::new(),
             verify_signatures: true,
         }
@@ -80,6 +86,9 @@ pub struct PluginOverride {
     /// 此特定插件的可选最大内存限制（以 MB 计）。
     /// 如已指定，则覆盖全局 `max_memory_mb` 设置。
     pub max_memory_mb: Option<u64>,
+    /// 此特定插件的单次调用超时秒数。
+    /// 如已指定，则覆盖全局 `call_timeout_seconds` 设置。
+    pub call_timeout_seconds: Option<u32>,
     /// 专门为此插件预先批准的权限（跳过交互式确认）。
     pub allowed_permissions: Vec<String>,
     /// 专门为此插件阻止的附加权限。
@@ -96,6 +105,7 @@ impl Default for PluginOverride {
             enabled: true,
             allow_unsigned: None,
             max_memory_mb: None,
+            call_timeout_seconds: None,
             allowed_permissions: Vec::new(),
             blocked_permissions: Vec::new(),
             loopback_only: None,
@@ -120,6 +130,7 @@ mod tests {
         assert!(!config.inherit_env);
         assert!(!config.loopback_only);
         assert_eq!(config.max_memory_mb, None);
+        assert_eq!(config.call_timeout_seconds, 60);
         assert!(config.overrides.is_empty());
         assert!(config.verify_signatures);
     }
