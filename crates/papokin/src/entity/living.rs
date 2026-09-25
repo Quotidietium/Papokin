@@ -3157,6 +3157,14 @@ impl LivingEntity {
             amount = by_block_event.damage;
         }
 
+        // 事件改写后的收敛钳制：非有限或负值统一归零。NaN 若流入
+        // 血量会永久毒化实体（NaN 比较恒假，实体再也无法被伤害或
+        // 死亡，且会随存档序列化扩散）；负值已被入口拒绝但插件
+        // 改写后可能复现。
+        if !amount.is_finite() || amount < 0.0 {
+            amount = 0.0;
+        }
+
         let world = self.entity.world.load();
         let is_fire_damage = damage_type.has_tag(&tag::DamageType::MINECRAFT_IS_FIRE);
 
