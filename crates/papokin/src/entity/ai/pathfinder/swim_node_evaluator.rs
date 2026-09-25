@@ -88,12 +88,15 @@ impl NodeEvaluator for SwimNodeEvaluator {
         self.base.entity_height = mob_data.get_bb_height();
         self.base.entity_depth = mob_data.get_bb_width();
 
+        // 每次寻路开始时重建节点缓存，防止跨寻路累积（见 WalkNodeEvaluator::prepare）。
+        self.base.nodes.clear();
         self.base.context = Some(context);
         self.base.mob_data = Some(mob_data);
         self.path_types_cache.clear();
     }
 
     fn done(&mut self) {
+        self.base.nodes.clear();
         self.base.context = None;
         self.base.mob_data = None;
         self.path_types_cache.clear();

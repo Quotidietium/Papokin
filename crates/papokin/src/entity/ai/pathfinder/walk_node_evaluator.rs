@@ -424,6 +424,9 @@ impl NodeEvaluator for WalkNodeEvaluator {
         self.base.entity_height = mob_data.get_bb_height();
         self.base.entity_depth = mob_data.get_bb_width();
 
+        // 每次寻路开始时重建节点缓存；否则缓存会随实体活动范围
+        // 只增不减，长时间高密度运行下构成无界内存增长。
+        self.base.nodes.clear();
         self.base.context = Some(context);
         self.base.mob_data = Some(mob_data);
         self.path_types_cache.clear();
@@ -431,6 +434,7 @@ impl NodeEvaluator for WalkNodeEvaluator {
     }
 
     fn done(&mut self) {
+        self.base.nodes.clear();
         self.base.context = None;
         self.base.mob_data = None;
         self.path_types_cache.clear();
