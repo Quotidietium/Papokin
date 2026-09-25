@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::chunk::format::anvil::SingleChunkDataSerializer;
-use crate::chunk::io::{ChunkSerializer, LoadedData, run_blocking};
+use crate::chunk::io::{ChunkSerializer, LoadedData, atomic_write, run_blocking};
 use crate::chunk::{ChunkReadingError, ChunkWritingError};
 use bytes::Bytes;
 use papokin_util::math::vector2::Vector2;
@@ -70,7 +70,10 @@ where
         })
         .await
         .map_err(|_| std::io::Error::other("pump serialization task failed"))?;
-        tokio::fs::write(backend, bytes).await
+        // 此前是 tokio::fs::write 直接覆写：进程在写入中途崩溃会
+        // 留下残缺的 .pump 文件，重启后该区域数据全部损坏。
+        // 改用与 Anvil 外部负载一致的原子写入。
+        atomic_write(backend, &bytes).await
     }
 
     fn read(r: Bytes) -> Result<Self, ChunkReadingError> {

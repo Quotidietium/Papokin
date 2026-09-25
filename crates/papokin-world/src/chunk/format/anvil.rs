@@ -19,7 +19,7 @@ use tracing::{debug, trace, warn};
 use crate::chunk::{
     ChunkParsingError, ChunkReadingError, ChunkSerializingError, ChunkWritingError,
     CompressionError,
-    io::{ChunkSerializer, Dirtiable, LoadedData, run_blocking},
+    io::{ChunkSerializer, Dirtiable, LoadedData, atomic_write, run_blocking},
 };
 
 /// 区域的边长（以区块计，一个区域为 32x32 区块）
@@ -492,18 +492,6 @@ fn merge_paper_oversized(
             }
         }
     }
-}
-
-/// 通过临时文件将 `bytes` 原子写入 `path`。`sync_all` 会
-/// 在重命名之前发出，因此此函数返回时数据已写入磁盘。
-async fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    let temp_path = path.with_extension("tmp_atomic");
-    let mut file = tokio::fs::File::create(&temp_path).await?;
-    file.write_all(bytes).await?;
-    file.flush().await?;
-    file.sync_all().await?;
-    drop(file);
-    tokio::fs::rename(&temp_path, path).await
 }
 
 impl<S: SingleChunkDataSerializer> AnvilChunkFile<S> {

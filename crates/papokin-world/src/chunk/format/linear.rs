@@ -450,6 +450,10 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
         }
         writer.write_all(&SIGNATURE).await?;
         writer.flush().await?;
+        // 数据块必须先于 rename 的元数据落盘（与 Anvil write_all 一致）：
+        // 掉电时若仅 rename 已提交而数据仍在页缓存，正式文件会
+        // 指向残缺内容
+        writer.get_ref().sync_all().await?;
 
         // 原子重命名，使写入过程中崩溃不会产生残缺文件。
         tokio::fs::rename(temp_path, path).await?;

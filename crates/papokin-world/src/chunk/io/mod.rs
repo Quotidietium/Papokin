@@ -2,6 +2,7 @@ use std::{error, sync::Arc};
 
 use bytes::Bytes;
 use papokin_util::math::vector2::Vector2;
+use tokio::io::AsyncWriteExt;
 
 use super::{ChunkReadingError, ChunkWritingError};
 use crate::level::LevelFolder;
@@ -14,6 +15,24 @@ where
     F: FnOnce() -> T + Send + 'static,
 {
     tokio::task::spawn_blocking(task).await
+}
+
+/// 通过临时文件 + `sync_all` + 重命名将 `bytes` 原子写入 `path`。
+///
+/// `sync_all` 在重命名之前发出，因此本函数返回时数据已落盘：
+/// 掉电场景下 rename 的元数据提交不会先于数据块持久化，
+/// 进程崩溃/掉电都不会留下指向残缺内容的正式文件。
+pub(crate) async fn atomic_write(
+    path: &std::path::Path,
+    bytes: &[u8],
+) -> Result<(), std::io::Error> {
+    let temp_path = path.with_extension("tmp_atomic");
+    let mut file = tokio::fs::File::create(&temp_path).await?;
+    file.write_all(bytes).await?;
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+    tokio::fs::rename(&temp_path, path).await
 }
 
 /// 加载区块数据的结果。
@@ -152,4 +171,30 @@ pub trait ChunkSerializer: Send + Sync + Default + 'static {
         chunks: Vec<Vector2<i32>>,
         stream: tokio::sync::mpsc::Sender<LoadedData<Self::Data, ChunkReadingError>>,
     ) -> impl Future<Output = ()> + Send;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::atomic_write;
+
+    #[tokio::test]
+    async fn atomic_write_replaces_content_and_leaves_no_temp() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let path = dir.path().join("r.0.0.test");
+
+        atomic_write(&path, b"first").await.expect("首次写入");
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        // 覆盖既有文件：rename 必须替换成功
+        atomic_write(&path, b"second").await.expect("覆盖写入");
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+
+        // 不留临时文件
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(entries, vec!["r.0.0.test"]);
+    }
 }
