@@ -24,7 +24,7 @@ use std::sync::Mutex;
 use crate::block::{
     BlockBehaviour, BrokenArgs, EmitsRedstonePowerArgs, GetComparatorOutputArgs,
     GetRedstonePowerArgs, GetScreenHandlerFactoryArgs, NormalUseArgs, OnPlaceArgs,
-    OnSyncedBlockEventArgs, PathComputationType, PlacedArgs, RandomTickArgs,
+    OnStateReplacedArgs, OnSyncedBlockEventArgs, PathComputationType, PlacedArgs, RandomTickArgs,
     registry::BlockActionResult,
 };
 use crate::entity::EntityBase;
@@ -267,7 +267,26 @@ fn normal_use_chest_impl(args: &NormalUseArgs<'_>) -> BlockActionResult {
 }
 
 fn broken_chest_impl(args: &BrokenArgs<'_>) {
-    let chest_props = ChestLikeProperties::from_state_id(args.state.id);
+    split_connected_chest(args.world, args.block, args.position, args.state.id);
+}
+
+fn on_state_replaced_chest_impl(args: &OnStateReplacedArgs<'_>) {
+    // 活塞移动不拆除双箱关系（方块实体随移动保留）。
+    if args.moved {
+        return;
+    }
+    // 爆炸、指令 setblock 等非玩家替换路径也要重置另一半，
+    // 否则残留半箱的 Left/Right 类型不再有效。
+    split_connected_chest(args.world, args.block, args.position, args.old_state_id);
+}
+
+fn split_connected_chest(
+    world: &Arc<World>,
+    block: &Block,
+    position: &BlockPos,
+    state_id: BlockStateId,
+) {
+    let chest_props = ChestLikeProperties::from_state_id(state_id);
     let connected_towards = match chest_props.r#type {
         ChestType::Single => return,
         ChestType::Left => chest_props.facing.rotate_clockwise(),
@@ -275,18 +294,18 @@ fn broken_chest_impl(args: &BrokenArgs<'_>) {
     };
 
     if let Some(mut neighbor_props) = get_chest_properties_if_can_connect(
-        args.world,
-        args.block,
-        args.position,
+        world,
+        block,
+        position,
         chest_props.facing,
         connected_towards,
         chest_props.r#type.opposite(),
     ) {
         neighbor_props.r#type = ChestType::Single;
 
-        args.world.set_block_state(
-            &args.position.offset(connected_towards.to_offset()),
-            neighbor_props.to_state_id(args.block),
+        world.set_block_state(
+            &position.offset(connected_towards.to_offset()),
+            neighbor_props.to_state_id(block),
             BlockFlags::NOTIFY_LISTENERS,
         );
     }
@@ -321,6 +340,10 @@ impl BlockBehaviour for ChestBlock {
 
     fn broken(&self, args: BrokenArgs<'_>) {
         broken_chest_impl(&args);
+    }
+
+    fn on_state_replaced(&self, args: OnStateReplacedArgs<'_>) {
+        on_state_replaced_chest_impl(&args);
     }
 
     fn get_comparator_output(&self, args: GetComparatorOutputArgs<'_>) -> Option<u8> {
@@ -398,6 +421,10 @@ impl BlockBehaviour for CopperChestBlock {
         broken_chest_impl(&args);
     }
 
+    fn on_state_replaced(&self, args: OnStateReplacedArgs<'_>) {
+        on_state_replaced_chest_impl(&args);
+    }
+
     fn random_tick(&self, args: RandomTickArgs<'_>) {
         let current_state_id = args.world.get_block_state_id(args.position);
         let chest_props = ChestLikeProperties::from_state_id(current_state_id);
@@ -462,6 +489,10 @@ impl BlockBehaviour for TrappedChestBlock {
 
     fn broken(&self, args: BrokenArgs<'_>) {
         broken_chest_impl(&args);
+    }
+
+    fn on_state_replaced(&self, args: OnStateReplacedArgs<'_>) {
+        on_state_replaced_chest_impl(&args);
     }
 
     fn emits_redstone_power(&self, _args: EmitsRedstonePowerArgs<'_>) -> bool {
