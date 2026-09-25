@@ -126,6 +126,11 @@ pub struct WasmPlugin {
     pub store: concurrent_store::LegacyStore,
 }
 
+/// 未配置 `max_memory_mb` 时对插件施加的默认内存上限。
+/// Wasm 沙箱在无配置时不应允许无限内存——失控或恶意插件
+/// 可以通过持续分配线性内存拖垮整机。
+const DEFAULT_PLUGIN_MEMORY_LIMIT_MB: u64 = 512;
+
 impl Drop for WasmPlugin {
     fn drop(&mut self) {
         self.store.discard();
@@ -412,7 +417,8 @@ impl WasmPlugin {
 
         let max_memory_mb = plugin_override
             .and_then(|o| o.max_memory_mb)
-            .or(plugin_config.max_memory_mb);
+            .or(plugin_config.max_memory_mb)
+            .unwrap_or(DEFAULT_PLUGIN_MEMORY_LIMIT_MB);
         let wasi_ctx = builder.build();
         let server = context.server.clone();
         let name = metadata.name.clone();
@@ -424,12 +430,10 @@ impl WasmPlugin {
             .call_guest(move |mut guest| {
                 Box::pin(async move {
                     let context_res = guest.with(|mut store| {
-                        if let Some(mb) = max_memory_mb {
-                            let limit_bytes = (mb as usize).saturating_mul(1024 * 1024);
-                            store.data_mut().limits = wasmtime::StoreLimitsBuilder::new()
-                                .memory_size(limit_bytes)
-                                .build();
-                        }
+                        let limit_bytes = (max_memory_mb as usize).saturating_mul(1024 * 1024);
+                        store.data_mut().limits = wasmtime::StoreLimitsBuilder::new()
+                            .memory_size(limit_bytes)
+                            .build();
 
                         store.data_mut().permissions = filtered_permissions;
                         store.data_mut().wasi_ctx = wasi_ctx;

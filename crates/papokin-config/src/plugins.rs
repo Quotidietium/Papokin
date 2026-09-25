@@ -23,7 +23,8 @@ pub struct PluginsConfig {
     /// 插件中的网络套接字是否默认限制为 localhost/loopback。
     pub loopback_only: bool,
     /// 每个插件实例的可选全局最大内存限制（以 MB 计）。
-    /// 如果未设置，内存仅受宿主系统可用内存的限制。
+    /// 如果未设置，宿主将对每个插件施加 512 MB 的默认上限
+    /// （沙箱不应在无配置时允许无限内存）。
     pub max_memory_mb: Option<u64>,
     /// 每个插件的配置与覆盖项，以插件名称为键。
     ///
