@@ -36,6 +36,16 @@ impl JavaClient {
             ));
             return;
         };
+        // 与 handle_interact 相同的距离门（原版 canInteractWithEntity）：
+        // 本包是现代客户端的主攻击路径，缺此检查会让改过的客户端
+        // 无限触及打击任意已加载实体
+        if !player.can_interact_with_entity(target.as_ref()) {
+            warn!(
+                "玩家 {} 试图攻击超出交互范围的实体 {}",
+                player.gameprofile.name, entity_id.0
+            );
+            return;
+        }
         if let Some(player_victim) = &player_target {
             if player_victim.living_entity.health.load() <= 0.0 {
                 return;
