@@ -1633,13 +1633,36 @@ impl World {
     pub fn tick_chunks(self: &Arc<Self>, server: &Arc<Server>) {
         const BATCH_SIZE: usize = 32;
         const INHABITED_TIME_BATCH_SIZE: usize = 1024;
+        // 单刻执行的方块刻/流体刻上限（对齐原版 65536）：超出部分按原
+        // 优先级以 0 延迟顺延到下一游戏刻。缺少上限时，敌意构造的刻积压
+        // （如大规模流体蔓延）会把单帧拖到看门狗级别。
+        const MAX_SCHEDULED_TICKS_PER_FRAME: usize = 65536;
         let random_tick_speed = self.level_info.load().game_rules.random_tick_speed;
 
         let active_chunks = self
             .active_chunks
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let tick_data = self.level.get_tick_data(&active_chunks, random_tick_speed);
+        let mut tick_data = self.level.get_tick_data(&active_chunks, random_tick_speed);
+        // 先顺延溢出部分再执行保留部分（保持执行顺序与调度次序一致）
+        if tick_data.block_ticks.len() > MAX_SCHEDULED_TICKS_PER_FRAME {
+            let spilled = tick_data
+                .block_ticks
+                .split_off(MAX_SCHEDULED_TICKS_PER_FRAME);
+            for tick in &spilled {
+                self.level
+                    .schedule_block_tick(tick.value, tick.position, 0, tick.priority);
+            }
+        }
+        if tick_data.fluid_ticks.len() > MAX_SCHEDULED_TICKS_PER_FRAME {
+            let spilled = tick_data
+                .fluid_ticks
+                .split_off(MAX_SCHEDULED_TICKS_PER_FRAME);
+            for tick in &spilled {
+                self.level
+                    .schedule_fluid_tick(tick.value, tick.position, 0, tick.priority);
+            }
+        }
         let handle = server.runtime.clone();
 
         // 1. 通过 Rayon 并行执行方块刻
