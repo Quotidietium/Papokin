@@ -313,6 +313,18 @@ impl Animal for LlamaEntity {
 }
 
 impl Mob for LlamaEntity {
+    fn open_rider_inventory(&self, player: &Arc<Player>) {
+        let world = player.world();
+        if let Some(vehicle) = world.get_entity_by_id(self.get_entity().entity_id) {
+            let chest_slots = if self.has_chest() {
+                LlamaScreenHandler::get_chest_slot_count(self.get_strength())
+            } else {
+                0
+            };
+            open_llama_screen(&vehicle, player, self.chest_inventory.clone(), chest_slots);
+        }
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }

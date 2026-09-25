@@ -1808,7 +1808,13 @@ impl LivingEntity {
     }
 
     fn jump(&self) {
-        let jump = self.get_jump_velocity(1.0);
+        self.jump_with_strength(1.0);
+    }
+
+    /// 以给定蓄力倍率（0.0-1.0）起跳：马系坐骑经骑手空格
+    /// 充能换算的跳跃力走此入口，普通跳跃固定 1.0。
+    pub fn jump_with_strength(&self, strength: f64) {
+        let jump = self.get_jump_velocity(strength);
 
         if jump <= 1.0e-5 {
             return;

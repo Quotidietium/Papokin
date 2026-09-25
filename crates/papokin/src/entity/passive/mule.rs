@@ -158,6 +158,17 @@ impl Animal for MuleEntity {
 }
 
 impl Mob for MuleEntity {
+    fn open_rider_inventory(&self, player: &Arc<Player>) {
+        let world = player.world();
+        if let Some(vehicle) = world.get_entity_by_id(self.get_entity().entity_id) {
+            let chest_inventory = self
+                .has_chest()
+                .then(|| self.chest_inventory.clone())
+                .map(|inventory| inventory as Arc<dyn Inventory>);
+            super::horse::open_equipment_screen(&vehicle, player, chest_inventory, false);
+        }
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }

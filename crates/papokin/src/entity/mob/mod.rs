@@ -92,6 +92,10 @@ pub struct MobEntity {
     pub breeding_cooldown: AtomicI32,
     pub breeder: AtomicCell<Option<Uuid>>,
     pub persistence_required: AtomicBool,
+    /// 马系骑手按住空格的蓄力起点（`StartHorseJump` 写入、
+    /// `StopHorseJump` 消费换算跳跃力）；None 表示未在蓄力。
+    /// 瞬态量不进存档
+    pub jump_charge_start: AtomicCell<Option<std::time::Instant>>,
     mob_flags: AtomicU8,
     last_sent_yaw: AtomicU8,
     last_sent_pitch: AtomicU8,
@@ -181,6 +185,7 @@ impl MobEntity {
             breeding_cooldown: AtomicI32::new(0),
             breeder: AtomicCell::new(None),
             persistence_required: AtomicBool::new(false),
+            jump_charge_start: AtomicCell::new(None),
             mob_flags: AtomicU8::new(0),
             last_sent_yaw: AtomicU8::new(0),
             last_sent_pitch: AtomicU8::new(0),
@@ -900,6 +905,11 @@ pub trait Mob: EntityBase + Send + Sync {
     /// 坐骑界面鞍槽装卸时同步鞍具标志（置/清 `FLAG_SADDLE`）。
     /// 仅马系等可鞍生物覆写；默认空实现保证其余生物不受影响。
     fn set_saddled_flag(&self, _saddled: bool) {}
+
+    /// 骑手请求打开坐骑物品栏（客户端骑乘中按 E，经
+    /// `OpenVehicleInventory` 动作；原版 `HasCustomInventoryScreen`）。
+    /// 与右键打开路径同源构造界面；默认空实现表示该坐骑无界面。
+    fn open_rider_inventory(&self, _player: &Arc<Player>) {}
 
     /// 死亡时掉落驮箱（箱子本体与内容）。仅带箱驴/骡覆写；
     /// 默认空实现保证其余生物不受影响。

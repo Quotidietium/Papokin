@@ -243,6 +243,14 @@ impl Animal for HorseEntity {
 }
 
 impl Mob for HorseEntity {
+    fn open_rider_inventory(&self, player: &Arc<Player>) {
+        // 骑乘中（能收到该包）必然已驯服，与右键打开路径同源构造
+        let world = player.world();
+        if let Some(vehicle) = world.get_entity_by_id(self.get_entity().entity_id) {
+            open_equipment_screen(&vehicle, player, None, true);
+        }
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }

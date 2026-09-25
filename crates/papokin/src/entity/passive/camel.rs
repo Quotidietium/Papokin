@@ -129,6 +129,13 @@ impl Animal for CamelEntity {
 }
 
 impl Mob for CamelEntity {
+    fn open_rider_inventory(&self, player: &Arc<Player>) {
+        let world = player.world();
+        if let Some(vehicle) = world.get_entity_by_id(self.get_entity().entity_id) {
+            super::horse::open_equipment_screen(&vehicle, player, None, false);
+        }
+    }
+
     fn as_ageable(&self) -> Option<&dyn AgeableMob> {
         Some(self)
     }
