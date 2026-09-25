@@ -597,7 +597,12 @@ impl PathNavigation {
             .set_can_walk_over_fences(self.can_walk_over_fences);
         self.evaluator.prepare(context, mob_data);
 
-        let mut start_node = self.evaluator.get_start()?;
+        // 起点无效时也必须走 done() 释放寻路状态（上下文/缓存），
+        // 否则残留状态会滞留到下一次 prepare。
+        let Some(mut start_node) = self.evaluator.get_start() else {
+            self.evaluator.done();
+            return None;
+        };
         let mut target = self.evaluator.get_target(BlockPos::floored_v(destination));
 
         start_node.g = 0.0;
@@ -743,6 +748,16 @@ impl PathNavigation {
         None
     }
 
+    /// 递减导航逐刻冷却。所有导航类型（地面/飞行/水行/两栖）的
+    /// `tick` 都必须每刻调用一次；此前只有 `tick_ground` 递减
+    /// `repath_cooldown`，导致飞行/水行/两栖导航在首次重算后
+    /// 冷却值永不归零，`needs_new_path` 的目标偏移重算被永久抑制。
+    pub const fn tick_cooldowns(&mut self) {
+        if self.repath_cooldown > 0 {
+            self.repath_cooldown -= 1;
+        }
+    }
+
     pub fn needs_new_path(&self, goal: &NavigatorGoal) -> bool {
         if self.path.is_none() {
             return true;
@@ -753,9 +768,10 @@ impl PathNavigation {
         self.path.as_ref().is_some_and(|p| {
             let path_target = p.get_target();
             let goal_target = BlockPos::floored_v(goal.destination).0;
-            let dx = f64::from(path_target.0.x - goal_target.x);
-            let dy = f64::from(path_target.0.y - goal_target.y);
-            let dz = f64::from(path_target.0.z - goal_target.z);
+            // 坐标差在 f64 域计算：极端坐标下 i32 直接相减会溢出。
+            let dx = f64::from(path_target.0.x) - f64::from(goal_target.x);
+            let dy = f64::from(path_target.0.y) - f64::from(goal_target.y);
+            let dz = f64::from(path_target.0.z) - f64::from(goal_target.z);
             let distance_sq = dx * dx + dy * dy + dz * dz;
             let remaining = p.get_remaining_distance().clamp(4.0, 16.0);
             let threshold = remaining * 0.5;
@@ -1025,9 +1041,7 @@ impl PathNavigation {
         }
 
         self.total_ticks += 1;
-        if self.repath_cooldown > 0 {
-            self.repath_cooldown -= 1;
-        }
+        self.tick_cooldowns();
 
         if self.needs_new_path(&goal) {
             let mut dest_pos = BlockPos::floored_v(goal.destination);
@@ -1495,6 +1509,7 @@ impl PathNavigationTrait for FlyingPathNavigation {
     #[allow(clippy::too_many_lines)]
     fn tick(&mut self, entity: &LivingEntity) {
         self.inner.tick_count += 1;
+        self.inner.tick_cooldowns();
         let world_age = entity.entity.world.load().get_world_age() as u64;
 
         if self.inner.has_delayed_recomputation {
@@ -1796,6 +1811,7 @@ impl PathNavigationTrait for WaterBoundPathNavigation {
     #[allow(clippy::too_many_lines)]
     fn tick(&mut self, entity: &LivingEntity) {
         self.inner.tick_count += 1;
+        self.inner.tick_cooldowns();
         let world_age = entity.entity.world.load().get_world_age() as u64;
 
         if self.inner.has_delayed_recomputation {
@@ -2323,6 +2339,7 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
     fn tick(&mut self, entity: &LivingEntity) {
         if entity.entity.touching_water.load(Ordering::Relaxed) {
             self.inner.tick_count += 1;
+            self.inner.tick_cooldowns();
             let world_age = entity.entity.world.load().get_world_age() as u64;
 
             if self.inner.has_delayed_recomputation {
@@ -2598,5 +2615,58 @@ impl Deref for Navigator {
 impl DerefMut for Navigator {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut *self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn navigation_with_path(target: BlockPos) -> PathNavigation {
+        let mut nav = PathNavigation::new(EvaluatorKind::Walk(WalkNodeEvaluator::default()));
+        let node = Node::new(BlockPos::new(0, 0, 0));
+        nav.path = Some(Path::new(vec![node], target, false));
+        nav
+    }
+
+    #[test]
+    fn tick_cooldowns_decreases_and_saturates_at_zero() {
+        let mut nav = PathNavigation::new(EvaluatorKind::Walk(WalkNodeEvaluator::default()));
+        nav.repath_cooldown = 15;
+        nav.tick_cooldowns();
+        assert_eq!(nav.repath_cooldown, 14);
+        for _ in 0..20 {
+            nav.tick_cooldowns();
+        }
+        assert_eq!(nav.repath_cooldown, 0);
+    }
+
+    #[test]
+    fn needs_new_path_unblocks_after_cooldown_expires() {
+        let mut nav = navigation_with_path(BlockPos::new(0, 0, 0));
+        nav.repath_cooldown = 1;
+        let goal = NavigatorGoal::new(
+            Vector3::new(0.5, 0.0, 0.5),
+            Vector3::new(64.5, 0.0, 64.5),
+            1.0,
+        );
+        // 冷却期内目标偏移重算被抑制。
+        assert!(!nav.needs_new_path(&goal));
+        nav.tick_cooldowns();
+        // 冷却归零后，目标大幅偏移应重新触发寻路。
+        assert!(nav.needs_new_path(&goal));
+    }
+
+    #[test]
+    fn needs_new_path_survives_extreme_coordinates() {
+        // 极端坐标下 i32 直接相减会溢出；f64 域计算必须平稳返回。
+        let mut nav = navigation_with_path(BlockPos::new(i32::MAX, 0, 0));
+        nav.repath_cooldown = 0;
+        let goal = NavigatorGoal::new(
+            Vector3::new(f64::from(i32::MAX), 0.0, 0.5),
+            Vector3::new(f64::from(i32::MIN), 0.0, 0.5),
+            1.0,
+        );
+        assert!(nav.needs_new_path(&goal));
     }
 }
