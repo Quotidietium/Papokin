@@ -14,7 +14,7 @@ use std::{
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use wasmtime::{
-    AsContextMut, Store, StoreContextMut,
+    AsContextMut, CallHook, Store, StoreContextMut,
     component::{Accessor, AccessorTask, ComponentNamedList, Lift, Lower, TypedFunc},
 };
 
@@ -494,6 +494,11 @@ struct StoreShared<T, P> {
     reentry: Arc<ReentryState<T>>,
     policy: P,
     spawner: Arc<dyn RuntimeSpawner>,
+    /// guest 调用的 epoch 预算（单位：引擎 epoch 递增次数；0 = 禁用）。
+    /// 经 `call_hook` 在每次从宿主进入 guest 代码前重置为该值；
+    /// 引擎需启用 `epoch_interruption` 且有外部 `increment_epoch`
+    /// 驱动才会实际触发。
+    epoch_budget: Arc<AtomicU64>,
 }
 
 /// 针对单个 Wasmtime Store 的可克隆提交与观察能力。
@@ -517,6 +522,16 @@ where
     #[must_use]
     pub fn state(&self) -> DriverState {
         self.shared.lifecycle.state()
+    }
+
+    /// 设置 guest 调用的 epoch 预算（0 表示禁用 epoch 中断）。
+    ///
+    /// 预算单位是引擎 `increment_epoch` 的递增次数；宿主需自行
+    /// 以固定节奏递增 epoch（例如每 100ms 一次的定时任务）。
+    /// 预算在每次从宿主进入 guest 代码前生效，超限的 guest 调用
+    /// 以 trap（epoch deadline reached）返回 `Err`。
+    pub fn set_epoch_budget(&self, ticks: u64) {
+        self.shared.epoch_budget.store(ticks, Ordering::Release);
     }
 
     #[must_use]
@@ -767,7 +782,7 @@ where
     P: StorePolicy,
 {
     pub async fn start(
-        store: Store<T>,
+        mut store: Store<T>,
         policy: P,
         spawner: Arc<dyn RuntimeSpawner>,
     ) -> wasmtime::Result<Self> {
@@ -776,6 +791,20 @@ where
         let lifecycle = Lifecycle::new();
         let accepting = Arc::new(AtomicBool::new(true));
         let guest_call_failure = Arc::new(GuestCallFailure::default());
+        let epoch_budget = Arc::new(AtomicU64::new(0));
+        // 每次从宿主进入 guest 代码前重置 epoch 截止：单次调用超过
+        // 预算的 epoch 递增次数即 trap，防止失控插件用死循环
+        // 永久占住 Store 驱动（进而拖住同步事件派发线程）。
+        let hook_budget = Arc::clone(&epoch_budget);
+        store.call_hook(move |mut store, hook| {
+            if matches!(hook, CallHook::CallingWasm | CallHook::ReturningFromHost) {
+                let ticks = hook_budget.load(Ordering::Acquire);
+                if ticks > 0 {
+                    store.set_epoch_deadline(ticks);
+                }
+            }
+            Ok(())
+        });
         let shared = Arc::new(StoreShared {
             sender,
             accepting: Arc::clone(&accepting),
@@ -785,6 +814,7 @@ where
             reentry: Arc::new(ReentryState::new()),
             policy,
             spawner: Arc::clone(&spawner),
+            epoch_budget,
         });
         let (ready_sender, ready) = oneshot::channel();
         let policy_name = P::NAME;

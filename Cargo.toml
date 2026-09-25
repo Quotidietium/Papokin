@@ -222,7 +222,7 @@ ordered-float = { version = "5.4", default-features = false, features = ["std"] 
 
 # Temporary pin to the approved implementation of Component Model sync reentry:
 # https://github.com/bytecodealliance/wasmtime/commit/f6b3140dbb1d9b436ef523d14740292c956b0364
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "f6b3140dbb1d9b436ef523d14740292c956b0364", default-features = false, features = ["runtime", "component-model", "component-model-async", "async", "cache", "cranelift", "gc", "gc-drc", "threads", "std"] }
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "f6b3140dbb1d9b436ef523d14740292c956b0364", default-features = false, features = ["runtime", "component-model", "component-model-async", "async", "cache", "cranelift", "gc", "gc-drc", "threads", "std", "call-hook"] }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "f6b3140dbb1d9b436ef523d14740292c956b0364", default-features = false, features = ["p2", "p3"] }
 wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "f6b3140dbb1d9b436ef523d14740292c956b0364", default-features = false, features = ["p2", "p3", "default-send-request"] }
 # needed for interacting with wasmtime-wasi-http - keep in sync

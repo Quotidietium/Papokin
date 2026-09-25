@@ -30,10 +30,10 @@ mod tests {
         time::{Duration, timeout},
     };
     use wasm_encoder::{
-        CodeSection, ComponentBuilder, ComponentExportKind, ComponentTypeRef, ComponentValType,
-        ConstExpr, EntityType, ExportKind, ExportSection, Function, FunctionSection, GlobalSection,
-        GlobalType, ImportSection, Instruction, Module, ModuleArg, PrimitiveValType, TypeBounds,
-        TypeSection, ValType,
+        BlockType, CodeSection, ComponentBuilder, ComponentExportKind, ComponentTypeRef,
+        ComponentValType, ConstExpr, EntityType, ExportKind, ExportSection, Function,
+        FunctionSection, GlobalSection, GlobalType, ImportSection, Instruction, Module, ModuleArg,
+        PrimitiveValType, TypeBounds, TypeSection, ValType,
     };
     use wasmtime::{
         Config, Engine, Store,
@@ -358,6 +358,106 @@ mod tests {
         let run = component.lift_func(Some("run"), run_core, function_type, []);
         component.export("run", ComponentExportKind::Func, run, None);
         component.finish()
+    }
+
+    /// 导出一个永不返回的 `spin` 函数（`loop { br 0 }`），
+    /// 用于验证 epoch 预算对失控 guest 的中断。
+    fn spin_forever_component() -> Vec<u8> {
+        let mut module = Module::new();
+        let mut types = TypeSection::new();
+        types.ty().function([], []);
+        module.section(&types);
+
+        let mut functions = FunctionSection::new();
+        functions.function(0);
+        module.section(&functions);
+
+        let mut exports = ExportSection::new();
+        exports.export("spin", ExportKind::Func, 0);
+        module.section(&exports);
+
+        let mut body = Function::new([]);
+        body.instruction(&Instruction::Loop(BlockType::Empty));
+        body.instruction(&Instruction::Br(0));
+        body.instruction(&Instruction::End);
+        body.instruction(&Instruction::End);
+        let mut code = CodeSection::new();
+        code.function(&body);
+        module.section(&code);
+
+        let mut component = ComponentBuilder::default();
+        let (function_type, mut function) = component.type_function(Some("spin-type"));
+        function
+            .params([] as [(&str, PrimitiveValType); 0])
+            .result(None);
+        let module = component.core_module(Some("guest"), &module);
+        let guest_instance = component.core_instantiate(
+            Some("guest-instance"),
+            module,
+            [] as [(&str, ModuleArg); 0],
+        );
+        let spin_core = component.core_alias_export(
+            Some("spin-core"),
+            guest_instance,
+            "spin",
+            ExportKind::Func,
+        );
+        let spin = component.lift_func(Some("spin"), spin_core, function_type, []);
+        component.export("spin", ComponentExportKind::Func, spin, None);
+        component.finish()
+    }
+
+    /// guest 死循环在 epoch 预算耗尽后必须以 trap 中断，而不是
+    /// 永久占住 Store 驱动（否则同步事件派发线程会被拖死）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn epoch_budget_traps_infinite_guest_loop() {
+        let mut config = Config::new();
+        config.wasm_component_model(true);
+        config.wasm_component_model_async(true);
+        config.concurrency_support(true);
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).expect("测试引擎");
+        let component = Component::new(&engine, spin_forever_component()).expect("测试组件");
+
+        let mut store = Store::new(&engine, TestHostState);
+        let linker = Linker::<TestHostState>::new(&engine);
+        let instance = linker
+            .instantiate_async(&mut store, &component)
+            .await
+            .expect("实例化测试组件");
+        let spin = instance
+            .get_typed_func::<(), ()>(&mut store, "spin")
+            .expect("获取 spin 导出");
+
+        let driver = ConcurrentStore::new(store).await;
+        // 预算 2 次 epoch 递增；随后递增 3 次必然超限。
+        driver.set_epoch_budget(2);
+
+        let call_driver = driver.clone();
+        let spinning = tokio::spawn(async move {
+            timeout(
+                Duration::from_secs(5),
+                call_driver.call_guest(move |mut context| {
+                    Box::pin(async move { context.call(spin, ()).await })
+                }),
+            )
+            .await
+        });
+
+        // 给驱动一点时间让 guest 进入死循环，再耗尽预算。
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        engine.increment_epoch();
+        engine.increment_epoch();
+        engine.increment_epoch();
+
+        let result = spinning
+            .await
+            .expect("等待调用任务")
+            .expect("epoch 中断测试超时：guest 死循环未被中断");
+        // trap 可能直接以 epoch 错误返回，也可能经"guest 调用失败
+        // 使驱动失效"的既有语义传播（driver failed + wasm backtrace）；
+        // 在超时内以 Err 返回即证明中断生效。
+        drop(result.expect_err("超出 epoch 预算的调用应当以 trap 失败"));
     }
 
     #[allow(clippy::too_many_lines)]
