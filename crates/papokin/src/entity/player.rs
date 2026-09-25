@@ -4545,6 +4545,50 @@ impl Player {
                     self.world().drop_stack(&block_pos, stack);
                 }
             }
+            drop(main_inv);
+
+            // 原版对齐：盔甲与副手同样在死亡时掉落。重生流程的
+            // inventory.clear() 会连同装备整体清空——不在此掉落会把
+            // 盔甲静默销毁（数据丢失）。跳过 MainHand 镜像槽（其物品
+            // 由上方主背包掉落覆盖）；绑定诅咒的盔甲不随死亡掉落。
+            {
+                let mut equipment = self
+                    .inventory()
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for (slot, item) in &mut equipment.equipment {
+                    if matches!(slot, EquipmentSlot::MainHand(_))
+                        || item.is_empty()
+                        || item.get_enchantment_level(&Enchantment::BINDING_CURSE) > 0
+                    {
+                        continue;
+                    }
+                    let stack = std::mem::replace(item, ItemStack::EMPTY.clone());
+                    self.increment_stat(
+                        statistics::StatisticCategory::Dropped,
+                        stack.item.id as i32,
+                        stack.item_count as i32,
+                    );
+                    self.increment_custom_stat(
+                        statistics::CustomStatistic::Drop,
+                        stack.item_count as i32,
+                    );
+                    self.world().drop_stack(&block_pos, stack);
+                }
+            }
+
+            // 原版对齐：死亡掉落经验球（7*等级/10，上限 100）；重生
+            // 流程会把经验清零，不在此生成即凭空蒸发
+            let xp = (self.get_experience_level() * 7 / 10).min(100);
+            if xp > 0 {
+                let world = self.world();
+                crate::entity::experience_orb::ExperienceOrbEntity::spawn(
+                    &world,
+                    self.position(),
+                    xp as u32,
+                );
+            }
         }
 
         // 死亡时重置氧气供应与溺水刻
