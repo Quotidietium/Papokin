@@ -335,7 +335,17 @@ pub trait ScreenHandler: Send + Sync {
     /// 记录某槽位收到的物品堆（用于同步跟踪）。
     fn set_received_stack(&mut self, slot: usize, stack: ItemStack) {
         let behaviour = self.get_behaviour_mut();
-        behaviour.previous_tracked_stacks[slot].set_received_stack(stack);
+        // 与 set_received_hash 同样的边界防御：槽位索引源自客户端包
+        // （如创造模式槽位设置），越界直接索引会 panic
+        if let Some(tracked) = behaviour.previous_tracked_stacks.get_mut(slot) {
+            tracked.set_received_stack(stack);
+        } else {
+            warn!(
+                "槽位索引不正确：{}，可用槽位数：{}",
+                slot,
+                behaviour.previous_tracked_stacks.len()
+            );
+        }
     }
 
     /// 记录收到的光标哈希（用于同步跟踪）。
