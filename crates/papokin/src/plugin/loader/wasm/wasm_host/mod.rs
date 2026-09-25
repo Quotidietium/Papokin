@@ -115,6 +115,17 @@ pub struct PluginRuntime {
     linker: wasmtime::component::Linker<PluginHostState>,
     legacy_sync_reentry: concurrent_store::LegacySyncReentry,
     store_spawner: Arc<dyn RuntimeSpawner>,
+    /// 周期性递增引擎 epoch 的后台任务；Drop 时中止，避免
+    /// 热重载反复创建 `PluginRuntime` 时累积泄漏 ticker。
+    epoch_ticker: Option<tokio::task::AbortHandle>,
+}
+
+impl Drop for PluginRuntime {
+    fn drop(&mut self) {
+        if let Some(ticker) = self.epoch_ticker.take() {
+            ticker.abort();
+        }
+    }
 }
 
 pub enum PluginInstance {
@@ -131,6 +142,10 @@ pub struct WasmPlugin {
 /// 可以通过持续分配线性内存拖垮整机。
 const DEFAULT_PLUGIN_MEMORY_LIMIT_MB: u64 = 512;
 
+/// epoch 定时器周期。guest 调用的超时预算按该周期换算：
+/// `set_epoch_budget(timeout_seconds * 1000 / EPOCH_TICKER_INTERVAL_MS)`。
+const EPOCH_TICKER_INTERVAL_MS: u64 = 100;
+
 impl Drop for WasmPlugin {
     fn drop(&mut self) {
         self.store.discard();
@@ -138,6 +153,10 @@ impl Drop for WasmPlugin {
 }
 
 impl PluginRuntime {
+    /// guest 调用的默认超时（秒）。`on_load` 读取配置后会用
+    /// `plugins.call_timeout_seconds` 覆盖。
+    const DEFAULT_CALL_TIMEOUT_SECONDS: u64 = 60;
+
     pub fn new<P: AsRef<Path>>(
         path: P,
         legacy_sync_reentry: concurrent_store::LegacySyncReentry,
@@ -147,6 +166,10 @@ impl PluginRuntime {
         config.wasm_component_model(true);
         config.wasm_component_model_async(true);
         config.concurrency_support(true);
+        // 启用基于 epoch 的 guest 中断：配合 StoreExecutor 的
+        // epoch 预算与下方定时器，死循环插件会被 trap 中断，
+        // 而不是永久占住同步事件派发线程。
+        config.epoch_interruption(true);
         let mut path =
             std::path::absolute(path.as_ref()).map_err(PluginInitError::PathResolutionFailed)?;
         path.pop();
@@ -165,12 +188,30 @@ impl PluginRuntime {
 
         let linker = setup_linker(&engine).map_err(PluginInitError::LinkerSetupFailed)?;
 
+        // 定时递增 epoch 驱动 guest 调用的截止判定；仅在已存在
+        // tokio 运行时时启动（加载器运行于异步上下文）。
+        let epoch_ticker = tokio::runtime::Handle::try_current().ok().map(|handle| {
+            let ticker_engine = engine.clone();
+            handle
+                .spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+                        EPOCH_TICKER_INTERVAL_MS,
+                    ));
+                    loop {
+                        interval.tick().await;
+                        ticker_engine.increment_epoch();
+                    }
+                })
+                .abort_handle()
+        });
+
         Ok(Self {
             engine,
             cache_dir: path,
             linker,
             legacy_sync_reentry,
             store_spawner,
+            epoch_ticker,
         })
     }
 
@@ -243,6 +284,9 @@ impl PluginRuntime {
         )
         .await
         .map_err(PluginInitError::InstantiationFailed)?;
+        // 默认先施加保守预算；on_load 读取配置后会覆盖为用户值。
+        store
+            .set_epoch_budget(Self::DEFAULT_CALL_TIMEOUT_SECONDS * 1000 / EPOCH_TICKER_INTERVAL_MS);
         let wasm_plugin = Arc::new(WasmPlugin {
             plugin_instance: Arc::new(plugin_instance),
             store,
@@ -419,12 +463,20 @@ impl WasmPlugin {
             .and_then(|o| o.max_memory_mb)
             .or(plugin_config.max_memory_mb)
             .unwrap_or(DEFAULT_PLUGIN_MEMORY_LIMIT_MB);
+        // 单次 guest 调用（事件处理/生命周期回调）的超时预算；
+        // 超时的调用以 trap 中断并沿既有错误路径记日志。
+        let call_timeout_seconds = plugin_override
+            .and_then(|o| o.call_timeout_seconds)
+            .unwrap_or(plugin_config.call_timeout_seconds)
+            .max(1) as u64;
         let wasi_ctx = builder.build();
         let server = context.server.clone();
         let name = metadata.name.clone();
         let function = match self.plugin_instance.as_ref() {
             PluginInstance::V0_1(plugin) => plugin.func_on_load(),
         };
+        // 闭包需要 'static，预算写入须在提交前先克隆句柄。
+        let store_for_budget = self.store.clone();
 
         self.store
             .call_guest(move |mut guest| {
@@ -442,6 +494,11 @@ impl WasmPlugin {
                         store.data_mut().name = Some(name);
                         store.data_mut().add_context(context)
                     })?;
+
+                    // on_load 本身是 guest 调用，同样受超时约束；
+                    // 此处顺带把用户配置的预算写入，供后续事件调用使用。
+                    store_for_budget
+                        .set_epoch_budget(call_timeout_seconds * 1000 / EPOCH_TICKER_INTERVAL_MS);
 
                     guest
                         .call(function, (context_res,))
