@@ -357,8 +357,16 @@ impl PoiRegion {
         }
 
         let file_data = std::fs::read(path)?;
-        if file_data.len() < HEADER_SIZE {
+        // 空文件视为尚未写入的 region；非空但不足文件头长度
+        // 说明写入中途被截断，按损坏处理（调用方会先备份再重建）
+        if file_data.is_empty() {
             return Ok(Self::new());
+        }
+        if file_data.len() < HEADER_SIZE {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "POI 文件头不完整",
+            ));
         }
 
         let mut region = Self::new();
@@ -457,12 +465,26 @@ impl PoiStorage {
     fn get_or_load_region(&mut self, rx: i32, rz: i32) -> &mut PoiRegion {
         let path = self.region_path(rx, rz);
         self.regions.entry((rx, rz)).or_insert_with(|| {
-            PoiRegion::load(&path).unwrap_or_else(|e| {
-                if path.exists() {
-                    warn!("加载 POI 区域 {} 失败：{}", path.display(), e);
+            match PoiRegion::load(&path) {
+                Ok(region) => region,
+                Err(e) => {
+                    warn!("加载 POI 区域 {} 失败：{e}", path.display());
+                    // 加载失败时必须先把原文件改名备份：否则插入的
+                    // 空 region 会在后续 add 触发保存时，用只含新条目
+                    // 的数据覆盖整个 .mca，存量 POI 将全部静默丢失
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_secs());
+                    let backup = path.with_extension(format!("corrupt-{timestamp}"));
+                    if let Err(backup_err) = std::fs::rename(&path, &backup) {
+                        warn!(
+                            "备份损坏的 POI 文件到 {} 失败：{backup_err}",
+                            backup.display()
+                        );
+                    }
+                    PoiRegion::new()
                 }
-                PoiRegion::new()
-            })
+            }
         })
     }
 
@@ -670,6 +692,47 @@ mod tests {
                 .find_closest_matching(BlockPos(Vector3::new(1000, 64, 100)), 16, |_| true)
                 .is_none()
         );
+    }
+
+    /// 损坏的 POI 文件必须先备份再重建：否则空 region 会在
+    /// 后续保存时覆盖 .mca，存量 POI 全部静默丢失
+    #[test]
+    fn corrupt_poi_file_is_backed_up_not_overwritten() {
+        let dir = std::env::temp_dir().join("papokin_poi_corrupt_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let path = dir.join("r.0.0.mca");
+        // 长度不足文件头的残缺文件（写入中途被截断的形态）
+        std::fs::write(&path, b"truncated-garbage").unwrap();
+
+        let mut storage = PoiStorage::new(dir.clone());
+        // 触发该 region 加载：失败后原文件应被改名为备份
+        storage.add_portal(BlockPos(Vector3::new(100, 64, 100)));
+        assert!(!path.exists(), "损坏文件应已被改名备份");
+
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("r.0.0.corrupt-"))
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "应恰好生成一个备份文件");
+        assert_eq!(
+            std::fs::read(&backups[0]).unwrap(),
+            b"truncated-garbage",
+            "备份必须保留原始字节"
+        );
+
+        // 新数据可以正常累积并保存，且不会触碰备份
+        storage.save_all().unwrap();
+        assert!(path.exists(), "重建后的 region 应已保存");
+        assert!(backups[0].exists(), "备份文件必须保留");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
