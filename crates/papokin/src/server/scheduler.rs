@@ -373,10 +373,23 @@ impl TaskScheduler {
             // 当与刻对齐的任务从堆中弹出时被消耗。
             entry.cancel.cancel();
         } else {
-            self.cancelled_tasks
+            // 仅当堆中确实存在该任务时才登记取消：对已完成或
+            // 伪造 id 的无条件登记会在 HashSet 中永久堆积（这些
+            // id 永远不会从堆中弹出，集合条目无法被消费）。
+            // 已弹出待重入队窗口内的取消会失效一轮，该窗口
+            // 位于 tick 的同步段内，实际竞态窗口极小。
+            let in_heap = self
+                .tasks
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(id);
+                .iter()
+                .any(|task| task.id == id);
+            if in_heap {
+                self.cancelled_tasks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(id);
+            }
         }
     }
 
@@ -635,10 +648,41 @@ impl ScheduledFunctionQueue {
             }
         }
         for event in to_run {
-            let _ = crate::data::datapack::DatapackManager::execute_function_from_console(
+            // 失败必须可见：调度链路无玩家反馈通道，
+            // 静默吞错会让坏掉的 datapack 函数无人察觉
+            if let Err(err) = crate::data::datapack::DatapackManager::execute_function_from_console(
                 server,
                 &event.function_name,
-            );
+            ) {
+                tracing::warn!(
+                    "调度函数 {}（id {}）执行失败：{err}",
+                    event.function_name,
+                    event.id
+                );
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ScheduledFunctionQueue;
+
+    #[test]
+    fn schedule_replace_supersedes_prior_same_id_events() {
+        let queue = ScheduledFunctionQueue::new();
+        queue.schedule("a".into(), 10, "mc:old".into(), false, false);
+        // replace 只清除同 id 的事件，其他 id 不受影响
+        queue.schedule("a".into(), 20, "mc:new".into(), false, true);
+        queue.schedule("b".into(), 30, "mc:other".into(), false, true);
+        assert_eq!(
+            queue.get_event_ids(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+
+        // 同 id 多条事件（未 replace）应被 remove 一并清除并计数
+        queue.schedule("b".into(), 40, "mc:other2".into(), false, false);
+        assert_eq!(queue.remove("b"), 2);
+        assert_eq!(queue.get_event_ids(), vec!["a".to_string()]);
     }
 }
