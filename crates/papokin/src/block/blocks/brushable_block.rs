@@ -6,7 +6,9 @@ use papokin_data::{Block, BlockId, BlockStateId};
 use papokin_world::world::BlockFlags;
 
 use crate::block::entities::brushable_block::BrushableBlockBlockEntity;
-use crate::block::{BlockBehaviour, BlockMetadata, BrokenArgs, OnPlaceArgs, PlacedArgs};
+use crate::block::{
+    BlockBehaviour, BlockMetadata, BrokenArgs, OnPlaceArgs, OnStateReplacedArgs, PlacedArgs,
+};
 
 pub struct BrushableBlock;
 
@@ -89,6 +91,25 @@ impl BlockBehaviour for BrushableBlock {
     }
 
     fn broken(&self, args: BrokenArgs<'_>) {
+        if let Some(be) = args.world.get_block_entity(args.position)
+            && let Some(brush_be) = be.as_any().downcast_ref::<BrushableBlockBlockEntity>()
+            && let Some(contained) = brush_be
+                .item
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        {
+            args.world.drop_stack(args.position, contained);
+        }
+    }
+
+    fn on_state_replaced(&self, args: OnStateReplacedArgs<'_>) {
+        if args.moved {
+            return;
+        }
+        // 爆炸、指令 setblock 等非玩家替换路径同样要掉出内部考古
+        // 物品，防止随方块实体移除凭空丢失。take 语义保证与 broken
+        // 路径（先执行）不会双重掉落。
         if let Some(be) = args.world.get_block_entity(args.position)
             && let Some(brush_be) = be.as_any().downcast_ref::<BrushableBlockBlockEntity>()
             && let Some(contained) = brush_be
