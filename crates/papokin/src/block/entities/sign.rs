@@ -406,3 +406,35 @@ impl<'a> SignEntityRef<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 告示牌文本是用户生成内容中最易被往返断裂丢掉的部分
+    /// （56 轮更新会话修复的直接数据面）：本测试钉住
+    /// `write → from_nbt` 的字段保真，防止重构时键名/格式漂移。
+    #[test]
+    fn sign_text_nbt_roundtrip_preserves_user_content() {
+        let text = SignText::default();
+        text.set_message(0, "第一行".into(), None);
+        text.set_message(1, "第二行".into(), Some("第二行过滤".into()));
+        text.set_message(3, "第四行".into(), None);
+        text.has_glowing_text.store(true, Ordering::Relaxed);
+        text.set_color(DyeColor::Red);
+
+        let tag: NbtTag = text.clone().into();
+        let restored = SignText::from(tag);
+
+        assert!(restored.has_glowing_text.load(Ordering::Relaxed));
+        assert_eq!(restored.get_color(), DyeColor::Red);
+        assert_eq!(
+            *restored.messages.lock().unwrap(),
+            *text.messages.lock().unwrap()
+        );
+        assert_eq!(
+            *restored.filtered_messages.lock().unwrap(),
+            *text.filtered_messages.lock().unwrap()
+        );
+    }
+}
