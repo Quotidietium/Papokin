@@ -73,7 +73,8 @@ impl JavaClient {
         }
         // y = 脚部 Y
         let position = packet.position;
-        if position.x.is_nan() || position.y.is_nan() || position.z.is_nan() {
+        // 与带旋转分支一致：非有限坐标（NaN/±Inf）直接断开
+        if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
             self.try_kick(&TextComponent::translate(
                 translation::java::MULTIPLAYER_DISCONNECT_INVALID_PLAYER_MOVEMENT,
                 [],
@@ -280,8 +281,10 @@ impl JavaClient {
                 }
 
                 let height_difference = pos.y - last_pos.y;
+                // 起跳判定 = 原先在地面 && 本包已离开地面 && 上升，
+                // 与不带旋转分支及原版 onGround && !packet.onGround 一致
                 if entity.on_ground.load(Ordering::Relaxed)
-                    && (packet.collision & FLAG_ON_GROUND) != 0
+                    && packet.collision & FLAG_ON_GROUND == 0
                     && height_difference > 0.0
                 {
                     player.jump();
