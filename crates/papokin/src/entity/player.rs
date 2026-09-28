@@ -5516,6 +5516,15 @@ impl Player {
 
     pub fn on_rename_item(self: &Arc<Self>, packet: &SRenameItem<'_>) {
         self.update_last_action_time();
+        // 原版铁砧改名上限 50 字符：超限文本只可能来自改过的客户端，
+        // 放行会随物品组件持久化进存档（轻度膨胀）。
+        if packet.item_name.chars().count() > 50 {
+            debug!(
+                "玩家 {} 的铁砧改名超过 50 字符上限，已忽略",
+                self.gameprofile.name
+            );
+            return;
+        }
 
         let mut prepare_event =
             crate::plugin::api::events::inventory::prepare_anvil::PrepareAnvilEvent::new(
