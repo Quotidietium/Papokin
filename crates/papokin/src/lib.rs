@@ -19,6 +19,7 @@ use crate::net::{lan_broadcast::LANBroadcast, query, rcon::RCONServer};
 use crate::plugin::server::server_command::ServerCommandEvent;
 use crate::server::{Server, ticker::Ticker};
 use papokin_config::{AdvancedConfiguration, BasicConfiguration, TelemetryConfig};
+use papokin_data::translation;
 use papokin_util::text::TextComponent;
 use papokin_util::text::color::{Color, NamedColor};
 use plugin::server::server_load::{LoadType, ServerLoadEvent};
@@ -528,11 +529,40 @@ impl PapokinServer {
                                  {
                                      let client = player.client.clone();
                                      client.set_player(player.clone());
-                                     world
-                                         .spawn_java_player(&server_clone.basic_config, &player, &server_clone)
-                                         .await;
 
-                                     client.progress_player_packets(&player, &server_clone).await;
+                                     // 满员二次复核：登录阶段的满员检查只统计
+                                     // 已入世玩家，且距实际入列隔着客户端掌控
+                                     // 节奏的 Config 阶段——并发登录可全部通过
+                                     // 检查后同时入世超出 max_players。此处以
+                                     // 入列后的真实计数复核，超额踢出最新加入
+                                     // 者（复用下方统一清理链）。
+                                     let max_players =
+                                         server_clone.advanced_config.networking.java.max_players;
+                                     if max_players > 0
+                                         && server_clone.get_player_count()
+                                             > max_players as usize
+                                     {
+                                         warn!(
+                                             "满员二次复核踢出最新加入的玩家 {}（{}）",
+                                             player.gameprofile.name, player.gameprofile.id
+                                         );
+                                         player.kick(&TextComponent::translate(
+                                             translation::java::MULTIPLAYER_DISCONNECT_SERVER_FULL,
+                                             [],
+                                         ));
+                                     } else {
+                                         world
+                                             .spawn_java_player(
+                                                 &server_clone.basic_config,
+                                                 &player,
+                                                 &server_clone,
+                                             )
+                                             .await;
+
+                                         client
+                                             .progress_player_packets(&player, &server_clone)
+                                             .await;
+                                     }
 
                                      // 完成后关闭
                                      client.close();
