@@ -161,6 +161,7 @@ impl EntityBase for TridentEntity {
         self.owner_id
     }
 
+    #[expect(clippy::too_many_lines)]
     fn tick(&self, caller: &dyn EntityBase, _server: &Server) {
         let entity = self.get_entity();
         let world = entity.world.load();
@@ -183,6 +184,18 @@ impl EntityBase for TridentEntity {
         }
 
         // 三叉戟正在飞行
+        // 飞行态寿命与出界兜底：不走基础 Entity::tick，
+        // check_out_of_world 不会执行——坠入虚空的三叉戟永不清除
+        let life = self.life.fetch_add(1, Ordering::Relaxed);
+        if life >= Self::DESPAWN_TIME {
+            entity.remove();
+            return;
+        }
+        if entity.pos.load().y < f64::from(world.dimension.min_y) - 64.0 {
+            entity.remove();
+            return;
+        }
+
         let start_pos = entity.pos.load();
         let mut velocity = entity.velocity.load();
 

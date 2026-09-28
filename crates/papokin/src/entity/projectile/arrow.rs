@@ -637,6 +637,19 @@ impl EntityBase for ArrowEntity {
         }
 
         // 箭正在飞行
+        // 飞行态寿命与出界兜底：投射物不走基础 Entity::tick，
+        // check_out_of_world 不会执行——向虚空飞出的箭永不清除且
+        // 每刻继续广播速度包，客户端可借之无限积累实体与出站流量。
+        let life = self.life.fetch_add(1, Ordering::Relaxed);
+        if life >= Self::DESPAWN_TIME {
+            entity.remove();
+            return;
+        }
+        if entity.pos.load().y < f64::from(world.dimension.min_y) - 64.0 {
+            entity.remove();
+            return;
+        }
+
         let start_pos = entity.pos.load();
         let mut velocity = entity.velocity.load();
 

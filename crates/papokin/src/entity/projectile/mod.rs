@@ -143,6 +143,13 @@ impl ThrownItemEntity {
 
         entity.update_last_pos();
 
+        // 出界兜底：本 tick 不走基础 Entity::tick，check_out_of_world
+        // 不会执行——坠入虚空的投掷物永不清除且每刻继续广播速度包
+        if entity.pos.load().y < f64::from(world.dimension.min_y) - 64.0 {
+            entity.remove();
+            return;
+        }
+
         // 应用重力与惯性
         let mut velocity = entity.velocity.load();
         velocity.y -= self.get_gravity();
