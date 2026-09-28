@@ -45,6 +45,16 @@ pub struct ChunkFileManager<S: ChunkSerializer<WriteBackend = PathBuf>> {
     chunk_config: S::ChunkConfig,
 }
 
+/// `file_locks` 缓存条目数上限。
+///
+/// 条目通常在保存/读取完成后被 `maybe_evict` 驱逐（无注视者、无
+/// 存活引用、无未落盘数据即移除），正常游玩远低于该值。上限兜住
+/// 两类缓慢累积：驱逐瞬间恰有并发引用而滞留的条目，以及写盘
+/// 失败后 `has_pending_writes` 挡住驱逐的条目。超限时在写锁内
+/// 驱逐一切当前可安全移除的条目；找不到可驱逐条目时维持现状，
+/// 下次插入再试。
+const MAX_CACHED_SERIALIZERS: usize = 1024;
+
 pub(crate) trait PathFromLevelFolder {
     fn file_path(folder: &LevelFolder, file_name: &str) -> PathBuf;
 }
@@ -153,10 +163,27 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
 
         let loader = {
             let mut locks = self.file_locks.write().await;
-            locks
-                .entry(path.into())
+            let path_key: PathBuf = path.into();
+            let loader = locks
+                .entry(path_key)
                 .or_insert_with(|| Arc::new(ChunkSerializerLazyLoader::new(path.into())))
-                .clone()
+                .clone();
+            if locks.len() > MAX_CACHED_SERIALIZERS {
+                // 超出缓存上限：在写锁内驱逐一切当前可安全移除的
+                // 条目（判定与 maybe_evict 一致；刚插入的条目持有
+                // 本地 Arc 克隆，can_remove 必然不放行，不会被误删）。
+                let evictable: Vec<PathBuf> = locks
+                    .iter()
+                    .filter(|(_, candidate)| ChunkSerializerLazyLoader::can_remove(candidate))
+                    .map(|(p, _)| p.clone())
+                    .take(locks.len() - MAX_CACHED_SERIALIZERS)
+                    .collect();
+                for p in evictable {
+                    locks.remove(&p);
+                    trace!("缓存超限，已驱逐 {} 的序列化器", p.display());
+                }
+            }
+            loader
             // 写锁在此处释放 —— `loader.get()` 可能因 I/O 而阻塞，且
             // 不得持有地图锁。
         };
