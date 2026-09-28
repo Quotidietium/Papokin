@@ -4547,6 +4547,13 @@ impl Player {
         );
         let block_pos = self.position().to_block_pos();
 
+        // 死亡先关闭当前屏幕：光标物品经 offer_or_drop 回到背包
+        // （!keepInventory 时随下方流程掉落地面）、合成格（工作台
+        // 3x3 与玩家 2x2）直接掉落、容器 viewer 计数正确递减。不
+        // 关屏则光标与合成格滞留旧处理器——2x2 合成格永不掉落，
+        // 等于变相绕过 keepInventory=false；箱子盖动画也会常开。
+        self.close_handled_screen();
+
         let keep_inventory = { self.world().level_info.load().game_rules.keep_inventory };
 
         if !keep_inventory {
