@@ -715,8 +715,12 @@ fn execute_click_commands_if_present(
                 continue;
             }
 
+            // 原版语义：告示牌点击命令以点击玩家自身的权限等级执行。
+            // 此前用 Dummy（=命令方块等级 2）会让任何玩家借
+            // click_event 的 run_command 提权到 gamemode/give/tp
+            // 等 Op(2) 命令集。entity 仍指向点击玩家（@s 语义不变）。
             let source = CommandSource::new(
-                CommandSender::Dummy,
+                CommandSender::Player(player.clone()),
                 world.clone(),
                 Some(player.clone()),
                 position.to_centered_f64(),
