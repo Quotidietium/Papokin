@@ -724,7 +724,10 @@ pub trait ScreenHandler: Send + Sync {
                 let mut slot_stack = slot.get_stack();
 
                 if !slot_stack.is_empty() && slot_stack.are_items_and_components_equal(stack) {
-                    let combined_count = slot_stack.item_count + stack.item_count;
+                    // 饱和加防超堆叠槽（外部编辑的存档可带 count>64）：
+                    // 裸加回绕后 combined_count 反而 <= 上限，会把
+                    // 槽位改写成回绕小值吞掉数量
+                    let combined_count = slot_stack.item_count.saturating_add(stack.item_count);
                     let max_slot_count = slot.get_max_item_count_for_stack(&slot_stack);
                     if combined_count <= max_slot_count {
                         stack.set_count(0);
@@ -901,7 +904,12 @@ pub trait ScreenHandler: Send + Sync {
                         .saturating_sub(cursor_stack.item_count),
                     player,
                 );
-                to_pick_up -= taken_stack.item_count;
+                // 结果槽（合成/商人）的 take_stack 会无视请求的
+                // min 整组返回，实取可超过剩余配额：裸减法在 debug
+                // 下 panic（任一玩家可远程崩服）、release 下回绕成
+                // 254 继续收集（光标超堆）。饱和减 + 循环头顶部的
+                // 归零检查共同保证终止。
+                to_pick_up = to_pick_up.saturating_sub(taken_stack.item_count);
                 cursor_stack.increment(taken_stack.item_count);
             }
         } else if action_type == SlotActionType::QuickCraft {

@@ -215,6 +215,13 @@ impl PlayerInventory {
                     equipment.put(slot_type, stack);
                     return 0;
                 }
+                // 槽位选择（读锁）与合并（写锁）之间存在并发窗口：
+                // RCON/控制台命令与插件宿主调用会在刻相位之外改写槽位，
+                // 若此时槽内已是另一种物品，直接按容量并入会把它“变质”
+                // 成已有物品的数量。不一致时放弃本次并入，交由调用方重选。
+                if !current.are_items_and_components_equal(&stack) {
+                    return stack.item_count as usize;
+                }
             }
             return stack.item_count as usize;
         }
@@ -228,9 +235,17 @@ impl PlayerInventory {
 
         if self_stack.is_empty() {
             *self_stack = stack.copy_with_count(0);
+        } else if !self_stack.are_items_and_components_equal(&stack) {
+            // 同上：选槽与合并之间的并发改写可能已把该槽换成另一种
+            // 物品，此时并入会把新物品变成旧物品（凭空变质）。
+            return stack_count as usize;
         }
 
-        let count_left = self_stack.get_max_stack_size() - self_stack.item_count;
+        // 饱和减防超堆叠槽（外部编辑存档 count 可超 max）：裸减
+        // 下溢在 debug 直接 panic、release 回绕成巨额可并入量
+        let count_left = self_stack
+            .get_max_stack_size()
+            .saturating_sub(self_stack.item_count);
         let count_min = stack_count.min(count_left);
 
         if count_min != 0 {
@@ -464,7 +479,15 @@ impl PlayerInventory {
             let items_fit = stack
                 .get_max_stack_size()
                 .saturating_sub(self.get_stack(room_for_stack as usize).item_count);
-            if self.insert_stack(room_for_stack, &mut stack.split(items_fit)) && notify_client {
+            let mut split = stack.split(items_fit);
+            let inserted = self.insert_stack(room_for_stack, &mut split);
+            // 选槽与并入之间槽位可能被并发改写（RCON/插件在刻相位之外
+            // 触碰物品栏），未容纳的部分必须并回原堆由下一轮循环重选，
+            // 直接丢弃就是物品凭空消失。
+            if !split.is_empty() {
+                stack.set_count(stack.item_count.saturating_add(split.item_count));
+            }
+            if inserted && notify_client {
                 player.enqueue_slot_set_packet(&CSetPlayerInventory::new(
                     i32::from(room_for_stack).into(),
                     &self.get_stack(room_for_stack as usize).into(),
@@ -618,5 +641,36 @@ impl PlayerInventory {
     /// 获取当前选中的快捷栏槽位索引。
     pub fn get_selected_slot(&self) -> u8 {
         self.selected_slot.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use papokin_data::item::Item;
+    use papokin_data::item_stack::ItemStack;
+
+    fn test_inventory() -> PlayerInventory {
+        PlayerInventory::new(
+            Arc::new(Mutex::new(EntityEquipment::new())),
+            Arc::new(rustc_hash::FxHashMap::default()),
+        )
+    }
+
+    /// 选槽与并入之间存在并发窗口：槽位已被换成另一种物品时，
+    /// 并入必须被拒绝（否则新物品会被"变质"成已有物品的数量）
+    #[test]
+    fn insert_rejects_incompatible_slot_content() {
+        let inv = test_inventory();
+        inv.set_slot(0, ItemStack::new(10, &Item::COBBLESTONE));
+
+        // 试图把 5 个泥土并入只有圆石的 0 号槽
+        let mut dirt = ItemStack::new(5, &Item::DIRT);
+        let inserted = inv.insert_stack(0, &mut dirt);
+
+        assert!(!inserted, "不同物品不得并入同一槽位");
+        assert_eq!(inv.get_slot(0).item_count, 10, "原槽位内容不得被触碰");
+        assert_eq!(dirt.item_count, 5, "未容纳部分必须留在原堆");
     }
 }

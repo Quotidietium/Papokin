@@ -270,9 +270,11 @@ impl MerchantScreenHandler {
             if payment.is_empty() {
                 payment = source.copy_with_count(0);
             }
-            let moved = source
-                .item_count
-                .min(source.get_max_stack_size() - payment.item_count);
+            let moved = source.item_count.min(
+                source
+                    .get_max_stack_size()
+                    .saturating_sub(payment.item_count),
+            );
             payment.increment(moved);
             source.decrement(moved);
             if source.is_empty() {
