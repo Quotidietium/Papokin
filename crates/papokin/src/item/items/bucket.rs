@@ -321,6 +321,12 @@ impl ItemBehaviour for EmptyBucketItem {
             return;
         };
 
+        // 记录取水前可能被改动的两个位置的状态：事件取消时回滚，
+        // 否则流体已被抽走而玩家拿不到桶——凭空蒸发物质
+        let offset_pos = block_pos.offset(direction.to_offset());
+        let pre_pos_state = world.get_block_state_id(&block_pos);
+        let pre_offset_state = world.get_block_state_id(&offset_pos);
+
         let Some(item) = try_pickup_bucket_item(&world, block_pos, direction) else {
             return;
         };
@@ -336,6 +342,13 @@ impl ItemBehaviour for EmptyBucketItem {
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
             if event.cancelled {
+                // 回滚流体侧改动（只还原确实变化了的位置）
+                if world.get_block_state_id(&block_pos) != pre_pos_state {
+                    world.set_block_state(&block_pos, pre_pos_state, BlockFlags::NOTIFY_ALL);
+                }
+                if world.get_block_state_id(&offset_pos) != pre_offset_state {
+                    world.set_block_state(&offset_pos, pre_offset_state, BlockFlags::NOTIFY_ALL);
+                }
                 return;
             }
         }
@@ -406,10 +419,9 @@ impl ItemBehaviour for FilledBucketItem {
             play_bucket_evaporation(&world, &player.position());
             return;
         }
-        if !try_place_filled_bucket(&world, item, pos, direction) {
-            return;
-        }
 
+        // 取消检查必须先于世界写入：事件此前在液体已放置后才发
+        // 出且不读取消标志，插件取消后液体照样倒出
         if let Some(server) = world.server.upgrade()
             && let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
         {
@@ -420,6 +432,13 @@ impl ItemBehaviour for FilledBucketItem {
                     item.registry_key.to_string(),
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
+            if event.cancelled {
+                return;
+            }
+        }
+
+        if !try_place_filled_bucket(&world, item, pos, direction) {
+            return;
         }
 
         let place_pos = if world
