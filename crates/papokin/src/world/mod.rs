@@ -3620,19 +3620,19 @@ impl World {
 
     // 获取某个 Box 中的所有实体
     pub fn get_all_at_box(&self, aabb: &BoundingBox) -> Vec<Arc<dyn EntityBase>> {
-        let entities_guard = self.entities.load();
+        // 实体侧优先走按区块分桶的索引：挤推/碰撞是每实体每刻的高频
+        // 路径，此前对全服实体先克隆 Arc 再过滤，密集实体场景（动物
+        // 农场/刷怪塔收集槽）是 O(N²) 的 CPU 主放大器。玩家数量少，
+        // 线性过滤即可。
+        let mut result: Vec<Arc<dyn EntityBase>> = self.get_entities_at_box(aabb);
         let players_guard = self.players.load();
-
-        entities_guard
-            .iter()
-            .map(|e| e.clone() as Arc<dyn EntityBase>)
-            .chain(
-                players_guard
-                    .iter()
-                    .map(|p| p.clone() as Arc<dyn EntityBase>),
-            )
-            .filter(|entity| entity.get_entity().bounding_box.load().intersects(aabb))
-            .collect()
+        result.extend(
+            players_guard
+                .iter()
+                .filter(|player| player.get_entity().bounding_box.load().intersects(aabb))
+                .map(|player| player.clone() as Arc<dyn EntityBase>),
+        );
+        result
     }
 
     // 获取某个 Box 中的所有非玩家实体
