@@ -131,6 +131,14 @@ pub async fn can_not_join(
         "[year]-[month]-[day] at [hour]:[minute]:[second] [offset_hour sign:mandatory]:[offset_minute]"
     );
 
+    // 关停中拒绝新登录：/stop 后、任务等待超时（60s）前已被 accept
+    // 的连接仍可完成登录入世——此时 save_all_players 与 kick-all 均
+    // 已跑完，迟到玩家的会话只能靠其自身断开路径保存，进程随后
+    // 退出即整段进度丢失。
+    if crate::SERVER_IS_STOPPING.load(Ordering::Acquire) {
+        return Some(TextComponent::text("服务器正在关闭，请稍后再试"));
+    }
+
     // 插件管理器通过 `Arc<Server>` 分发；可以从任意
     // 已加载的世界（世界持有指向服务器的弱反向引用）。
     let server_arc = server_arc(server);
