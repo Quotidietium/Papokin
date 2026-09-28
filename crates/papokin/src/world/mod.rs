@@ -594,11 +594,18 @@ impl World {
     /// 将 `entities` 写入其所在区块的保存数据中。活跃区块会
     /// 从头重建，因此 `snapshot_chunks` 列出必须重写的存活区块
     /// 即使里面已空无一物；从未上线的区块会保留其记录。
+    ///
+    /// 只有快照时点就确认为存活的区块才允许整体重建：快照之后
+    /// 才转为 live 的区块（实体跨区块移动/消费生成的竞态窗口）
+    /// 本次分组可能不完整，整体替换会短暂抹掉该区块其它实体的
+    /// 落盘记录——窗口内崩溃即真丢失。这类区块降级为按 UUID
+    /// 合并，下一轮保存（它会进入 live 快照）再整体重建修正。
     async fn save_entities_by_chunk(
         &self,
         entities: &[Arc<dyn EntityBase>],
         snapshot_chunks: impl IntoIterator<Item = Vector2<i32>>,
     ) {
+        let snapshot_chunks: FxHashSet<Vector2<i32>> = snapshot_chunks.into_iter().collect();
         let mut groups: FxHashMap<Vector2<i32>, Vec<NbtCompound>> = FxHashMap::default();
         for entity in entities {
             let base_entity = entity.get_entity();
@@ -612,8 +619,8 @@ impl World {
                 .or_default()
                 .push(nbt);
         }
-        for pos in snapshot_chunks {
-            groups.entry(pos).or_default();
+        for pos in &snapshot_chunks {
+            groups.entry(*pos).or_default();
         }
 
         for (pos, records) in groups {
@@ -629,11 +636,12 @@ impl World {
             if !live && records.is_empty() {
                 continue;
             }
+            let full_rebuild = live && snapshot_chunks.contains(&pos);
             let mut data = chunk
                 .data
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            merge_entity_records(&mut data, live, records);
+            merge_entity_records(&mut data, full_rebuild, records);
             drop(data);
             chunk.mark_dirty(true);
         }
@@ -1539,7 +1547,7 @@ impl World {
     }
 
     pub fn tick_environment(self: &Arc<Self>) {
-        let (world_age, is_night, time_of_day) = {
+        let (world_age, is_night, time_of_day, autosave_now) = {
             let mut level_time = self
                 .level_time
                 .lock()
@@ -1570,19 +1578,36 @@ impl World {
                     }
                 }
             }
+            let mut autosave_now = false;
             if self.level.autosave_ticks > 0 && self.level.save_enabled.load(Relaxed) {
                 let autosave = self.level.autosave_ticks as i64;
                 if autosave > 0 && level_time.world_age % autosave == 0 {
                     self.level.should_save.store(true, Relaxed);
                     self.level.level_channel.notify();
+                    autosave_now = true;
                 }
             }
             (
                 level_time.world_age,
                 level_time.is_night(),
                 level_time.time_of_day,
+                autosave_now,
             )
         };
+
+        if autosave_now {
+            // 自动保存同时刷新并落盘实体区块：实体此前只在卸载时
+            // 写盘，崩溃会与方块存档错位（复制/丢失物品）。
+            let entities = self.entities.load_full();
+            let live = self.level.live_entity_chunk_positions();
+            let world_clone = self.clone();
+            if let Some(server) = self.server.upgrade() {
+                server.spawn_task(async move {
+                    world_clone.save_entities_by_chunk(&entities, live).await;
+                    world_clone.level.flush_all_entity_chunks();
+                });
+            }
+        }
 
         let (should_reset_weather, weather_cycle_enabled) = {
             let mut weather = self
@@ -5859,10 +5884,14 @@ impl World {
         }
     }
 
-    pub async fn save(&self) {
+    pub async fn save(self: &Arc<Self>) {
         let entities = self.entities.load_full();
         self.save_entities_by_chunk(&entities, self.level.live_entity_chunk_positions())
             .await;
+        // 手动保存与自动保存一样落盘实体区块（见
+        // flush_all_entity_chunks 的文档），否则 /save-all 后崩溃
+        // 仍会丢实体。
+        self.level.flush_all_entity_chunks();
 
         let chunks: Vec<Vector2<i32>> = self
             .block_entities
@@ -5873,24 +5902,42 @@ impl World {
             self.save_block_entities(chunk_pos);
         }
 
-        if let Ok(mut portal_poi) = self.portal_poi.try_lock() {
-            let _ = portal_poi.save_all();
-        }
+        // POI 与自定义数据的落盘是同步文件 IO，挪出 tokio worker。
+        // 锁必须在阻塞闭包内获取：MutexGuard 不是 Send，
+        // 不能跨 spawn_blocking 边界移动。
+        let world = self.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(mut portal_poi) = world.portal_poi.try_lock() {
+                let _ = portal_poi.save_all();
+            }
+        })
+        .await;
 
-        {
+        // 锁只覆盖快照阶段；写盘在阻塞线程上进行，
+        // MutexGuard 不跨 await。
+        let write_job = {
             let custom_data = self
                 .custom_data
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !custom_data.is_empty() {
+            if custom_data.is_empty() {
+                None
+            } else {
                 let custom_data_path = self
                     .level
                     .level_folder
                     .root_folder
                     .join("pumpkin_custom_data.nbt");
-                let nbt = papokin_nbt::Nbt::from(custom_data.clone());
-                let _ = std::fs::write(custom_data_path, nbt.write());
+                Some((
+                    custom_data_path,
+                    papokin_nbt::Nbt::from(custom_data.clone()),
+                ))
             }
+        };
+        if let Some((custom_data_path, nbt)) = write_job {
+            let _ =
+                tokio::task::spawn_blocking(move || std::fs::write(custom_data_path, nbt.write()))
+                    .await;
         }
 
         self.level
@@ -6338,10 +6385,11 @@ pub fn calculate_celestial_angle(time_of_day: i64) -> f32 {
     y_curve.sample(t)
 }
 
-/// 存活区块的记录已经生成过，因此 `fresh` 会替换它们。否则
-/// 记录是未生成实体的唯一副本，因此会保留且只能按 UUID 替换。
-fn merge_entity_records(data: &mut Vec<NbtCompound>, live: bool, fresh: Vec<NbtCompound>) {
-    if live {
+/// `full_rebuild = true`（快照时点确认存活、本次分组完整的区块）
+/// 时 `fresh` 整体替换存量。否则记录是未生成实体的唯一副本（或
+/// 分组可能不完整的竞态窗口区块），保留存量并只按 UUID 替换。
+fn merge_entity_records(data: &mut Vec<NbtCompound>, full_rebuild: bool, fresh: Vec<NbtCompound>) {
+    if full_rebuild {
         *data = fresh;
         return;
     }

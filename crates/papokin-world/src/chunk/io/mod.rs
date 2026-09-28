@@ -94,6 +94,17 @@ where
         chunks_data: Vec<(Vector2<i32>, Self::Data)>,
     ) -> impl Future<Output = Result<(), ChunkWritingError>> + Send + 'a;
 
+    /// 持久化区块数据并强制写盘。
+    ///
+    /// 普通保存对"注视中"的区域文件只更新内存序列化器（写合并），
+    /// 该变体无视注视状态直接落盘——供 `/save-all` 与周期自动保存
+    /// 使用，保证崩溃后实体数据与方块存档处于同一保存点。
+    fn save_chunks_forced<'a>(
+        &'a self,
+        folder: &'a LevelFolder,
+        chunks_data: Vec<(Vector2<i32>, Self::Data)>,
+    ) -> impl Future<Output = Result<(), ChunkWritingError>> + Send + 'a;
+
     /// 告知 `ChunkIO` 这些区块当前已加载到内存中
     fn watch_chunks<'a>(
         &'a self,

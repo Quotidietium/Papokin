@@ -234,6 +234,117 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
             trace!("跳过 {} 的缓存驱逐——引用仍然存活", path.display());
         }
     }
+
+    /// 将区块数据移入序列化器缓存，并按注视状态决定是否写盘。
+    ///
+    /// `force = true` 时无视注视状态强制写盘（仍不驱逐有注视者的
+    /// 缓存条目），供 `/save-all` 与自动保存的实体区块刷新使用。
+    async fn save_chunks_with<'a, P>(
+        &'a self,
+        folder: &'a LevelFolder,
+        chunks_data: Vec<(Vector2<i32>, Arc<S::Data>)>,
+        force: bool,
+    ) -> Result<(), ChunkWritingError>
+    where
+        P: PathFromLevelFolder + Send + Sync + Sized + Dirtiable + 'static,
+        S: Send + Sync,
+        S::ChunkConfig: Send + Sync,
+    {
+        // 按区域文件对区块分组。
+        let mut regions_chunks: BTreeMap<String, Vec<Arc<S::Data>>> = BTreeMap::new();
+        for (at, chunk) in chunks_data {
+            regions_chunks
+                .entry(S::get_chunk_key(&at))
+                .or_default()
+                .push(chunk);
+        }
+
+        let tasks = regions_chunks
+            .into_iter()
+            .map(|(file_name, chunk_locks)| async move {
+                let path = P::file_path(folder, &file_name);
+                trace!("正在将区块保存到 {}", path.display());
+
+                let chunk_serializer = match self.get_serializer(&path).await {
+                    Ok(s) => s,
+                    Err(ChunkReadingError::ChunkNotExist) => {
+                        return Err(ChunkWritingError::IoError(std::io::Error::other(
+                            "get_serializer 返回了 ChunkNotExist",
+                        )));
+                    }
+                    Err(ChunkReadingError::IoError(err)) => {
+                        error!("写入前读取 Region 时发生 I/O 错误：{err}");
+                        return Err(ChunkWritingError::IoError(err));
+                    }
+                    Err(err) => {
+                        return Err(ChunkWritingError::IoError(std::io::Error::other(
+                            err.to_string(),
+                        )));
+                    }
+                };
+
+                {
+                    let mut writer = chunk_serializer.write().await;
+                    for chunk in &chunk_locks {
+                        // 先原子地快照并清除脏标记，再
+                        // 写入，这样任何在本*次写入期间*竞态混入的修改
+                        // 序列化轮次便能正确地再次将其标记为脏。
+                        let was_dirty = chunk.is_dirty();
+                        chunk.mark_dirty(false);
+
+                        if was_dirty
+                            && let Err(err) =
+                                writer.update_chunk(chunk.clone(), &self.chunk_config).await
+                        {
+                            // 将区块交给序列化器失败：
+                            // 重新将其标记为脏，让下一轮保存
+                            // 重试而不是静默丢弃
+                            // 变化。
+                            chunk.mark_dirty(true);
+                            return Err(err);
+                        }
+                    }
+                    // 写锁在此处释放 —— 刷新可以在读锁下进行。
+                }
+
+                trace!("{} 的区块数据已更新", path.display());
+
+                // 我们在释放写锁*之后*才检查观察者，以确保遵循
+                // 锁顺序（序列化器锁 → 观察者，绝不反向）。
+                let is_watched = {
+                    let watchers = self.watchers.read().await;
+                    watchers.get(&path).is_some_and(|&c| c > 0)
+                };
+
+                if force || !is_watched {
+                    // `write()` 用读锁就够了，因为我们已经
+                    // 已应用上述全部变更。
+                    {
+                        let serializer = chunk_serializer.read().await;
+                        debug!("正在将 {} 写入磁盘", path.display());
+                        serializer
+                            .write(&path)
+                            .await
+                            .map_err(ChunkWritingError::IoError)?;
+                        // 读锁在此释放。
+                    };
+
+                    // 丢弃我们的句柄，以便 `can_remove` 可以成功
+                    drop(chunk_serializer);
+
+                    if !is_watched {
+                        // 不再需要时逐出该缓存条目
+                        self.maybe_evict(&path).await;
+                    }
+                }
+
+                Ok(())
+            });
+
+        // 收集所有 region 结果；上报遇到的第一个错误。
+        let results: Vec<Result<(), ChunkWritingError>> = join_all(tasks).await;
+        results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
+    }
 }
 
 impl<P, S> FileIO for ChunkFileManager<S>
@@ -372,98 +483,15 @@ where
         folder: &'a LevelFolder,
         chunks_data: Vec<(Vector2<i32>, Self::Data)>,
     ) -> Result<(), ChunkWritingError> {
-        // 按区域文件对区块分组。
-        let mut regions_chunks: BTreeMap<String, Vec<Self::Data>> = BTreeMap::new();
-        for (at, chunk) in chunks_data {
-            regions_chunks
-                .entry(S::get_chunk_key(&at))
-                .or_default()
-                .push(chunk);
-        }
+        self.save_chunks_with::<P>(folder, chunks_data, false).await
+    }
 
-        let tasks = regions_chunks
-            .into_iter()
-            .map(|(file_name, chunk_locks)| async move {
-                let path = P::file_path(folder, &file_name);
-                trace!("正在将区块保存到 {}", path.display());
-
-                let chunk_serializer = match self.get_serializer(&path).await {
-                    Ok(s) => s,
-                    Err(ChunkReadingError::ChunkNotExist) => {
-                        return Err(ChunkWritingError::IoError(std::io::Error::other(
-                            "get_serializer 返回了 ChunkNotExist",
-                        )));
-                    }
-                    Err(ChunkReadingError::IoError(err)) => {
-                        error!("写入前读取 Region 时发生 I/O 错误：{err}");
-                        return Err(ChunkWritingError::IoError(err));
-                    }
-                    Err(err) => {
-                        return Err(ChunkWritingError::IoError(std::io::Error::other(
-                            err.to_string(),
-                        )));
-                    }
-                };
-
-                {
-                    let mut writer = chunk_serializer.write().await;
-                    for chunk in &chunk_locks {
-                        // 先原子地快照并清除脏标记，再
-                        // 写入，这样任何在本*次写入期间*竞态混入的修改
-                        // 序列化轮次便能正确地再次将其标记为脏。
-                        let was_dirty = chunk.is_dirty();
-                        chunk.mark_dirty(false);
-
-                        if was_dirty
-                            && let Err(err) =
-                                writer.update_chunk(chunk.clone(), &self.chunk_config).await
-                        {
-                            // 将区块交给序列化器失败：
-                            // 重新将其标记为脏，让下一轮保存
-                            // 重试而不是静默丢弃
-                            // 变化。
-                            chunk.mark_dirty(true);
-                            return Err(err);
-                        }
-                    }
-                    // 写锁在此处释放 —— 刷新可以在读锁下进行。
-                }
-
-                trace!("{} 的区块数据已更新", path.display());
-
-                // 我们在释放写锁*之后*才检查观察者，以确保遵循
-                // 锁顺序（序列化器锁 → 观察者，绝不反向）。
-                let is_watched = {
-                    let watchers = self.watchers.read().await;
-                    watchers.get(&path).is_some_and(|&c| c > 0)
-                };
-
-                if !is_watched {
-                    // `write()` 用读锁就够了，因为我们已经
-                    // 已应用上述全部变更。
-                    {
-                        let serializer = chunk_serializer.read().await;
-                        debug!("正在将 {} 写入磁盘", path.display());
-                        serializer
-                            .write(&path)
-                            .await
-                            .map_err(ChunkWritingError::IoError)?;
-                        // 读锁在此释放。
-                    };
-
-                    // 丢弃我们的句柄，以便 `can_remove` 可以成功
-                    drop(chunk_serializer);
-
-                    // 不再需要时逐出该缓存条目
-                    self.maybe_evict(&path).await;
-                }
-
-                Ok(())
-            });
-
-        // 收集所有 region 结果；上报遇到的第一个错误。
-        let results: Vec<Result<(), ChunkWritingError>> = join_all(tasks).await;
-        results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
+    async fn save_chunks_forced<'a>(
+        &'a self,
+        folder: &'a LevelFolder,
+        chunks_data: Vec<(Vector2<i32>, Self::Data)>,
+    ) -> Result<(), ChunkWritingError> {
+        self.save_chunks_with::<P>(folder, chunks_data, true).await
     }
 
     /// 阻塞直到所有进行中的序列化操作完成
@@ -539,6 +567,18 @@ where
             Self::Linear(io) => io.save_chunks(folder, chunks_data).await,
             Self::Anvil(io) => io.save_chunks(folder, chunks_data).await,
             Self::Pump(io) => io.save_chunks(folder, chunks_data).await,
+        }
+    }
+
+    async fn save_chunks_forced<'a>(
+        &'a self,
+        folder: &'a LevelFolder,
+        chunks_data: Vec<(Vector2<i32>, Self::Data)>,
+    ) -> Result<(), ChunkWritingError> {
+        match self {
+            Self::Linear(io) => io.save_chunks_forced(folder, chunks_data).await,
+            Self::Anvil(io) => io.save_chunks_forced(folder, chunks_data).await,
+            Self::Pump(io) => io.save_chunks_forced(folder, chunks_data).await,
         }
     }
 

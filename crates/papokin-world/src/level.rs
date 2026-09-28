@@ -879,6 +879,50 @@ impl Level {
         }
     }
 
+    /// 与 [`Level::write_entity_chunks`] 相同，但强制写盘（无视
+    /// 区域文件的注视状态）。供 `/save-all` 与周期自动保存使用。
+    async fn write_entity_chunks_forced(
+        &self,
+        chunks_to_write: Vec<(Vector2<i32>, SyncEntityChunk)>,
+    ) {
+        if chunks_to_write.is_empty() {
+            return;
+        }
+
+        let chunk_saver = self.entity_saver.clone();
+        let level_folder = self.level_folder.clone();
+
+        trace!("强制写盘 {:} 个实体区块", chunks_to_write.len());
+        if let Err(error) = chunk_saver
+            .save_chunks_forced(&level_folder, chunks_to_write)
+            .await
+        {
+            error!("实体区块强制写盘失败：{error}");
+        }
+    }
+
+    /// 把当前所有已加载实体区块的数据写盘（不改变内存状态）。
+    ///
+    /// 供 `/save-all` 与周期自动保存使用：实体数据此前只在区块
+    /// 卸载/关停时落盘，崩溃会把实体回退到上次卸载，而方块回退到
+    /// 上次自动保存——两者错位会造成物品复制/丢失。调用前应先经
+    /// `save_entities_by_chunk` 刷新各区块的实体数据。
+    pub fn flush_all_entity_chunks(self: &Arc<Self>) {
+        let chunks: Vec<(Vector2<i32>, SyncEntityChunk)> = self
+            .loaded_entity_chunks
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect();
+        if chunks.is_empty() {
+            return;
+        }
+        let level = self.clone();
+        self.spawn_task(async move {
+            debug!("自动保存：将 {} 个实体区块写入磁盘", chunks.len());
+            level.write_entity_chunks_forced(chunks).await;
+        });
+    }
+
     pub fn is_chunk_loaded(&self, coordinates: &Vector2<i32>) -> bool {
         self.loaded_chunks.contains_key(coordinates)
     }
