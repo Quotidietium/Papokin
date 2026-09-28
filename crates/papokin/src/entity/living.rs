@@ -2808,24 +2808,11 @@ impl LivingEntity {
                 nbt.put("active_effects", NbtTag::List(effects_list));
             }
         }
-        let equipment = {
-            let guard = self
-                .entity_equipment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut compound = NbtCompound::new();
-            for (slot, stack) in &guard.equipment {
-                if !stack.is_empty() {
-                    let mut item_nbt = NbtCompound::new();
-                    stack.write_item_stack(&mut item_nbt);
-                    compound.put(slot.to_name(), NbtTag::Compound(item_nbt));
-                }
-            }
-            compound
-        };
-        if !equipment.child_tags.is_empty() {
-            nbt.put("equipment", NbtTag::Compound(equipment));
-        }
+        // 装备不再在此处以 "equipment" 复合标签序列化：Mob 侧的
+        // `write_equipment_nbt` 已用原版 ArmorItems/HandItems/
+        // SaddleItem/ArmorItem 键完整覆盖全部槽位，双重序列化只会
+        // 成倍放大每条生物记录的体积。读侧仍解析 "equipment" 以
+        // 兼容旧存档。
     }
 
     pub fn read_living_nbt_non_mut(&self, nbt: &NbtCompound) {
