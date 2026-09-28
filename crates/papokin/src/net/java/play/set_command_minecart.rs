@@ -5,7 +5,9 @@ use papokin_protocol::java::server::play::SSetCommandMinecart;
 
 impl JavaClient {
     pub fn handle_set_command_minecart(&self, player: &Player, packet: &SSetCommandMinecart<'_>) {
-        if player.permission_lvl.load() < PermissionLvl::Two {
+        // 原版 canUseGameMasterBlocks()：命令方块矿车界面仅创造模式可用，
+        // 生存模式的 OP2 同样不允许（与 handle_set_command_block 对齐）。
+        if !player.is_creative() || player.permission_lvl.load() < PermissionLvl::Two {
             return;
         }
 
