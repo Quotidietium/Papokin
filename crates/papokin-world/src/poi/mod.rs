@@ -81,6 +81,8 @@ pub struct PoiRegion {
     /// 跟踪哪些区块是脏区块
     dirty_chunks: rustc_hash::FxHashSet<(i32, i32)>,
     dirty: bool,
+    /// 最近一次访问的单调计数（近似 LRU 淘汰用）
+    last_access: u64,
 }
 
 impl PoiRegion {
@@ -441,7 +443,14 @@ pub struct PoiStorage {
     folder: PathBuf,
     /// 已加载的区域，以（`region_x`, `region_z`）为键
     regions: FxHashMap<(i32, i32), PoiRegion>,
+    /// 单调递增的访问计数，驱动近似 LRU 淘汰
+    access_counter: u64,
 }
+
+/// 已加载 region 数上限：超出时把最久未访问的 region 落盘后
+/// 从内存移除（再次访问会从磁盘重载）。正常传送门使用远低于
+/// 该值；上限只为约束长期探索型服务器的内存无界增长。
+const MAX_LOADED_REGIONS: usize = 256;
 
 impl PoiStorage {
     #[must_use]
@@ -449,6 +458,7 @@ impl PoiStorage {
         Self {
             folder: poi_folder,
             regions: FxHashMap::default(),
+            access_counter: 0,
         }
     }
 
@@ -462,30 +472,78 @@ impl PoiStorage {
         self.folder.join(format!("r.{rx}.{rz}.mca"))
     }
 
-    fn get_or_load_region(&mut self, rx: i32, rz: i32) -> &mut PoiRegion {
-        let path = self.region_path(rx, rz);
-        self.regions.entry((rx, rz)).or_insert_with(|| {
-            match PoiRegion::load(&path) {
-                Ok(region) => region,
-                Err(e) => {
-                    warn!("加载 POI 区域 {} 失败：{e}", path.display());
-                    // 加载失败时必须先把原文件改名备份：否则插入的
-                    // 空 region 会在后续 add 触发保存时，用只含新条目
-                    // 的数据覆盖整个 .mca，存量 POI 将全部静默丢失
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_secs());
-                    let backup = path.with_extension(format!("corrupt-{timestamp}"));
-                    if let Err(backup_err) = std::fs::rename(&path, &backup) {
-                        warn!(
-                            "备份损坏的 POI 文件到 {} 失败：{backup_err}",
-                            backup.display()
-                        );
-                    }
-                    PoiRegion::new()
+    /// 超出上限时淘汰最久未访问的 region；dirty region 先落盘，
+    /// 保存失败的保留在内存（数据优先于内存上限）。
+    fn evict_over_limit(&mut self) {
+        if self.regions.len() <= MAX_LOADED_REGIONS {
+            return;
+        }
+        let excess = self.regions.len() - MAX_LOADED_REGIONS;
+        let mut candidates: Vec<((i32, i32), u64)> = self
+            .regions
+            .iter()
+            .map(|(key, region)| (*key, region.last_access))
+            .collect();
+        candidates.sort_unstable_by_key(|&(_, access)| access);
+        for ((rx, rz), _) in candidates.into_iter().take(excess) {
+            if let Some(mut region) = self.regions.remove(&(rx, rz))
+                && region.is_dirty()
+            {
+                let path = self.region_path(rx, rz);
+                if let Err(e) = region.save(&path) {
+                    warn!(
+                        "淘汰 POI 区域 {} 前保存失败（该区域保留在内存中）：{e}",
+                        path.display()
+                    );
+                    self.regions.insert((rx, rz), region);
                 }
             }
-        })
+        }
+    }
+
+    /// 确保指定区域已加载进内存（不存在则从磁盘加载并插入），
+    /// 随后执行超限淘汰。
+    fn load_and_insert_region(&mut self, rx: i32, rz: i32, access: u64) {
+        let path = self.region_path(rx, rz);
+        let mut region = match PoiRegion::load(&path) {
+            Ok(region) => region,
+            Err(e) => {
+                warn!("加载 POI 区域 {} 失败：{e}", path.display());
+                // 加载失败时必须先把原文件改名备份：否则插入的
+                // 空 region 会在后续 add 触发保存时，用只含新条目
+                // 的数据覆盖整个 .mca，存量 POI 将全部静默丢失
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let backup = path.with_extension(format!("corrupt-{timestamp}"));
+                if let Err(backup_err) = std::fs::rename(&path, &backup) {
+                    warn!(
+                        "备份损坏的 POI 文件到 {} 失败：{backup_err}",
+                        backup.display()
+                    );
+                }
+                PoiRegion::new()
+            }
+        };
+        region.last_access = access;
+        self.regions.insert((rx, rz), region);
+        self.evict_over_limit();
+    }
+
+    fn get_or_load_region(&mut self, rx: i32, rz: i32) -> &mut PoiRegion {
+        self.access_counter += 1;
+        let access = self.access_counter;
+        if !self.regions.contains_key(&(rx, rz)) {
+            self.load_and_insert_region(rx, rz, access);
+        }
+        // `load_and_insert_region` 无条件插入；`or_insert_with` 仅在
+        // 内部状态不一致的不可达情况下兜底重建，绝不 panic。
+        let region = self.regions.entry((rx, rz)).or_insert_with(|| {
+            warn!("POI 区域 ({rx}, {rz}) 插入后仍缺失，重建空区域");
+            PoiRegion::new()
+        });
+        region.last_access = access;
+        region
     }
 
     pub fn add(&mut self, pos: BlockPos, poi_type: &str) {
@@ -731,6 +789,35 @@ mod tests {
         storage.save_all().unwrap();
         assert!(path.exists(), "重建后的 region 应已保存");
         assert!(backups[0].exists(), "备份文件必须保留");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 超出上限的 region 必须被淘汰（先落盘），淘汰后再次访问
+    /// 能从磁盘恢复——内存有界且数据不丢。
+    #[test]
+    fn regions_beyond_limit_are_evicted_and_reloadable() {
+        let dir = std::env::temp_dir().join("papokin_poi_evict_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut storage = PoiStorage::new(dir.clone());
+        // 每个传送门相隔 512+ 方块，落在不同的 region
+        for i in 0..(MAX_LOADED_REGIONS + 8) as i32 {
+            storage.add_portal(BlockPos(Vector3::new(i * 600, 64, 0)));
+        }
+        assert!(
+            storage.loaded_region_count() <= MAX_LOADED_REGIONS,
+            "已加载 region 数不得超出上限"
+        );
+
+        // 最先写入的 region 已被淘汰；重新访问必须从磁盘找回数据
+        let results = storage.get_in_square(
+            BlockPos(Vector3::new(600, 64, 0)),
+            8,
+            Some(POI_TYPE_NETHER_PORTAL),
+        );
+        assert_eq!(results.len(), 1, "被淘汰的 region 应能从磁盘重载");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
