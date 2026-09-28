@@ -1453,14 +1453,22 @@ impl Player {
             EquipmentSlot::Body(_) | EquipmentSlot::Saddle(_) => return false,
         };
 
-        let mut stack = self.inventory.get_slot(slot_index);
-        let original_item = stack.item;
-        let result = stack.damage_item(amount);
-        let updated = (result != papokin_data::item_stack::DamageResult::Untouched)
-            .then_some((result, stack.clone()));
+        // 读取-损耗-写回在写锁内原子完成：工具损耗是全服最高频的
+        // 槽位修改之一，与拾取/插件写入并发时整体写回会覆盖它们
+        let damaged: Option<(
+            papokin_data::item_stack::DamageResult,
+            &'static papokin_data::item::Item,
+        )> = self.inventory.update_slot(slot_index, |mut stack| {
+            if stack.is_empty() {
+                return (stack, None);
+            }
+            let original_item = stack.item;
+            let result = stack.damage_item(amount);
+            let changed = result != papokin_data::item_stack::DamageResult::Untouched;
+            (stack, changed.then_some((result, original_item)))
+        });
 
-        if let Some((result, updated_stack)) = updated {
-            self.inventory.set_slot(slot_index, updated_stack.clone());
+        if let Some((result, original_item)) = damaged {
             if let Some(server) = self.world().server.upgrade()
                 && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
             {
@@ -1492,6 +1500,7 @@ impl Player {
                 );
             }
 
+            let updated_stack = self.inventory.get_slot(slot_index);
             self.try_send_slot_set_packet(&CSetPlayerInventory::new(
                 (slot_index as i32).into(),
                 &ItemStackSerializer::from(updated_stack.clone()),
@@ -4848,14 +4857,13 @@ impl Player {
     }
 
     pub fn drop_held_item(&self, drop_stack: bool) {
-        let mut item_stack = self.inventory().held_item();
+        let item_stack = self.inventory().held_item();
 
         if item_stack.is_empty() {
             return;
         }
 
         let drop_amount = if drop_stack { item_stack.item_count } else { 1 };
-        let dropped_stack = item_stack.copy_with_count(drop_amount);
 
         if let Some(server) = self.world().server.upgrade()
             && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
@@ -4863,8 +4871,8 @@ impl Player {
             let mut event =
                 crate::plugin::api::events::player::player_drop_item::PlayerDropItemEvent::new(
                     player_arc,
-                    dropped_stack.item.registry_key.to_string(),
-                    dropped_stack.item_count,
+                    item_stack.item.registry_key.to_string(),
+                    drop_amount,
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
             if event.cancelled {
@@ -4872,12 +4880,20 @@ impl Player {
             }
         }
 
-        item_stack.decrement(drop_amount);
-        let updated_stack = item_stack.clone();
-        self.inventory().set_held_item(updated_stack.clone());
+        // 原子扣减：读取-扣减-写回在单次写锁内完成。上面的插件事件
+        // 等待期间（以及 RCON/插件在刻相位之外的写入）可能已有物品
+        // 并入该槽位，陈旧快照整体写回会把它们覆盖掉（物品凭空消失）。
+        let dropped_stack = self.inventory().update_held(Hand::Right, |mut current| {
+            let taken = current.split(drop_amount);
+            (current, taken)
+        });
+        if dropped_stack.is_empty() {
+            return;
+        }
 
         self.drop_item(dropped_stack);
 
+        let updated_stack = self.inventory().held_item();
         let inv: Arc<dyn Inventory> = self.inventory.clone();
         let screen_binding = self
             .current_screen_handler
@@ -6284,19 +6300,28 @@ impl Player {
         }
 
         let inventory = &self.inventory;
-        let mut stack = inventory.get_slot(slot);
-        match stack.item_count {
-            2.. => {
-                stack.item_count -= 1;
-                inventory.set_slot(slot, stack);
-                true
+        // 读取-校验-扣减-写回在写锁内原子完成：find_arrow 选槽到此
+        // 之间存在窗口，槽位可能被并发改写（拾取并入/插件写入），
+        // 校验仍是箭才扣，防止误吞其他物品
+        inventory.update_slot(slot, |mut stack| {
+            use papokin_data::item::Item;
+            let is_arrow = matches!(
+                stack.item.id,
+                id if id == Item::ARROW.id
+                    || id == Item::TIPPED_ARROW.id
+                    || id == Item::SPECTRAL_ARROW.id
+            );
+            if !is_arrow || stack.item_count == 0 {
+                return (stack, false);
             }
-            1 => {
-                inventory.set_slot(slot, ItemStack::EMPTY.clone());
-                true
+            match stack.item_count {
+                2.. => {
+                    stack.item_count -= 1;
+                    (stack, true)
+                }
+                _ => (ItemStack::EMPTY.clone(), true),
             }
-            _ => false,
-        }
+        })
     }
 
     /// 返回玩家下方的主要非空气 `BlockPos`。
