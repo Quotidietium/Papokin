@@ -684,11 +684,15 @@ impl LivingEntity {
             .is_some_and(|stabbed_at| now - stabbed_at < allowed_ticks)
     }
 
-    pub fn remember_stabbed_entity(&self, target_id: i32, now: i32) {
-        self.recent_kinetic_enemies
+    pub fn remember_stabbed_entity(&self, target_id: i32, now: i32, allowed_ticks: i32) {
+        let mut enemies = self
+            .recent_kinetic_enemies
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(target_id, now);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 顺手淘汰已过期的条目：持续攻击流（不使用物品）此前可对
+        // 不同实体 id 无限插入，长时间运行缓慢增长
+        enemies.retain(|_, stabbed_at| now - *stabbed_at < allowed_ticks);
+        enemies.insert(target_id, now);
     }
 
     pub fn is_blocking(&self) -> bool {

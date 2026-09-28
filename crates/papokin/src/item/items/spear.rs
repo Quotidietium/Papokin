@@ -266,9 +266,11 @@ impl SpearItem {
             ) {
                 continue;
             }
-            player
-                .living_entity
-                .remember_stabbed_entity(target_entity.entity_id, now);
+            player.living_entity.remember_stabbed_entity(
+                target_entity.entity_id,
+                now,
+                weapon.contact_cooldown_ticks,
+            );
 
             let target_speed = look.dot(&Self::known_speed(target_entity));
             let relative_speed = (attacker_speed - target_speed).max(0.0);
