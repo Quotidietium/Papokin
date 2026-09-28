@@ -63,6 +63,10 @@
 - **编写单元测试：** 添加新功能或修改现有代码时，建议同时添加单元测试以防未来回归。编写测试的指导见 Rust 文档：<https://doc.rust-lang.org/book/ch11-01-writing-tests.html>
 - **基准测试：** 如果你的变更可能影响性能，建议添加基准测试以跟踪性能回归或改进。我们使用 Criterion 库做基准测试，快速上手见：<https://github.com/criterion-rs/criterion.rs#quickstart>
 - **清晰的提交信息：** 使用清晰简洁的提交信息描述你所做的变更。
+- **细粒度提交：** 一个逻辑修复/特性对应一个 commit，消息为
+  Conventional Commits + 简体中文祈使句（`fix(范围): 描述`，单行 ≤ 72 字符）；
+  按依赖序提交（先基础设施后调用方），保证逐 commit 可编译；
+  同一文件混合多个主题时按 hunk 拆分暂存。仓库内部规范详见 [AGENTS.md](AGENTS.md)。
 - **代码风格：** 在所有贡献中保持一致的代码风格。
 - **文档：** 如果你的变更引入了新功能，请考虑更新相关文档。
 - **Tokio 与 Rayon 协作：**
