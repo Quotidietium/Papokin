@@ -51,6 +51,7 @@ impl ItemBehaviour for CrossbowItem {
         let use_ticks = 72000 - use_ticks;
 
         let mut stack = player.inventory().held_item();
+        let stack_before = stack.clone();
         let charge_time =
             crate::enchantment::EnchantmentHelper::modify_crossbow_charge_time(&stack, 25);
 
@@ -96,7 +97,12 @@ impl ItemBehaviour for CrossbowItem {
                             projectiles: charged_nbts,
                         })),
                     ));
-                    player.inventory().set_held_item(stack);
+                    // 装填窗口含插件事件，写回按增量在写锁内合并
+                    player.inventory().merge_held_delta(
+                        papokin_util::Hand::Right,
+                        &stack_before,
+                        &stack,
+                    );
 
                     if let Some(slot) = arrow_slot
                         && !is_creative
@@ -129,6 +135,7 @@ impl CrossbowItem {
 
     fn fire_projectiles(player: &Player) {
         let mut held = player.inventory().held_item();
+        let held_before = held.clone();
         let charged_opt = held.get_data_component::<ChargedProjectilesImpl>().cloned();
 
         if let Some(charged) = charged_opt {
@@ -161,7 +168,9 @@ impl CrossbowItem {
 
                 held.patch
                     .retain(|(id, _)| *id != DataComponent::ChargedProjectiles);
-                player.inventory().set_held_item(held);
+                player
+                    .inventory()
+                    .merge_held_delta(papokin_util::Hand::Right, &held_before, &held);
                 player.damage_held_item(1);
             }
         }

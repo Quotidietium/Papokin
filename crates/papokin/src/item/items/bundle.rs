@@ -2,6 +2,7 @@ use crate::entity::player::Player;
 use crate::item::{ItemBehaviour, ItemMetadata};
 use papokin_data::data_component_impl::BundleContentsImpl;
 use papokin_data::item::Item;
+use papokin_data::item_stack::ItemStack;
 use papokin_data::sound::Sound;
 use papokin_data::tag;
 use papokin_util::Hand;
@@ -16,56 +17,50 @@ impl ItemMetadata for BundleItem {
 
 impl ItemBehaviour for BundleItem {
     fn normal_use(&self, _item: &Item, player: &Player) {
-        let mut held_item = player.inventory.held_item();
-        let mut matched = false;
-        let mut used_slot_index = player.inventory.get_selected_slot() as usize;
-
-        if !held_item.is_empty() && Self::ids().contains(&held_item.item.id) {
-            matched = true;
-            if let Some(bundle_contents) = held_item.get_data_component_mut::<BundleContentsImpl>()
-                && let Some(extracted_stack) = bundle_contents.try_extract()
-            {
-                let position = player.position();
-                player.world().play_sound(
-                    Sound::ItemBundleRemoveOne,
-                    papokin_data::sound::SoundCategory::Players,
-                    &position,
-                );
-                let updated_bundle = held_item.clone();
-
-                // `held_item()` 返回的是克隆，必须显式写回物品栏；
-                // 否则服务端袋内物品不减少，每次右键都会重复
-                // 取出同一件物品（复制漏洞）。
-                player.inventory.set_held_item(updated_bundle.clone());
-                player.drop_item(extracted_stack);
-                player.sync_hand_slot(used_slot_index, updated_bundle);
+        // 取出-写回在写锁内原子完成（try_extract 只改本地克隆，
+        // 真正落库走 update_held）：右键期间并发并入该槽位的物品
+        // 不会被陈旧快照覆盖
+        fn extract(mut s: ItemStack) -> (ItemStack, Option<ItemStack>) {
+            let is_bundle = !s.is_empty() && BundleItem::ids().contains(&s.item.id);
+            if !is_bundle {
+                return (s, None);
             }
+            let extracted = s
+                .get_data_component_mut::<BundleContentsImpl>()
+                .and_then(BundleContentsImpl::try_extract);
+            (s, extracted)
         }
 
-        if !matched {
-            let mut off_hand_item = player.inventory.off_hand_item();
-            if !off_hand_item.is_empty() && Self::ids().contains(&off_hand_item.item.id) {
-                used_slot_index = 40; // OFF_HAND_SLOT
-                if let Some(bundle_contents) =
-                    off_hand_item.get_data_component_mut::<BundleContentsImpl>()
-                    && let Some(extracted_stack) = bundle_contents.try_extract()
-                {
-                    let position = player.position();
-                    player.world().play_sound(
-                        Sound::ItemBundleRemoveOne,
-                        papokin_data::sound::SoundCategory::Players,
-                        &position,
-                    );
-                    let updated_bundle = off_hand_item.clone();
+        let used_slot_index = player.inventory.get_selected_slot() as usize;
+        let main_extracted = player.inventory.update_held(Hand::Right, extract);
+        // 主手不是收纳袋才检查副手
+        let (slot_index, extracted) = main_extracted.map_or_else(
+            || {
+                player
+                    .inventory
+                    .update_held(Hand::Left, extract)
+                    .map_or_else(
+                        || (used_slot_index, ItemStack::EMPTY.clone()),
+                        |stack| (40, stack), // OFF_HAND_SLOT
+                    )
+            },
+            |stack| (used_slot_index, stack),
+        );
 
-                    // 与主手同理：`off_hand_item()` 返回克隆，需写回装备表。
-                    player
-                        .inventory
-                        .set_stack_in_hand(Hand::Left, updated_bundle.clone());
-                    player.drop_item(extracted_stack);
-                    player.sync_hand_slot(used_slot_index, updated_bundle);
-                }
-            }
+        if !extracted.is_empty() {
+            let position = player.position();
+            player.world().play_sound(
+                Sound::ItemBundleRemoveOne,
+                papokin_data::sound::SoundCategory::Players,
+                &position,
+            );
+            player.drop_item(extracted);
+            let updated_bundle = if slot_index == 40 {
+                player.inventory.off_hand_item()
+            } else {
+                player.inventory.held_item()
+            };
+            player.sync_hand_slot(slot_index, updated_bundle);
         }
     }
 

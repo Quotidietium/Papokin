@@ -25,17 +25,16 @@ impl ItemBehaviour for MapItem {
 
         let inventory = player.inventory();
         let held_stack = inventory.held_item();
-        let (found, mut hand_stack, hand) =
-            if !held_stack.is_empty() && held_stack.item.id == Item::MAP.id {
-                (true, held_stack, papokin_util::Hand::Right)
+        let (found, hand) = if !held_stack.is_empty() && held_stack.item.id == Item::MAP.id {
+            (true, papokin_util::Hand::Right)
+        } else {
+            let off_hand = inventory.off_hand_item();
+            if !off_hand.is_empty() && off_hand.item.id == Item::MAP.id {
+                (true, papokin_util::Hand::Left)
             } else {
-                let off_hand = inventory.off_hand_item();
-                if !off_hand.is_empty() && off_hand.item.id == Item::MAP.id {
-                    (true, off_hand, papokin_util::Hand::Left)
-                } else {
-                    (false, held_stack, papokin_util::Hand::Right)
-                }
-            };
+                (false, papokin_util::Hand::Right)
+            }
+        };
 
         if found {
             let map_id = server.next_map_id();
@@ -51,19 +50,33 @@ impl ItemBehaviour for MapItem {
                 crate::plugin::api::events::server::map_initialize::MapInitializeEvent::new(map_id);
             server.plugin_manager.fire_blocking(&server, &mut map_event);
 
-            let mut filled_map = ItemStack::new(1, &Item::FILLED_MAP);
-            filled_map.patch.push((
-                DataComponent::MapId,
-                Some(MapIdImpl { id: map_id }.to_dyn()),
-            ));
-
             let gamemode = player.gamemode.load();
-            if hand_stack.item_count == 1 && gamemode != GameMode::Creative {
-                inventory.set_stack_in_hand(hand, filled_map);
-            } else {
-                hand_stack.decrement_unless_creative(gamemode, 1);
-                inventory.set_stack_in_hand(hand, hand_stack);
-                let mut stack_to_give = filled_map;
+            let make_filled_map = || {
+                let mut map_stack = ItemStack::new(1, &Item::FILLED_MAP);
+                map_stack.patch.push((
+                    DataComponent::MapId,
+                    Some(MapIdImpl { id: map_id }.to_dyn()),
+                ));
+                map_stack
+            };
+            // 读取-校验-扣减/替换-写回在写锁内原子完成（count==1 时
+            // 原位换成成图地图）。返回：None = 槽位已不匹配（不作为）；
+            // Some(true) = 已原位替换；Some(false) = 已扣减（需另给一张）
+            let outcome = inventory.update_held(hand, |mut s| {
+                let matched = !s.is_empty() && s.item.id == Item::MAP.id;
+                if !matched {
+                    return (s, None);
+                }
+                if s.item_count == 1 && gamemode != GameMode::Creative {
+                    (make_filled_map(), Some(true))
+                } else {
+                    s.decrement_unless_creative(gamemode, 1);
+                    (s, Some(false))
+                }
+            });
+
+            if outcome == Some(false) {
+                let mut stack_to_give = make_filled_map();
                 let was_added = inventory.insert_stack_anywhere(&mut stack_to_give);
                 if !was_added && !stack_to_give.is_empty() {
                     player

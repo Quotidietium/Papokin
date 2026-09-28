@@ -65,7 +65,7 @@ impl ItemBehaviour for GlassBottleItem {
                 &hit_pos.to_f64(),
             );
 
-            let water_bottle = water_bottle();
+            let bottle_stack = water_bottle();
             let mut held = player.inventory().held_item();
             let mut is_main = true;
             if held.is_empty() || held.item.id != Item::GLASS_BOTTLE.id {
@@ -75,25 +75,32 @@ impl ItemBehaviour for GlassBottleItem {
                     return;
                 }
             }
-
-            if held.item_count == 1 && player.gamemode.load() != papokin_util::GameMode::Creative {
-                if is_main {
-                    player.inventory().set_held_item(water_bottle);
-                } else {
-                    player
-                        .inventory()
-                        .set_stack_in_hand(papokin_util::Hand::Left, water_bottle);
-                }
+            let hand = if is_main {
+                papokin_util::Hand::Right
             } else {
-                held.decrement_unless_creative(player.gamemode.load(), 1);
-                if is_main {
-                    player.inventory().set_held_item(held);
-                } else {
-                    player
-                        .inventory()
-                        .set_stack_in_hand(papokin_util::Hand::Left, held);
+                papokin_util::Hand::Left
+            };
+            let gamemode = player.gamemode.load();
+            // 读取-校验-扣减/替换-写回在写锁内原子完成（count==1 时
+            // 原位换成水瓶，防止写回间隙并入的物品被覆盖）。
+            // 返回：None = 槽位已不匹配（不作任何事）；Some(true) =
+            // 已原位换成水瓶；Some(false) = 已扣减（需另给一瓶）。
+            let outcome = player.inventory().update_held(hand, |mut s| {
+                let matched = !s.is_empty() && s.item.id == Item::GLASS_BOTTLE.id;
+                if !matched {
+                    return (s, None);
                 }
-                let mut stack_to_give = water_bottle;
+                if s.item_count == 1 && gamemode != papokin_util::GameMode::Creative {
+                    s = bottle_stack;
+                    (s, Some(true))
+                } else {
+                    s.decrement_unless_creative(gamemode, 1);
+                    (s, Some(false))
+                }
+            });
+
+            if outcome == Some(false) {
+                let mut stack_to_give = water_bottle();
                 let was_added = player.inventory().insert_stack_anywhere(&mut stack_to_give);
                 if !was_added && !stack_to_give.is_empty() {
                     world.drop_stack(&player.position().to_block_pos(), stack_to_give);
