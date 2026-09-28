@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::chunk::format::anvil::SingleChunkDataSerializer;
 use crate::chunk::io::{ChunkSerializer, LoadedData, atomic_write, run_blocking};
@@ -17,6 +18,10 @@ const MAX_CHUNK_DECOMPRESSED_LEN: usize = 8 * 1024 * 1024;
 
 pub struct PumpFile<D> {
     pub data: PumpData,
+    /// 是否有 `update_chunk` 写入但尚未成功落盘的数据。
+    /// 防止注视中的区域序列化器在驱逐时静默丢弃未写盘更新
+    /// （见 `ChunkSerializer::has_pending_writes`）。
+    pending_writes: AtomicBool,
     _phantom: PhantomData<D>,
 }
 
@@ -31,6 +36,7 @@ impl<D> Default for PumpFile<D> {
     fn default() -> Self {
         Self {
             data: PumpData::default(),
+            pending_writes: AtomicBool::new(false),
             _phantom: PhantomData,
         }
     }
@@ -50,11 +56,20 @@ where
         format!("r.{region_x}.{region_z}.pump")
     }
 
-    fn should_write(&self, _is_watched: bool) -> bool {
-        true
+    fn has_pending_writes(&self) -> bool {
+        self.pending_writes.load(Ordering::Acquire)
     }
 
     async fn write(&self, backend: &Self::WriteBackend) -> Result<(), std::io::Error> {
+        // 零脏跳过：强制保存路径（如每轮自动保存的实体区块刷新）
+        // 会对未发生任何变化的区域照样调用 write()，若不短路，
+        // 每次都要全量序列化 + 整文件重写。检查在读锁内进行，
+        // 与 update_chunk（写锁）互斥，不存在漏写窗口。
+        if !self.pending_writes.load(Ordering::Acquire) {
+            tracing::trace!("跳过 {} 的写入：自上次落盘以来无更新", backend.display());
+            return Ok(());
+        }
+
         let data = self.data.clone();
         let bytes = run_blocking(move || {
             let mut root = papokin_nbt::compound::NbtCompound::new();
@@ -73,7 +88,11 @@ where
         // 此前是 tokio::fs::write 直接覆写：进程在写入中途崩溃会
         // 留下残缺的 .pump 文件，重启后该区域数据全部损坏。
         // 改用与 Anvil 外部负载一致的原子写入。
-        atomic_write(backend, &bytes).await
+        let result = atomic_write(backend, &bytes).await;
+        if result.is_ok() {
+            self.pending_writes.store(false, Ordering::Release);
+        }
+        result
     }
 
     fn read(r: Bytes) -> Result<Self, ChunkReadingError> {
@@ -101,6 +120,7 @@ where
 
         Ok(Self {
             data: PumpData { x, z, chunks },
+            pending_writes: AtomicBool::new(false),
             _phantom: PhantomData,
         })
     }
@@ -131,6 +151,7 @@ where
         self.data
             .chunks
             .insert(index.to_string(), compressed.into());
+        self.pending_writes.store(true, Ordering::Release);
 
         Ok(())
     }
@@ -288,5 +309,30 @@ mod tests {
             }
             _ => panic!("预期为 LoadedData::Loaded"),
         }
+    }
+    #[tokio::test]
+    async fn zero_dirty_write_is_skipped() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("r.0.0.pump");
+
+        let mut pump_file: PumpFile<MockChunk> = PumpFile::default();
+        // 零脏：write() 短路，不创建文件
+        pump_file.write(&file_path).await.unwrap();
+        assert!(!file_path.exists(), "零脏 write 不应产生任何文件");
+
+        // 有更新后正常落盘
+        pump_file
+            .update_chunk(
+                Arc::new(MockChunk {
+                    x: 0,
+                    z: 0,
+                    data: vec![9],
+                }),
+                &(),
+            )
+            .await
+            .unwrap();
+        pump_file.write(&file_path).await.unwrap();
+        assert!(file_path.exists(), "有更新的 write 应落盘");
     }
 }

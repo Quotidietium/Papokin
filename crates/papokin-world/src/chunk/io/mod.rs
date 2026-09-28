@@ -128,8 +128,6 @@ pub trait ChunkSerializer: Send + Sync + Default + 'static {
     /// 获取区块的键（类似文件名）
     fn get_chunk_key(chunk: &Vector2<i32>) -> String;
 
-    fn should_write(&self, is_watched: bool) -> bool;
-
     /// 将数据序列化为字节。
     fn write(
         &self,

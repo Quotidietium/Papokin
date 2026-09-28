@@ -3,6 +3,7 @@ use std::io::{ErrorKind, Read};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chunk::format::anvil::{AnvilChunkFile, SingleChunkDataSerializer};
@@ -13,7 +14,7 @@ use papokin_util::math::vector2::Vector2;
 use ruzstd::decoding::StreamingDecoder;
 use ruzstd::encoding::{CompressionLevel, compress_to_vec};
 use tokio::io::{AsyncWriteExt, BufWriter};
-use tracing::{error, warn};
+use tracing::{error, trace, warn};
 use xxhash_rust::xxh64::xxh64;
 
 use super::anvil::CHUNK_COUNT;
@@ -311,6 +312,12 @@ pub struct LinearV2File<S: SingleChunkDataSerializer> {
     /// 每个区块的压缩 NBT 数据（None 表示区块不存在）。
     chunks_data: [Option<Bytes>; CHUNK_COUNT],
 
+    /// 是否有 `update_chunk` 写入但尚未成功落盘的数据。
+    /// Linear 的整文件重写只在区域文件不被注视时发生；
+    /// 若无此标记，注视中的部分更新会在序列化器驱逐时
+    /// 被静默丢弃（见 `ChunkSerializer::has_pending_writes`）。
+    pending_writes: AtomicBool,
+
     _dummy: PhantomData<S>,
 }
 
@@ -323,6 +330,7 @@ impl<S: SingleChunkDataSerializer> Default for LinearV2File<S> {
             grid_size: DEFAULT_GRID_SIZE,
             timestamps: [0u64; CHUNK_COUNT],
             chunks_data: [const { None }; CHUNK_COUNT],
+            pending_writes: AtomicBool::new(false),
             _dummy: PhantomData,
         }
     }
@@ -383,16 +391,25 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
     type WriteBackend = PathBuf;
     type ChunkConfig = ();
 
-    fn should_write(&self, is_watched: bool) -> bool {
-        !is_watched
-    }
-
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = AnvilChunkFile::<S>::get_region_coords(chunk);
         format!("./r.{region_x}.{region_z}.linear")
     }
 
+    fn has_pending_writes(&self) -> bool {
+        self.pending_writes.load(Ordering::Acquire)
+    }
+
     async fn write(&self, path: &PathBuf) -> Result<(), std::io::Error> {
+        // 零脏跳过：强制保存路径（如每轮自动保存的实体区块刷新）
+        // 会对未发生任何变化的区域照样调用 write()，若不短路，
+        // 每次都要全量压缩 + 整文件重写——纯粹的写放大。检查在
+        // 读锁内进行，与 update_chunk（写锁）互斥，不存在漏写窗口。
+        if !self.pending_writes.load(Ordering::Acquire) {
+            trace!("跳过 {} 的写入：自上次落盘以来无更新", path.display());
+            return Ok(());
+        }
+
         let temp_path = path.with_extension("tmp");
         let grid_size = self.grid_size;
         let chunks_data = self.chunks_data.clone();
@@ -457,6 +474,7 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
 
         // 原子重命名，使写入过程中崩溃不会产生残缺文件。
         tokio::fs::rename(temp_path, path).await?;
+        self.pending_writes.store(false, Ordering::Release);
         Ok(())
     }
 
@@ -569,6 +587,7 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
             grid_size,
             timestamps,
             chunks_data,
+            pending_writes: AtomicBool::new(false),
             _dummy: PhantomData,
         })
     }
@@ -593,6 +612,7 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         self.chunks_data[index] = Some(chunk_raw);
+        self.pending_writes.store(true, Ordering::Release);
         Ok(())
     }
 
@@ -787,5 +807,53 @@ mod tests {
         let mut b: Bytes = buf.into();
         let decoded = BucketChunkEntry::read_from(&mut b).unwrap();
         assert!(decoded.data.is_none());
+    }
+}
+
+#[cfg(test)]
+mod write_skip_tests {
+    use super::*;
+    use crate::chunk::ChunkReadingError;
+    use crate::chunk::ChunkSerializingError;
+
+    /// 最小区块载体：仅用于验证零脏跳过语义。
+    #[derive(Debug, Clone)]
+    struct TmpChunk(i32, i32);
+
+    impl crate::chunk::io::Dirtiable for TmpChunk {
+        fn is_dirty(&self) -> bool {
+            true
+        }
+        fn mark_dirty(&self, _: bool) {}
+    }
+
+    impl SingleChunkDataSerializer for TmpChunk {
+        fn to_bytes(&self) -> Result<Bytes, ChunkSerializingError> {
+            Ok(Bytes::from(vec![1u8; 32]))
+        }
+        fn from_bytes(_bytes: &Bytes, pos: Vector2<i32>) -> Result<Self, ChunkReadingError> {
+            Ok(Self(pos.x, pos.y))
+        }
+        fn position(&self) -> (i32, i32) {
+            (self.0, self.1)
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_dirty_write_is_skipped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("r.0.0.linear");
+
+        let mut file: LinearV2File<TmpChunk> = LinearV2File::default();
+        // 零脏：write() 短路，不创建文件
+        file.write(&path).await.unwrap();
+        assert!(!path.exists(), "零脏 write 不应产生任何文件");
+
+        // 有更新后正常落盘
+        file.update_chunk(Arc::new(TmpChunk(0, 0)), &())
+            .await
+            .unwrap();
+        file.write(&path).await.unwrap();
+        assert!(path.exists(), "有更新的 write 应落盘");
     }
 }

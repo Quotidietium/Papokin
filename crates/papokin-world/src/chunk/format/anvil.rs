@@ -933,10 +933,6 @@ impl<S: SingleChunkDataSerializer> ChunkSerializer for AnvilChunkFile<S> {
 
     type ChunkConfig = AnvilChunkConfig;
 
-    fn should_write(&self, is_watched: bool) -> bool {
-        !is_watched
-    }
-
     fn has_pending_writes(&self) -> bool {
         // Locked 表示当前有写入正在进行；需保守处理。
         self.write_action
