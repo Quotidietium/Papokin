@@ -46,26 +46,28 @@ impl JavaClient {
         let cooking_display_count = RECIPES_COOKING.len();
         let dynamic_recipes = server.recipe_manager.get_dynamic_recipes();
 
-        let (grid_width, crafting_inv) = {
-            let screen_handler_arc = player
-                .current_screen_handler
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let handler = screen_handler_arc
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            // 与原版一致校验窗口 id：丢弃针对已关闭/已更换界面的过期请求
-            if i32::from(packet.container_id) != i32::from(handler.get_behaviour().sync_id) {
-                return;
-            }
-            let grid_width: usize = match handler.window_type() {
-                Some(WindowType::Crafting) => 3,
-                None => 2, // 玩家物品栏 2x2
-                _ => return,
-            };
-            (grid_width, handler.get_behaviour().slots[1].get_inventory())
+        let screen_handler_arc = player
+            .current_screen_handler
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        // 整个填充流程持有处理器锁（下划线前缀使守卫保活到函数
+        // 尾）：并发关闭界面的 on_closed 会把网格物品还给玩家并
+        // 废弃界面，与本路径的清格/填格交错会让刚填入的原料落在
+        // 已废弃的合成格里随界面一起丢失。
+        let mut handler_guard = screen_handler_arc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // 与原版一致校验窗口 id：丢弃针对已关闭/已更换界面的过期请求
+        if i32::from(packet.container_id) != i32::from(handler_guard.get_behaviour().sync_id) {
+            return;
+        }
+        let grid_width: usize = match handler_guard.window_type() {
+            Some(WindowType::Crafting) => 3,
+            None => 2, // 玩家物品栏 2x2
+            _ => return,
         };
+        let crafting_inv = handler_guard.get_behaviour().slots[1].get_inventory();
 
         let grid_size = grid_width * grid_width;
         let mut ingredient_slots: Vec<Option<GenericIngredient<'_>>> = vec![None; grid_size];
@@ -215,15 +217,7 @@ impl JavaClient {
         };
 
         if amount_to_craft == 0 {
-            let screen_handler_arc = player
-                .current_screen_handler
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            screen_handler_arc
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .send_content_updates();
+            handler_guard.send_content_updates();
             return;
         }
 
@@ -236,14 +230,6 @@ impl JavaClient {
             }
         }
 
-        let screen_handler_arc = player
-            .current_screen_handler
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        screen_handler_arc
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .send_content_updates();
+        handler_guard.send_content_updates();
     }
 }
