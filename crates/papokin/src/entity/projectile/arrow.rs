@@ -841,6 +841,10 @@ impl EntityBase for ArrowEntity {
             );
         if let Some(server) = self.entity.world.load().server.upgrade() {
             server.plugin_manager.fire_blocking(&server, &mut hit_event);
+            // 取消即吞掉本次命中（不插地方块、不伤害实体）
+            if hit_event.cancelled {
+                return;
+            }
         }
 
         let entity = self.get_entity();
