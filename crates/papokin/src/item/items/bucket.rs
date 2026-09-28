@@ -14,7 +14,7 @@ use papokin_data::{
     sound::{Sound, SoundCategory},
 };
 use papokin_util::{
-    GameMode,
+    GameMode, Hand,
     math::{position::BlockPos, vector3::Vector3},
 };
 use papokin_world::{tick::TickPriority, world::BlockFlags};
@@ -125,15 +125,24 @@ fn give_player_bucket_item(player: &Player, item: &'static Item) {
         let mut item_stack = ItemStack::new(1, item);
         player.inventory.insert_stack_anywhere(&mut item_stack);
     } else {
-        let item_stack = ItemStack::new(1, item);
-        let mut held_stack = player.inventory.held_item();
+        // 读取-扣减/替换-写回在写锁内原子完成（count==1 时原位换成
+        // 装满的桶）。返回：None = 手持已不是空桶（不作为）；
+        // Some(true) = 已原位替换；Some(false) = 已扣减（需另给一只）
+        let outcome = player.inventory.update_held(Hand::Right, |mut s| {
+            let matched = !s.is_empty() && s.item.id == Item::BUCKET.id;
+            if !matched {
+                return (s, None);
+            }
+            if s.item_count == 1 {
+                (ItemStack::new(1, item), Some(true))
+            } else {
+                s.decrement(1);
+                (s, Some(false))
+            }
+        });
 
-        if held_stack.item_count == 1 {
-            player.inventory.set_held_item(item_stack);
-        } else {
-            held_stack.decrement(1);
-            player.inventory.set_held_item(held_stack);
-            let mut stack_to_give = item_stack;
+        if outcome == Some(false) {
+            let mut stack_to_give = ItemStack::new(1, item);
             let was_added = player.inventory.insert_stack_anywhere(&mut stack_to_give);
             if !was_added && !stack_to_give.is_empty() {
                 player
