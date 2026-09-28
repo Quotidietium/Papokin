@@ -168,9 +168,10 @@ impl ScreenHandler for StonecutterScreenHandler {
         player: &dyn InventoryPlayer,
     ) {
         self.internal_on_slot_click(slot_index, button, action_type, player);
-        if slot_index == 0 {
-            self.update_output();
-        }
+        // 无条件重算：双击收集（PickupAll）可从任意背包槽触发并吸走
+        // 输入槽，此前仅点击 0 号槽才重算——输入被吸走后结果槽保持
+        // 陈旧非空，取出时对空输入 no-op = 免费产出
+        self.update_output();
     }
 
     fn on_button_click(&mut self, _player: &dyn InventoryPlayer, button_id: i32) -> bool {
@@ -294,5 +295,151 @@ impl Slot for StonecutterOutputSlot {
 
     fn mark_dirty(&self) {
         self.inventory.mark_dirty();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_equipment::EntityEquipment;
+    use crate::inventory::Inventory;
+    use crate::player::player_inventory::PlayerInventory;
+    use crate::screen_handler::{InventoryPlayer, ScreenHandler};
+    use papokin_data::item::Item;
+    use papokin_data::item_stack::ItemStack;
+    use papokin_data::screen::WindowType;
+    use papokin_protocol::java::client::play::{
+        CSetContainerContent, CSetContainerProperty, CSetContainerSlot, CSetCursorItem,
+        CSetPlayerInventory, CSetSelectedSlot,
+    };
+    use std::any::Any;
+    use std::sync::Mutex;
+
+    struct DummyPlayer {
+        inventory: Arc<PlayerInventory>,
+    }
+
+    impl DummyPlayer {
+        fn new() -> Self {
+            Self {
+                inventory: Arc::new(PlayerInventory::new(
+                    Arc::new(Mutex::new(EntityEquipment::new())),
+                    Arc::new(rustc_hash::FxHashMap::default()),
+                )),
+            }
+        }
+    }
+
+    impl InventoryPlayer for DummyPlayer {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn drop_item(&self, _item: ItemStack, _retain_ownership: bool) {}
+
+        fn is_creative(&self) -> bool {
+            false
+        }
+
+        fn has_infinite_materials(&self) -> bool {
+            false
+        }
+
+        fn experience_level(&self) -> i32 {
+            0
+        }
+
+        fn add_experience_levels(&self, _levels: i32) {}
+
+        fn enchantment_seed(&self) -> i32 {
+            0
+        }
+
+        fn set_enchantment_seed(&self, _seed: i32) {}
+
+        fn get_inventory(&self) -> Arc<PlayerInventory> {
+            self.inventory.clone()
+        }
+
+        fn enqueue_inventory_packet(
+            &self,
+            _packet: &CSetContainerContent,
+            _window_type: Option<WindowType>,
+        ) {
+        }
+
+        fn enqueue_slot_packet(
+            &self,
+            _packet: &CSetContainerSlot,
+            _window_type: Option<WindowType>,
+            _total_slots: usize,
+        ) {
+        }
+
+        fn enqueue_cursor_packet(&self, _packet: &CSetCursorItem) {}
+
+        fn enqueue_property_packet(&self, _packet: &CSetContainerProperty) {}
+
+        fn enqueue_slot_set_packet(&self, _packet: &CSetPlayerInventory) {}
+
+        fn enqueue_set_held_item_packet(&self, _packet: &CSetSelectedSlot) {}
+
+        fn enqueue_equipment_change(
+            &self,
+            _slot: &papokin_data::data_component_impl::EquipmentSlot,
+            _stack: &ItemStack,
+        ) {
+        }
+
+        fn award_experience(&self, _amount: i32) {}
+
+        fn increment_stat(
+            &self,
+            _category: papokin_data::statistic::StatisticCategory,
+            _stat_id: i32,
+            _amount: i32,
+        ) {
+        }
+
+        fn play_block_sound(&self, _sound: papokin_data::sound::Sound, _pitch: f32) {}
+    }
+
+    /// 输入槽被并发路径清空（如双击收集 `PickupAll` 从任意背包槽
+    /// 触发）后，任意一次点击都必须重算输出槽——陈旧非空输出 +
+    /// 对空输入 no-op 扣料 = 免费产出
+    #[test]
+    fn any_click_recomputes_output_after_input_drain() {
+        let player = DummyPlayer::new();
+        let mut handler = StonecutterScreenHandler::new(1, &player.inventory);
+
+        // 放入石头并选中第一个可用配方（按钮 0），输出应有产物
+        handler
+            .input_inventory
+            .set_stack(0, ItemStack::new(4, &Item::STONE));
+        assert!(
+            <StonecutterScreenHandler as ScreenHandler>::on_button_click(&mut handler, &player, 0),
+            "石头至少应有一个可选切石配方"
+        );
+        assert!(
+            !handler.output_inventory.get_stack(0).is_empty(),
+            "选中配方后输出槽应有产物"
+        );
+
+        // 输入被"偷走"（等价于 PickupAll 吸走），随后一次与输入/
+        // 输出无关的普通点击（如背包空槽 Pickup）也必须清空输出
+        handler
+            .input_inventory
+            .set_stack(0, ItemStack::EMPTY.clone());
+        <StonecutterScreenHandler as ScreenHandler>::on_slot_click(
+            &mut handler,
+            10,
+            0,
+            SlotActionType::Pickup,
+            &player,
+        );
+        assert!(
+            handler.output_inventory.get_stack(0).is_empty(),
+            "输入清空后输出槽必须重算为空，否则可免费取产物"
+        );
     }
 }

@@ -265,9 +265,10 @@ impl ScreenHandler for SmithingTableScreenHandler {
         player: &dyn InventoryPlayer,
     ) {
         self.internal_on_slot_click(slot_index, button, action_type, player);
-        if (0..=3).contains(&slot_index) {
-            self.update_output();
-        }
+        // 无条件重算：双击收集（PickupAll）可从任意背包槽触发并吸走
+        // 输入槽，此前仅 0..=3 的点击才重算——模板/锭被偷回后结果槽
+        // 保持陈旧非空，取出时只消耗主输入 = 免费下界合金升级
+        self.update_output();
     }
 
     fn quick_move(&mut self, player: &dyn InventoryPlayer, slot_index: i32) -> ItemStack {

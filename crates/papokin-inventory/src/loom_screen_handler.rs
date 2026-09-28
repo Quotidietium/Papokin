@@ -278,9 +278,10 @@ impl ScreenHandler for LoomScreenHandler {
         player: &dyn InventoryPlayer,
     ) {
         self.internal_on_slot_click(slot_index, button, action_type, player);
-        if (0..=3).contains(&slot_index) {
-            self.slots_changed();
-        }
+        // 无条件重算：双击收集（PickupAll）可从任意背包槽触发并吸走
+        // 输入槽，此前仅 0..=3 的点击才重算——输入被吸走后结果槽保持
+        // 陈旧非空，取出时对空输入 no-op = 免费产出（图案旗无限刷）
+        self.slots_changed();
     }
 
     fn on_button_click(&mut self, _player: &dyn InventoryPlayer, button_id: i32) -> bool {

@@ -553,10 +553,11 @@ impl ScreenHandler for AnvilScreenHandler {
         player: &dyn InventoryPlayer,
     ) {
         self.internal_on_slot_click(slot_index, button, action_type, player);
-        if slot_index == 0 || slot_index == 1 || slot_index == 2 {
-            self.create_result(player.has_infinite_materials());
-            self.send_content_updates();
-        }
+        // 无条件重算：双击收集（PickupAll）可从任意背包槽触发并吸走
+        // 可堆叠的修复材料槽，此前仅 0|1|2 的点击才重算——材料被偷回
+        // 后取出修复结果 = 零材料修复（等级照扣）
+        self.create_result(player.has_infinite_materials());
+        self.send_content_updates();
     }
 }
 

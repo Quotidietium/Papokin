@@ -142,9 +142,10 @@ impl ScreenHandler for CartographyTableScreenHandler {
         player: &dyn InventoryPlayer,
     ) {
         self.internal_on_slot_click(slot_index, button, action_type, player);
-        if (0..=2).contains(&slot_index) {
-            self.slots_changed();
-        }
+        // 无条件重算：双击收集（PickupAll）可从任意背包槽触发并吸走
+        // 输入槽（纸/空地图可堆叠），此前仅 0..=2 的点击才重算——
+        // 空地图被偷回后取出复制结果 = 1 张填充地图变 2 张
+        self.slots_changed();
     }
 
     fn quick_move(&mut self, player: &dyn InventoryPlayer, slot_index: i32) -> ItemStack {
