@@ -182,7 +182,10 @@ impl ItemEntity {
         let bounding_box = self.entity.bounding_box.load().expand(0.5, 0.0, 0.5);
 
         let world = self.entity.world.load();
-        let entities = world.entities.load();
+        // 走按区块分桶的索引：合并候选盒只有 0.5 格扩张，此前对全服
+        // 实体做全表线性扫描，掉落物高峰（爆炸农场/刷怪塔）是每 2 刻
+        // 一次的 O(N²) 放大器
+        let entities = world.get_entities_at_box(&bounding_box);
         let items: Vec<&Self> = entities
             .iter()
             .filter_map(|entity: &Arc<dyn EntityBase>| {
