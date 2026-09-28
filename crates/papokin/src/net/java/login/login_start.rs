@@ -20,9 +20,16 @@ impl PendingConnection {
         }
 
         let max_players = server.advanced_config.networking.java.max_players;
+
+        if !is_valid_player_name(&login_start.name) {
+            self.kick(TextComponent::text("用户名包含无效字符")).await;
+            return Some(PacketHandlerResult::Stop);
+        }
+
         if max_players > 0 && server.get_player_count() >= max_players as usize {
             // 全服务器钩子：插件仍可允许加入。该事件
-            // 仅在服务器真正满员时才触发。
+            // 仅在服务器真正满员时才触发。事件在校验用户名之后
+            // 触发，避免把带格式字符的原始名称递给插件与日志。
             let mut full_check = crate::plugin::api::events::player::player_server_full_check::PlayerServerFullCheckEvent::new(
                 login_start.name.to_string(),
                 login_start.uuid,
@@ -37,11 +44,6 @@ impl PendingConnection {
                 .await;
                 return Some(PacketHandlerResult::Stop);
             }
-        }
-
-        if !is_valid_player_name(&login_start.name) {
-            self.kick(TextComponent::text("用户名包含无效字符")).await;
-            return Some(PacketHandlerResult::Stop);
         }
 
         let proxy = &server.advanced_config.networking.proxy;
