@@ -3,6 +3,10 @@ use super::*;
 use papokin_protocol::java::client::play::CommandSuggestion;
 
 impl JavaClient {
+    /// 补全结果数量上限：命令树可枚举出上千条目（注册表 id 等），
+    /// 插件事件亦可注入任意列表；截断防止响应包膨胀成 MB 级。
+    const MAX_SUGGESTIONS: usize = 256;
+
     pub fn handle_command_suggestion(
         &self,
         player: &Arc<Player>,
@@ -57,6 +61,7 @@ impl JavaClient {
         if send_event.cancelled {
             return;
         }
+        send_event.suggestions.truncate(Self::MAX_SUGGESTIONS);
 
         let response = CCommandSuggestions::new(
             packet.id,

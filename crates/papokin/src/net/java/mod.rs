@@ -155,6 +155,17 @@ struct OutgoingPacket {
 
 const MAX_FRAME_BATCH_DATA_SIZE: usize = MAX_PACKET_SIZE as usize;
 
+/// 入站包队列高水位。消费速率受 TPS 限制（每玩家每刻 64 包），队列
+/// 本身无界；TPS 下跌或恶意灌包时会无限积压（最坏 2 MiB/包）直至
+/// OOM。256 已远超正常客户端流量（移动/动画等 <100 包/秒）的合理
+/// 突发，超过即视为异常并断开。
+const MAX_INBOUND_PACKET_QUEUE: usize = 256;
+
+/// 入站队列字节高水位：解压后单包可达 `MAX_PACKET_DATA_SIZE`
+/// （8 MiB），仅按包数限制时最坏可积压 256 × 8 MiB = 2 GiB/连接。
+/// 正常游戏队列字节几乎恒小于 1 MiB，32 MiB 已是极端冗余。
+const MAX_INBOUND_QUEUE_BYTES: usize = 32 * 1024 * 1024;
+
 fn take_frame_batch(packets: &mut VecDeque<OutgoingPacket>) -> Vec<OutgoingPacket> {
     let mut batch = Vec::new();
     let mut data_len = 0usize;
@@ -283,6 +294,7 @@ impl JavaClient {
         self.player.store(Arc::new(Some(player)));
     }
 
+    #[expect(clippy::too_many_lines)]
     pub async fn progress_player_packets(&self, player: &Arc<Player>, server: &Arc<Server>) {
         let Some(mut network_reader) = self
             .network_reader
@@ -376,6 +388,47 @@ impl JavaClient {
                         break;
                     }
 
+                    let queued_bytes = player
+                        .inbound_bytes
+                        .fetch_add(packet.payload.len(), Ordering::Relaxed)
+                        + packet.payload.len();
+                    if queued_bytes > MAX_INBOUND_QUEUE_BYTES {
+                        warn!(
+                            "客户端 {}（{}）的入站包队列积压超过 {} 字节，已断开",
+                            self.id,
+                            self.gameprofile.name,
+                            MAX_INBOUND_QUEUE_BYTES
+                        );
+                        self.kick(TextComponent::text(
+                            server
+                                .advanced_config
+                                .networking
+                                .java
+                                .packet_limiter
+                                .kick_message
+                                .clone(),
+                        ))
+                        .await;
+                        break;
+                    }
+                    if player.inbound_packets.len() >= MAX_INBOUND_PACKET_QUEUE {
+                        warn!(
+                            "客户端 {}（{}）的入站包队列积压超过 {MAX_INBOUND_PACKET_QUEUE}，已断开",
+                            self.id,
+                            self.gameprofile.name
+                        );
+                        self.kick(TextComponent::text(
+                            server
+                                .advanced_config
+                                .networking
+                                .java
+                                .packet_limiter
+                                .kick_message
+                                .clone(),
+                        ))
+                        .await;
+                        break;
+                    }
                     player.inbound_packets.push(packet);
                 }
             }
@@ -1473,7 +1526,17 @@ impl JavaClient {
                 self.handle_configuration_acknowledged(player);
             }
             _ => {
-                warn!("无法处理 id 为 {} 的玩家数据包", event.packet_id);
+                // 分发器已覆盖当前协议版本客户端会发送的全部包，未知 id
+                // 必为伪造包（原版同样断开）。静默忽略会被改过的客户端
+                // 用来每秒产生数百条 warn 日志（日志洪水攻击）。
+                warn!(
+                    "玩家 {} 发送了未知 id 为 {} 的玩家数据包，已断开",
+                    player.gameprofile.name, event.packet_id
+                );
+                self.try_kick(&TextComponent::translate(
+                    translation::java::MULTIPLAYER_DISCONNECT_INVALID_PACKET,
+                    [],
+                ));
             }
         }
         Ok(())

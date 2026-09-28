@@ -5,7 +5,9 @@ use core::f32;
 use std::collections::{HashMap, VecDeque};
 use std::f64::consts::TAU;
 use std::num::NonZero;
-use std::sync::atomic::{AtomicBool, AtomicI8, AtomicI32, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{
+    AtomicBool, AtomicI8, AtomicI32, AtomicU8, AtomicU32, AtomicUsize, Ordering,
+};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -399,7 +401,13 @@ pub struct Player {
     pub score: AtomicI32,
     pub spawn_extra_particles_on_fall: AtomicBool,
     /// 玩家刻期间等待处理的入站数据包。
+    /// 等待处理的入站数据包队列。生产端是连接任务，消费端是
+    /// `process_inbound_packets`（每刻至多 64 个）。
     pub inbound_packets: SegQueue<RawPacket>,
+    /// `inbound_packets` 中未消费的累计字节数（解压后）。包数水位
+    /// （256）单独不足以约束内存：解压后单包可达 8 MiB，字节水位
+    /// 才是真正的内存上界。
+    pub inbound_bytes: AtomicUsize,
 }
 
 impl Player {
@@ -642,6 +650,7 @@ impl Player {
             score: AtomicI32::new(0),
             spawn_extra_particles_on_fall: AtomicBool::new(false),
             inbound_packets: SegQueue::new(),
+            inbound_bytes: AtomicUsize::new(0),
         }
     }
 
@@ -2375,6 +2384,8 @@ impl Player {
         let mut count = 0;
 
         while let Some(packet) = self.inbound_packets.pop() {
+            self.inbound_bytes
+                .fetch_sub(packet.payload.len(), Ordering::Relaxed);
             if self.client.is_closed() {
                 break;
             }
