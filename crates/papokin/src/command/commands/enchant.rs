@@ -1,11 +1,5 @@
 use std::sync::Arc;
 
-use papokin_data::data_component_impl::EnchantmentsImpl;
-use papokin_data::{Enchantment, translation};
-use papokin_util::PermissionLvl;
-use papokin_util::permission::{Permission, PermissionDefault, PermissionRegistry};
-use papokin_util::text::TextComponent;
-
 use crate::command::argument_builder::{ArgumentBuilder, argument, command};
 use crate::command::argument_types::core::integer::IntegerArgumentType;
 use crate::command::argument_types::entity::EntityArgumentType;
@@ -15,6 +9,11 @@ use crate::command::errors::error_types::CommandErrorType;
 use crate::command::node::dispatcher::CommandDispatcher;
 use crate::command::node::{CommandExecutor, CommandExecutorResult};
 use crate::entity::EntityBase;
+use papokin_data::data_component_impl::EnchantmentsImpl;
+use papokin_data::{Enchantment, translation};
+use papokin_util::permission::{Permission, PermissionDefault, PermissionRegistry};
+use papokin_util::text::TextComponent;
+use papokin_util::{Hand, PermissionLvl};
 
 const DESCRIPTION: &str = "为玩家选中的物品添加附魔，受与铁砧相同的限制。对主手持有武器/工具/盔甲的任何生物或实体同样有效。";
 const PERMISSION: &str = "minecraft:command.enchant";
@@ -40,7 +39,7 @@ fn enchant_target(
         return Err(ERROR_FAILED.create_without_context());
     };
 
-    let mut item = player.inventory().held_item();
+    let item = player.inventory().held_item();
 
     if item.is_empty() {
         return Err(ERROR_FAILED_ITEMLESS.create_without_context(target.get_display_name()));
@@ -56,11 +55,23 @@ fn enchant_target(
         return Err(ERROR_FAILED_INCOMPATIBLE.create_without_context(item.item.translated_name()));
     }
 
-    item.enchant(enchantment, level);
+    // 命令线程与玩家自身的包处理并发运行：附魔修改在写锁内
+    // 原子完成，防止读取-附魔-整体写回覆盖期间并入的物品
     let inventory = player.inventory();
-    inventory.set_held_item(item.clone());
+    let enchanted = inventory.update_held(Hand::Right, |mut s| {
+        let matched = !s.is_empty() && s.are_items_and_components_equal(&item);
+        if matched {
+            s.enchant(enchantment, level);
+        }
+        (s, matched)
+    });
 
-    player.sync_hand_slot(inventory.get_selected_slot() as usize, item);
+    if enchanted {
+        player.sync_hand_slot(
+            inventory.get_selected_slot() as usize,
+            inventory.held_item(),
+        );
+    }
 
     Ok(())
 }
