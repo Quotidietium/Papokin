@@ -34,7 +34,7 @@ use papokin_util::text::{
     color::{Color, NamedColor},
 };
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -200,6 +200,20 @@ fn handle_interrupt() {
 }
 
 fn handle_panic(panic_info: &PanicHookInfo<'_>) {
+    // 刻内 panic 隔离区（实体/玩家 tick 的 catch_unwind 作用域）：
+    // 该 panic 会被刻循环捕获（实体被移除、玩家被断开），不触发
+    // 全服关停，也不消耗首次崩溃报告槽位。
+    if papokin::world::in_tick_isolation() {
+        let payload = panic_info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<unknown>");
+        error!("刻内隔离区捕获 panic（实体/玩家将被移除或断开）：{message}");
+        return;
+    }
+
     // 生成崩溃报告。
     let crash_report = {
         // 我们在这里捕获回溯信息，而不是在

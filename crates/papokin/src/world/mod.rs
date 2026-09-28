@@ -1273,7 +1273,6 @@ impl World {
     #[expect(clippy::too_many_lines)]
     pub fn tick(self: &Arc<Self>, server: &Arc<Server>) {
         const ENTITY_TICK_BATCH_SIZE: usize = 16;
-
         let start = std::time::Instant::now();
 
         self.flush_block_updates();
@@ -1326,7 +1325,22 @@ impl World {
         let player_handle = handle.clone();
         players.par_iter().for_each(|player| {
             let _guard = player_handle.enter();
-            player.tick(server);
+            // 玩家 tick（含入站包处理与插件事件）panic 隔离：坏包或
+            // 插件缺陷只断开该玩家，不再沿 rayon 传播触发全服关停
+            let _isolation = TickIsolationGuard::new();
+            let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                player.tick(server);
+            }));
+            if tick_result.is_err() {
+                tracing::error!(
+                    "玩家 {}（{}）的 tick 发生 panic，已断开该连接以保护服务器",
+                    player.gameprofile.name,
+                    player.gameprofile.id
+                );
+                player
+                    .client
+                    .try_kick(&TextComponent::text("处理时发生内部错误"));
+            }
         });
         let player_elapsed = t_players.elapsed();
 
@@ -1365,24 +1379,38 @@ impl World {
                 let _guard = entity_handle.enter();
 
                 for (entity, entity_chunk) in batch {
-                    entity.get_entity().age.fetch_add(1, Relaxed);
-                    entity.tick(entity.as_ref(), server_ref);
+                    // 实体 tick（含插件事件）panic 隔离：坏实体只被
+                    // 移除，不再沿 rayon 传播触发全服关停
+                    let _isolation = TickIsolationGuard::new();
+                    let tick_result =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            entity.get_entity().age.fetch_add(1, Relaxed);
+                            entity.tick(entity.as_ref(), server_ref);
 
-                    let entity_inner = entity.get_entity();
-                    let entity_pos = entity_inner.pos.load();
-                    let entity_bb = entity_inner.bounding_box.load();
+                            let entity_inner = entity.get_entity();
+                            let entity_pos = entity_inner.pos.load();
+                            let entity_bb = entity_inner.bounding_box.load();
 
-                    for (player, player_pos, player_bb, player_chunk) in &players_cache {
-                        if (player_chunk.x - entity_chunk.x).abs() <= 1
-                            && (player_chunk.y - entity_chunk.y).abs() <= 1
-                            && (player_pos.x - entity_pos.x).abs() < 5.0
-                            && (player_pos.y - entity_pos.y).abs() < 5.0
-                            && (player_pos.z - entity_pos.z).abs() < 5.0
-                            && player_bb.intersects(&entity_bb)
-                        {
-                            entity.on_player_collision(player);
-                            break;
-                        }
+                            for (player, player_pos, player_bb, player_chunk) in &players_cache {
+                                if (player_chunk.x - entity_chunk.x).abs() <= 1
+                                    && (player_chunk.y - entity_chunk.y).abs() <= 1
+                                    && (player_pos.x - entity_pos.x).abs() < 5.0
+                                    && (player_pos.y - entity_pos.y).abs() < 5.0
+                                    && (player_pos.z - entity_pos.z).abs() < 5.0
+                                    && player_bb.intersects(&entity_bb)
+                                {
+                                    entity.on_player_collision(player);
+                                    break;
+                                }
+                            }
+                        }));
+                    if tick_result.is_err() {
+                        tracing::error!(
+                            "实体 {}（类型 {}）的 tick 发生 panic，已移除该实体以保护服务器",
+                            entity.get_entity().entity_id,
+                            entity.get_entity().entity_type.resource_name
+                        );
+                        entity.get_entity().remove();
                     }
                 }
             });
@@ -6651,5 +6679,40 @@ mod tests {
             GameRuleValue::Int(v) => assert_eq!(*v, 20),
             GameRuleValue::Bool(_) => panic!("应为 int"),
         }
+    }
+}
+
+// 刻内 panic 隔离区标志（实体 tick / 玩家 tick 的 catch_unwind
+// 作用域内为 true），见下方 `in_tick_isolation` 的说明。
+thread_local! {
+    // 本机 clippy 对 const 块内全限定路径的误报，语义上已是 const 初始化
+    #[expect(clippy::missing_const_for_thread_local)]
+    static IN_TICK_ISOLATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 当前线程是否处于刻内 panic 隔离区。
+///
+/// 全局 panic hook（main.rs）对工作线程的首次 panic 会直接
+/// `stop_server()`——暴露在网络输入面前的单个坏实体/坏包就能让
+/// 全服停机。隔离区内的 panic 交由刻循环的 `catch_unwind` 捕获
+/// （实体被移除、玩家被断开），hook 据此跳过关停且不消耗首次
+/// 崩溃报告槽位。
+pub fn in_tick_isolation() -> bool {
+    IN_TICK_ISOLATION.with(std::cell::Cell::get)
+}
+
+/// 进入刻内 panic 隔离区的 RAII 守卫。
+pub(crate) struct TickIsolationGuard;
+
+impl TickIsolationGuard {
+    pub(crate) fn new() -> Self {
+        IN_TICK_ISOLATION.with(|flag| flag.set(true));
+        Self
+    }
+}
+
+impl Drop for TickIsolationGuard {
+    fn drop(&mut self) {
+        IN_TICK_ISOLATION.with(|flag| flag.set(false));
     }
 }
