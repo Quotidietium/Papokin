@@ -67,9 +67,17 @@ impl AdvancementManager {
             return Err(AdvancementDataError::Io(e));
         }
         for (path, json) in to_write {
-            tokio::fs::write(&path, json)
-                .await
-                .map_err(AdvancementDataError::Io)?;
+            // 临时文件 + 原子改名：直接覆盖写在崩溃/断电时会留下
+            // 半截 JSON，下次加载整份进度报废
+            let tmp_path = path.with_extension("json.tmp");
+            if let Err(e) = tokio::fs::write(&tmp_path, json).await {
+                error!("写入玩家进度临时文件失败：{e}");
+                return Err(AdvancementDataError::Io(e));
+            }
+            if let Err(e) = tokio::fs::rename(&tmp_path, &path).await {
+                error!("替换玩家进度文件失败：{e}");
+                return Err(AdvancementDataError::Io(e));
+            }
         }
         Ok(())
     }
