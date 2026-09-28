@@ -370,7 +370,9 @@ impl ScreenHandler for EnchantingTableScreenHandler {
         }
 
         if !player.is_creative() {
-            player.add_experience_levels(-(id + 1));
+            // 原版扣费为所选档位的等级需求（30 级附魔扣 30 级），
+            // 此前只扣按钮序号+1（1/2/3 级），30 级附魔近乎免费
+            player.add_experience_levels(-level_req);
             lapis_stack.decrement(lapis_cost);
             self.inventory.set_stack(1, lapis_stack);
         }
