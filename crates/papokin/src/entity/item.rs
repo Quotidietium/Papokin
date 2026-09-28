@@ -691,12 +691,24 @@ impl EntityBase for ItemEntity {
         item.write_item_stack(&mut item_compound);
         nbt.put_compound("Item", item_compound);
 
-        nbt.put_short("Age", self.item_age.load(Ordering::Relaxed) as i16);
+        // Age 饱和而非截断：插件取消消失事件可使年龄无上限增长，
+        // `as i16` 回绕（65536→0 = 寿命重置、32768→负值）会破坏
+        // 消失判定。32767 刻 ≈ 27 分钟，远超正常消失阈值。
+        nbt.put_short(
+            "Age",
+            self.item_age.load(Ordering::Relaxed).min(i16::MAX as u32) as i16,
+        );
         nbt.put_short(
             "PickupDelay",
             self.pickup_delay.load(Ordering::Relaxed) as i16,
         );
         nbt.put_short("Health", self.health.load(Relaxed) as i16);
+        // 永存标志此前不持久化：重启后插件设为永存的物品会在
+        // 5 分钟后照常消失。
+        nbt.put_bool(
+            "PumpkinNeverDespawn",
+            self.never_despawn.load(Ordering::Relaxed),
+        );
     }
 
     fn read_custom_nbt(&self, nbt: &NbtCompound) {
@@ -710,9 +722,16 @@ impl EntityBase for ItemEntity {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = stack;
         }
 
-        // 原版将 Age 存储为 short
-        self.item_age
-            .store(nbt.get_short("Age").unwrap_or(0) as u32, Ordering::Relaxed);
+        // 原版将 Age 存储为 short；负值（损坏存档）按 0 处理，
+        // 不得符号扩展成巨额 u32
+        self.item_age.store(
+            nbt.get_short("Age").unwrap_or(0).max(0) as u32,
+            Ordering::Relaxed,
+        );
+
+        if let Some(never_despawn) = nbt.get_bool("PumpkinNeverDespawn") {
+            self.never_despawn.store(never_despawn, Ordering::Relaxed);
+        }
 
         // 原版将 PickupDelay 存储为 short
         if let Some(delay) = nbt.get_short("PickupDelay") {
