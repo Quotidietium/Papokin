@@ -336,15 +336,83 @@ pub enum EncryptionError {
 }
 
 fn is_valid_player_name(name: &str) -> bool {
-    if name.len() > 16 {
+    if name.is_empty() || name.len() > 16 {
         return false;
     }
-    !name.chars().any(|c| c.is_control() || c == ' ')
+    !name
+        .chars()
+        .any(|c| c.is_control() || c == ' ' || is_text_injection_char(c))
+}
+
+/// 判定用户名中的文本注入字符：Minecraft 格式代码 `§`，以及零宽
+/// 与双向控制字符（U+200B-200F、U+2028-202E、U+2060-206F、软连字符）。
+/// 前者可向聊天/tab 列表注入彩色与加粗，后者可制造视觉同名玩家。
+/// 其余 Unicode（含中文）是本项目既定允许的用户名字符集。
+const fn is_text_injection_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00A7            // § 格式代码
+        | 0x00AD          // 软连字符
+        | 0x200B..=0x200F // 零宽空格 + LRM/RLM
+        | 0x2028..=0x202E // 行/段分隔 + 双向覆盖/嵌入
+        | 0x2060..=0x206F // 词连接符 + 双向隔离符
+    )
+}
+
+/// 事件/日志用的握手地址清洗。
+///
+/// 握手包的 `server_address` 是完全不可信的原始串（最长 32767
+/// 字符）：BungeeCord 转发把 `host\0ip\0uuid` 负载塞在这里，普通
+/// 客户端可塞任意控制字符与注入字符。BungeeCord 解析路径必须用
+/// 原始串，本函数只用于把它交给插件事件（`PlayerHandshakeEvent`、
+/// `ServerListPingEvent`）与日志之前：剔除控制字符与文本注入字符，
+/// 并截断到 255 字符，防止日志洪泛与事件消费方被塞入超长垃圾。
+pub(crate) fn sanitize_handshake_address(raw: &str) -> String {
+    const MAX_EVENT_ADDRESS_CHARS: usize = 255;
+    let mut cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !is_text_injection_char(*c))
+        .take(MAX_EVENT_ADDRESS_CHARS)
+        .collect();
+    let raw_len = raw.chars().count();
+    if raw_len > MAX_EVENT_ADDRESS_CHARS {
+        cleaned.push('…');
+    }
+    cleaned
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::net::is_valid_player_name;
+    use crate::net::{is_valid_player_name, sanitize_handshake_address};
+
+    /// 测试用例：握手地址清洗应剔除 `BungeeCord` 负载与控制字符。
+    #[test]
+    fn sanitize_strips_bungeecord_payload_and_controls() {
+        let raw = "localhost\u{0}127.0.0.1\u{0}some-uuid\u{0}extra";
+        let cleaned = sanitize_handshake_address(raw);
+        assert_eq!(cleaned, "localhost127.0.0.1some-uuidextra");
+    }
+
+    /// 测试用例：清洗应剔除文本注入字符（§ 与零宽/双向控制符）。
+    #[test]
+    fn sanitize_strips_injection_chars() {
+        let raw = "host\u{00A7}name\u{200B}\u{202E}end";
+        assert_eq!(sanitize_handshake_address(raw), "hostnameend");
+    }
+
+    /// 测试用例：超长原始串截断到 255 字符并追加省略号。
+    #[test]
+    fn sanitize_truncates_overlong_input() {
+        let raw = "a".repeat(40_000);
+        let cleaned = sanitize_handshake_address(&raw);
+        assert_eq!(cleaned.chars().count(), 256); // 255 + 省略号
+        assert!(cleaned.ends_with('…'));
+    }
+
+    /// 测试用例：正常短地址原样保留。
+    #[test]
+    fn sanitize_keeps_normal_address() {
+        assert_eq!(sanitize_handshake_address("example.com"), "example.com");
+    }
 
     /// 测试用例：最大长度的标准合法英文名称。
     #[test]
@@ -426,14 +494,43 @@ mod tests {
         );
     }
 
-    /// 测试用例：空字符串（长度 0，为完整性而包含）。
+    /// 测试用例：空字符串——离线模式下会生成空名的无名玩家，
+    /// 且原版客户端不可能发出，必须拒绝。
     #[test]
     fn invalid_empty_string() {
         let name = "";
         assert!(
-            is_valid_player_name(name),
-            "Empty string should be valid (length <= 16 and no invalid chars)"
+            !is_valid_player_name(name),
+            "Empty string should be invalid"
         );
+    }
+
+    /// 测试用例：包含 Minecraft 格式代码 `§` 的名称——可向聊天与
+    /// tab 列表注入彩色/加粗文本。
+    #[test]
+    fn invalid_contains_format_code() {
+        let name = "Play§rer";
+        assert!(
+            !is_valid_player_name(name),
+            "Name containing § format code should be invalid"
+        );
+    }
+
+    /// 测试用例：包含零宽/双向控制字符的名称——可制造视觉同名玩家
+    /// （例如在正常名称中插入 U+200B 或 RTL 覆盖符）。
+    #[test]
+    fn invalid_contains_zero_width_or_bidi() {
+        for name in [
+            "Play\u{200B}er",
+            "Play\u{202E}er",
+            "Play\u{2060}er",
+            "Play\u{00AD}er",
+        ] {
+            assert!(
+                !is_valid_player_name(name),
+                "Name containing zero-width/bidi control char should be invalid: {name:?}"
+            );
+        }
     }
 
     /// 测试用例：包含控制字符的名称（例如 Null，码位 0）。

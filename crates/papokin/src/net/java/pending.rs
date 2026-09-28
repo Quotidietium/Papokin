@@ -293,7 +293,7 @@ impl PendingConnection {
                 let mut handshake_event =
                     crate::plugin::api::events::player::player_handshake::PlayerHandshakeEvent::new(
                         self.address.ip().to_string(),
-                        handshake.server_address.to_string(),
+                        crate::net::sanitize_handshake_address(&handshake.server_address),
                         handshake.protocol_version.0,
                         intention,
                     );

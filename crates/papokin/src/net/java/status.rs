@@ -29,7 +29,7 @@ impl PendingConnection {
             .map_or((0, 0), |players| (players.max, players.online));
 
         let mut event = ServerListPingEvent::new(
-            self.server_address.clone(),
+            crate::net::sanitize_handshake_address(&self.server_address),
             self.address,
             status_response.description.clone(),
             max_players,
