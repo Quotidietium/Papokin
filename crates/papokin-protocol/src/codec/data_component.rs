@@ -423,10 +423,11 @@ impl DataComponentCodec<Self> for MaxStackSizeImpl {
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
         let size = u8::try_from(seq.get_var_int()?.0)
             .map_err(|_| ReadingError::Message("No MaxStackSize VarInt!".into()))?;
-        // 原版取值范围是 1..=99；伪造的 0 会在收纳袋重量计算等处触发除零 panic
-        if size == 0 {
+        // 原版取值范围是 1..=99；伪造的 0 会在收纳袋重量计算等处触发
+        // 除零 panic，伪造的 >99 会绕过创造物品注入的超量堆叠校验
+        if size == 0 || size > 99 {
             return Err(ReadingError::Message(
-                "MaxStackSize must be at least 1".into(),
+                "MaxStackSize must be within 1..=99".into(),
             ));
         }
         Ok(Self { size })
@@ -674,9 +675,19 @@ impl DataComponentCodec<Self> for CustomDataImpl {
     }
 
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
+        // NBT 深度（≤512）与单数组长度（≤512k）限制不能约束"海量
+        // 小键"撑出的巨大总体积——内联路径下 custom_data 最坏可占
+        // 满整个 8 MiB 包并随物品逐字持久化进存档（单箱 27 槽即可
+        // ~200 MB 且不可逆）。64 KiB 对正常数据包/插件数据绰绰有余。
+        const MAX_CUSTOM_DATA_BYTES: usize = 64 * 1024;
         let data = seq
             .get_compound_nbt_with_version(&papokin_util::version::JavaMinecraftVersion::V_26_2)?
             .unwrap_or_else(papokin_nbt::compound::NbtCompound::new);
+        if data.estimated_serialized_size() > MAX_CUSTOM_DATA_BYTES {
+            return Err(ReadingError::TooLarge(
+                "custom_data component exceeds 64 KiB".into(),
+            ));
+        }
         Ok(Self { data })
     }
 }
@@ -2502,6 +2513,10 @@ impl DataComponentCodec<Self> for WritableBookContentImpl {
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
         // 原版上限 100 页；同时封堵伪造页数触发的巨量预分配
         const MAX_BOOK_PAGES: i32 = 100;
+        // 与 SEditBook（1.21.2+）相同的每页字符上限：get_str 的 32767
+        // 会让改过的客户端经创造物品注入巨型书页并持久化进存档
+        // （单书可达 ~8 MiB）。
+        const MAX_PAGE_CHARS: usize = 1024;
 
         let len = seq.get_var_int()?.0;
         if !(0..=MAX_BOOK_PAGES).contains(&len) {
@@ -2511,10 +2526,10 @@ impl DataComponentCodec<Self> for WritableBookContentImpl {
         }
         let mut pages = Vec::with_capacity(len as usize);
         for _ in 0..len {
-            let raw = seq.get_str()?.to_string();
+            let raw = seq.get_str_bounded(MAX_PAGE_CHARS)?.to_string();
             let has_filtered = seq.get_bool()?;
             if has_filtered {
-                let _ = seq.get_str()?;
+                let _ = seq.get_str_bounded(MAX_PAGE_CHARS)?;
             }
             pages.push(raw);
         }
@@ -2540,12 +2555,17 @@ impl DataComponentCodec<Self> for WrittenBookContentImpl {
     fn deserialize(seq: &mut impl NetworkReadExt) -> Result<Self, ReadingError> {
         // 原版上限 100 页；同时封堵伪造页数触发的巨量预分配
         const MAX_BOOK_PAGES: i32 = 100;
+        // 与 SEditBook 对齐的字符上限（成书 1.21.2 前为 128/8192，
+        // 组件层无版本参数，取宽松值仍远小于 get_str 的 32767）：
+        // 否则改过的客户端可经创造物品注入巨型书并持久化进存档。
+        const MAX_TITLE_CHARS: usize = 128;
+        const MAX_PAGE_CHARS: usize = 8192;
 
-        let title = seq.get_str()?.to_string();
+        let title = seq.get_str_bounded(MAX_TITLE_CHARS)?.to_string();
         if seq.get_bool()? {
-            let _ = seq.get_str()?;
+            let _ = seq.get_str_bounded(MAX_TITLE_CHARS)?;
         }
-        let author = seq.get_str()?.to_string();
+        let author = seq.get_str_bounded(MAX_TITLE_CHARS)?.to_string();
         let _generation = seq.get_var_int()?.0;
         let pages_len = seq.get_var_int()?.0;
         if !(0..=MAX_BOOK_PAGES).contains(&pages_len) {
@@ -2563,7 +2583,13 @@ impl DataComponentCodec<Self> for WrittenBookContentImpl {
             if seq.get_bool()? {
                 let _ = seq.get_nbt_with_version(&JavaMinecraftVersion::V_26_2)?;
             }
-            pages.push(comp.get_text());
+            let page_text = comp.get_text();
+            if page_text.chars().count() > MAX_PAGE_CHARS {
+                return Err(ReadingError::Message(
+                    "Written book page text too long".into(),
+                ));
+            }
+            pages.push(page_text);
         }
         let _resolved = seq.get_bool()?;
         Ok(Self {
