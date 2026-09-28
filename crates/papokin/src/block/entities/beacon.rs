@@ -208,7 +208,8 @@ impl BeaconBlockEntity {
             }
 
             if let Some(effect) = primary_effect {
-                if let Some(server) = &server {
+                // 取消即不给该玩家施加主效果（此前取消被无视）
+                let cancelled = server.as_ref().is_some_and(|server| {
                     let mut event = BeaconEffectEvent::new(
                         player.clone(),
                         effect.minecraft_name.to_string(),
@@ -216,23 +217,26 @@ impl BeaconBlockEntity {
                         self.position,
                     );
                     server.plugin_manager.fire_blocking(server, &mut event);
-                }
-                player.add_effect(papokin_data::potion::Effect {
-                    effect_type: effect,
-                    duration: duration_ticks,
-                    amplifier: base_amp as u8,
-                    ambient: true,
-                    show_particles: true,
-                    show_icon: true,
-                    blend: false,
+                    event.cancelled
                 });
+                if !cancelled {
+                    player.add_effect(papokin_data::potion::Effect {
+                        effect_type: effect,
+                        duration: duration_ticks,
+                        amplifier: base_amp as u8,
+                        ambient: true,
+                        show_particles: true,
+                        show_icon: true,
+                        blend: false,
+                    });
+                }
             }
 
             if levels >= 4
                 && primary_id != secondary_id
                 && let Some(effect) = secondary_effect
             {
-                if let Some(server) = &server {
+                let cancelled = server.as_ref().is_some_and(|server| {
                     let mut event = BeaconEffectEvent::new(
                         player.clone(),
                         effect.minecraft_name.to_string(),
@@ -240,16 +244,19 @@ impl BeaconBlockEntity {
                         self.position,
                     );
                     server.plugin_manager.fire_blocking(server, &mut event);
-                }
-                player.add_effect(papokin_data::potion::Effect {
-                    effect_type: effect,
-                    duration: duration_ticks,
-                    amplifier: 0,
-                    ambient: true,
-                    show_particles: true,
-                    show_icon: true,
-                    blend: false,
+                    event.cancelled
                 });
+                if !cancelled {
+                    player.add_effect(papokin_data::potion::Effect {
+                        effect_type: effect,
+                        duration: duration_ticks,
+                        amplifier: 0,
+                        ambient: true,
+                        show_particles: true,
+                        show_icon: true,
+                        blend: false,
+                    });
+                }
             }
         }
     }
@@ -380,15 +387,20 @@ impl BlockEntity for BeaconBlockEntity {
         if world.get_time_of_day() % 80 == 0 {
             let previous_levels = self.levels.load(Ordering::Relaxed);
             let levels = self.update_base(world);
-            self.levels.store(levels, Ordering::Relaxed);
 
-            // 在信标等级变化时通知插件信标（取消）激活
+            // 在信标等级变化时通知插件信标（取消）激活/停用：
+            // 此前等级先落库、事件后发且不读标志——取消激活后信标
+            // 照常发光。现在取消激活=保持 0 级，取消停用=维持原级。
+            let mut effective_levels = levels;
             if previous_levels == 0 && levels > 0 {
                 if let Some(server) = world.server.upgrade()
                     && let Some(player) = self.nearest_player_in_range(world, levels)
                 {
                     let mut event = BeaconActivatedEvent::new(player, self.position);
                     server.plugin_manager.fire_blocking(&server, &mut event);
+                    if event.cancelled {
+                        effective_levels = 0;
+                    }
                 }
             } else if previous_levels > 0
                 && levels == 0
@@ -397,10 +409,14 @@ impl BlockEntity for BeaconBlockEntity {
                 let player = self.nearest_player_in_range(world, previous_levels);
                 let mut event = BeaconDeactivatedEvent::new(player, self.position);
                 server.plugin_manager.fire_blocking(&server, &mut event);
+                if event.cancelled {
+                    effective_levels = previous_levels;
+                }
             }
+            self.levels.store(effective_levels, Ordering::Relaxed);
 
-            if levels > 0 {
-                self.apply_effects(world, levels);
+            if effective_levels > 0 {
+                self.apply_effects(world, effective_levels);
             }
         }
     }
