@@ -143,26 +143,10 @@ impl ChunkSender {
         if self.sent_chunks.remove(&pos) && !client.is_closed() {
             client.try_send_packet(&CUnloadChunk::new(pos.x, pos.y));
         }
-
-        // 区块卸载钩子：在区块离开……后触发的纯通知
-        // 跟踪集合。在做任何工作之前，先以真实监听器为门控。
-        if let (Some(world_weak), Some(player_uuid)) = (&self.owner_world, self.owner_uuid)
-            && let Some(world) = world_weak.upgrade()
-            && let Some(server) = world.server.upgrade()
-            && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent>()
-            && let Some(player) = world.get_player_by_uuid(player_uuid)
-        {
-            let mut unload_event =
-                crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent::new(
-                    player,
-                    world,
-                    pos.x,
-                    pos.y,
-                );
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut unload_event);
-        }
+        // 区块卸载钩子（PlayerChunkUnloadEvent）不在这里触发：
+        // 调用方（chunker）持有本 ChunkSender 的 Mutex，锁内
+        // fire_blocking 会与触碰同一锁的插件回调互锁。事件改由
+        // 调用方在释放锁后统一派发。
     }
 
     fn collect_sorted_candidates(

@@ -134,6 +134,28 @@ pub fn update_position(player: &Arc<Player>) {
             sender.enqueue_chunk(*pos);
         }
     }
+
+    // 区块卸载钩子：在区块离开玩家注视段、卸载包已入队后触发的
+    // 纯通知。必须在 chunk_sender 锁外触发：锁内 fire_blocking 时，
+    // 插件回调若再触碰同一玩家的 chunk_sender（传送、注视更新等）
+    // 会与等待插件返回的本线程互锁。以真实监听器为门控。
+    if let Some(server) = world.server.upgrade()
+        && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent>()
+    {
+        for pos in &unloading_chunks {
+            let mut unload_event =
+                crate::plugin::api::events::player::player_chunk_unload::PlayerChunkUnloadEvent::new(
+                    player.clone(),
+                    world.clone(),
+                    pos.x,
+                    pos.y,
+                );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut unload_event);
+        }
+    }
+
     player.watched_section.store(new_cylindrical);
 
     // 差集应用经玩家任务链按发起顺序串行执行：乱序会让仍在注视的
