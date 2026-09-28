@@ -4296,7 +4296,14 @@ impl Entity {
             "Rotation",
             NbtTag::List(vec![self.yaw.load().into(), self.pitch.load().into()]),
         );
-        nbt.put_short("Fire", self.fire_ticks.load(Relaxed) as i16);
+        // fire_ticks 为 i32，NBT 字段是 i16：越界时 as 截断会把
+        // 正值变负，先钳制（原版上限远小于 i16::MAX）。
+        nbt.put_short(
+            "Fire",
+            self.fire_ticks
+                .load(Relaxed)
+                .clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        );
         nbt.put_bool("OnGround", self.on_ground.load(Relaxed));
         nbt.put_bool("Invulnerable", self.invulnerable.load(Relaxed));
         nbt.put_int("PortalCooldown", self.portal_cooldown.load(Relaxed) as i32);

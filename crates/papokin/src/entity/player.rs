@@ -6927,15 +6927,26 @@ impl EntityBase for Player {
         self.living_entity
             .apply_current_equipment_attribute_modifiers();
 
-        let xp_p = nbt.get_float("XpP").unwrap_or(0.0);
+        // 经验进度合法域 [0,1]、等级非负：畸形存档（NaN/负数/超大值）
+        // 会污染升级算术与发包编码，读入时钳制。
+        let xp_p = {
+            let raw = nbt.get_float("XpP").unwrap_or(0.0);
+            if raw.is_finite() {
+                raw.clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        };
         let xp_level = nbt.get_int("XpLevel");
-        let total_exp = nbt.get_int("XpTotal").unwrap_or(0);
+        let total_exp = nbt.get_int("XpTotal").unwrap_or(0).max(0);
 
         if let Some(level) = xp_level {
+            let level = level.max(0);
             self.experience_level.store(level, Ordering::Relaxed);
             self.experience_progress.store(xp_p);
             let points = (xp_p * experience::points_in_level(level) as f32).round() as i32;
-            self.experience_points.store(points, Ordering::Relaxed);
+            self.experience_points
+                .store(points.max(0), Ordering::Relaxed);
         } else {
             let (level, points) = experience::total_to_level_and_points(total_exp);
             let progress = experience::progress_in_level(level, points);
