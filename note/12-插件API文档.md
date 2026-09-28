@@ -358,6 +358,8 @@ context.register_permission(Permission {
 ```
 
 > **命名空间强制**：节点**必须**以 `插件名:` 开头（如插件叫 `my-plugin`，节点必须是 `my-plugin:xxx`），否则 `register_permission` 在 enable 阶段报错 `Permission <node> must use the plugin's namespace (<name>)` 并导致插件 enable 失败（宿主校验见 `plugin/api/context.rs`）。`register_command` 的权限参数同理。
+>
+> **运行时附件写入同规则（2026-09-28 起）**：Player 资源的 `set-permission` / `unset-permission` 等权限附件写入同样受命名空间约束——裸名称（不含 `:`）自动补 `插件名:` 前缀；带其他命名空间前缀的节点（含 `minecraft:*` 内置节点）直接报错拒绝。这堵住了插件给自己之外的命名空间授予权限的提权路径。
 
 - 权限级别 0-4：`zero(普通) / one(moderator) / two(gamemaster) / three(admin) / four(owner)`。
 - 服务器管理员可用 **`permissions.toml`**（服务端根目录）覆盖声明：default 支持 `true/false/deny/allow/op/op:<0-4>`，并可按玩家 UUID 授予/拒绝。启动时加载。
