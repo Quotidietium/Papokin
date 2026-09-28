@@ -3,7 +3,7 @@ use papokin_protocol::java::client::play::{
 };
 use papokin_world::level::SyncChunk;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicUsize, Ordering};
 use std::time::Instant;
 use std::{collections::VecDeque, io::Write, sync::Arc};
 
@@ -122,10 +122,6 @@ pub struct JavaClient {
     /// 在 `SClientTickEnd`（≥1.21.4）时，如果仍为 `false`，玩家的已知
     /// 移动量会被清零（即原地未动）。与原版 `receivedMovementThisTick` 一致。
     pub received_movement_this_tick: AtomicBool,
-    /// 本刻已收到的移动数据包数量（与原版 `receivedMovePacketsCount`
-    /// 一致），用于按包序缩放 moved-too-quickly 阈值；在
-    /// `SClientTickEnd` 时重置为零。
-    pub movement_packets_this_tick: AtomicU32,
     /// 下一个要发送的保活数据包 id。起点随机且单调递增：以 Unix
     /// 毫秒为 id 可被本地时钟完全预测，挂机客户端无需读取任何
     /// 服务器下行包即可"预答"维持连接并污染 ping。
@@ -287,7 +283,6 @@ impl JavaClient {
             player: ArcSwap::from_pointee(None),
             wait_for_keep_alive: AtomicBool::new(false),
             received_movement_this_tick: AtomicBool::new(false),
-            movement_packets_this_tick: AtomicU32::new(0),
             next_keep_alive_id: AtomicI64::new(uuid::Uuid::new_v4().to_u128_le() as i64),
             keep_alive_id: AtomicCell::new(0),
             last_keep_alive_time: AtomicCell::new(Instant::now()),

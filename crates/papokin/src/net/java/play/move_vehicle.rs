@@ -63,21 +63,9 @@ impl JavaClient {
             Self::clamp_horizontal(packet.z),
         );
         let last_pos = entity.pos.load();
-        // 原版 moved too quickly（载具）：阈值随本刻移动包序缩放
-        //（与玩家移动包一致的按刻累积语义）
-        let packet_index = self
-            .movement_packets_this_tick
-            .fetch_add(1, Ordering::Relaxed);
-        let allowed_delta_squared = 100.0 * f64::from(packet_index.max(1));
-        if last_pos.squared_distance_to_vec(&pos) > allowed_delta_squared {
-            warn!(
-                "玩家 {} 的载具移动过快（单包 {} 格），已驳回并拉回",
-                player.gameprofile.name,
-                last_pos.squared_distance_to_vec(&pos).sqrt()
-            );
-            self.force_tp(player, last_pos);
-            return;
-        }
+        // moved-too-quickly 稽查已移除（反作弊属插件职责）；上方仍保留
+        // 协议正确性检查（载具存在、控制者、非有限坐标、传送等待、
+        // 移动锁、坐标 clamp）。
         vehicle_entity.set_pos(pos);
         vehicle_entity.set_rotation(packet.yaw, packet.pitch);
         entity.set_pos(pos);

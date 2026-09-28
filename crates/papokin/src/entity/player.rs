@@ -2370,13 +2370,6 @@ impl Player {
     pub fn process_inbound_packets(&self) {
         const MAX_PACKETS_PER_TICK: usize = 64;
 
-        // 每刻统一重置移动包计数（moved-too-quickly 阈值按本刻包序
-        // 缩放）。不依赖客户端的 tick-end 包：旧版本客户端不发它，
-        // 而伪造的 tick-end 包反而会被用来反复归零计数绕过限速。
-        self.client
-            .movement_packets_this_tick
-            .store(0, Ordering::Relaxed);
-
         // Player::tick 在世界的方块更新冲刷之后运行。确认上一刻的
         // 预测，让 Java 客户端在解析之前先收到权威的方块状态
         // 这些预测。从数据包循环发送 ACK 会让门和其他

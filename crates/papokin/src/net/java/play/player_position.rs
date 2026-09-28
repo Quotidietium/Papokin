@@ -87,31 +87,9 @@ impl JavaClient {
             Self::clamp_horizontal(position.z),
         );
 
-        // 原版 moved too quickly：阈值随本刻已收移动包数缩放
-        // （f × 包序，与 receivedMovePacketsCount 一致），计数在
-        // SClientTickEnd 重置；固定阈值会让改过的客户端以每包 10 格
-        // × 限速上限持续 ~5000 格/秒并高频触发区块 diff。
-        let previous_pos = player.get_entity().pos.load();
-        let flying = player
-            .abilities
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .flying;
-        let max_delta_squared = if flying { 300.0 } else { 100.0 };
-        let packet_index = self
-            .movement_packets_this_tick
-            .fetch_add(1, Ordering::Relaxed);
-        let allowed_delta_squared = max_delta_squared * f64::from(packet_index.max(1));
-        if previous_pos.squared_distance_to_vec(&position) > allowed_delta_squared {
-            warn!(
-                "玩家 {} 移动过快（单包 {} 格，本刻第 {} 个移动包），已驳回并拉回",
-                player.gameprofile.name,
-                previous_pos.squared_distance_to_vec(&position).sqrt(),
-                packet_index + 1
-            );
-            self.force_tp(player, previous_pos);
-            return;
-        }
+        // moved-too-quickly 稽查已移除（反作弊属插件职责，插件可经
+        // PlayerMoveEvent 取消实现拉回）；此处仅保留协议正确性检查：
+        // 非有限坐标断开、坐标 clamp、传送确认等待与移动锁。
 
         send_cancellable_blocking! {{
             server;
@@ -248,29 +226,7 @@ impl JavaClient {
             Self::clamp_horizontal(position.z),
         );
 
-        // 原版 moved too quickly：阈值与不带旋转的分支一致
-        let previous_pos = player.get_entity().pos.load();
-        let flying = player
-            .abilities
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .flying;
-        let max_delta_squared = if flying { 300.0 } else { 100.0 };
-        // 与 handle_position 相同：阈值随本刻移动包序缩放（原版语义）
-        let packet_index = self
-            .movement_packets_this_tick
-            .fetch_add(1, Ordering::Relaxed);
-        let allowed_delta_squared = max_delta_squared * f64::from(packet_index.max(1));
-        if previous_pos.squared_distance_to_vec(&position) > allowed_delta_squared {
-            warn!(
-                "玩家 {} 移动过快（单包 {} 格，本刻第 {} 个移动包），已驳回并拉回",
-                player.gameprofile.name,
-                previous_pos.squared_distance_to_vec(&position).sqrt(),
-                packet_index + 1
-            );
-            self.force_tp(player, previous_pos);
-            return;
-        }
+        // 与不带旋转分支一致：moved-too-quickly 稽查已移除（插件职责）。
 
         send_cancellable_blocking! {{
             server;
