@@ -143,6 +143,154 @@ impl PlayerInventory {
         }
     }
 
+    /// 手持槽位的"读快照-本地修改-条件写回"合并。
+    ///
+    /// `before` 是调用方读取时的槽位快照，`after` 是本地修改后的堆
+    /// （数量可能减少/组件可能变化）。写锁内检查槽位当前内容：
+    /// - 与 `before` 同物品同组件：把数量变化量
+    ///   （`after.count - before.count`，可为负）应用到**当前**数量上，
+    ///   并发并入的同类物品不会被陈旧快照覆盖；
+    /// - 已被换成另一种物品或被清空（`before` 非空时）：返回 `None`
+    ///   且不作修改，调用方应放弃写回（覆盖会凭空抹掉并发写入）。
+    pub fn merge_held_delta(
+        &self,
+        hand: Hand,
+        before: &ItemStack,
+        after: &ItemStack,
+    ) -> Option<ItemStack> {
+        let merge = |current: &ItemStack| -> Option<ItemStack> {
+            if current.is_empty() {
+                if before.is_empty() {
+                    // 读取时就是空：after 是新生成的内容（如书合成），
+                    // 直接整体写入
+                    return Some(after.clone());
+                }
+                // 读取时非空、现在空：并发已取走，写回会复活物品
+                if after.is_empty() {
+                    return Some(current.clone());
+                }
+                return None;
+            }
+            if !current.are_items_and_components_equal(before) {
+                // 槽位已被换成其他物品/组件：不能覆盖
+                return None;
+            }
+            if after.is_empty() {
+                return Some(ItemStack::EMPTY.clone());
+            }
+            if !after.are_items_and_components_equal(before) {
+                // 本地修改改变了物品身份（如瓶子原地换成水瓶/装备换装）。
+                // 数量守恒（1 换 1）时整体替换是安全的；数量不守恒时
+                // 以任何方式套用当前数量都可能复制物品（如整堆换装），
+                // 放弃写回：罕见竞态下丢一次本地转换，绝不复制。
+                let delta = i32::from(after.item_count) - i32::from(before.item_count);
+                if delta == 0 {
+                    return Some(after.clone());
+                }
+                return None;
+            }
+            let delta = i32::from(after.item_count) - i32::from(before.item_count);
+            let new_count = (i32::from(current.item_count) + delta).clamp(0, i32::from(u8::MAX));
+            if new_count == 0 {
+                return Some(ItemStack::EMPTY.clone());
+            }
+            Some(current.copy_with_count(new_count as u8))
+        };
+
+        match hand {
+            Hand::Right => {
+                let selected = self.get_selected_slot() as usize;
+                let mut inv = self
+                    .main_inventory
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let merged = merge(&inv[selected])?;
+                inv[selected] = merged.clone();
+                Some(merged)
+            }
+            Hand::Left => {
+                let slot = self.equipment_slots.get(&Self::OFF_HAND_SLOT)?;
+                let mut equipment = self
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let current = equipment.get(slot);
+                let merged = merge(&current)?;
+                equipment.put(slot, merged.clone());
+                Some(merged)
+            }
+        }
+    }
+
+    /// 对任意槽位执行原子的"读取-修改-写回"（主物品栏与装备槽通用）。
+    ///
+    /// 与 [`Self::update_held`] 同理：闭包在对应存储的写锁内执行，
+    /// 只做纯计算；用于工具损耗、耗材扣减等读-改-整体写回路径，
+    /// 防止窗口内并发的并入/改写被陈旧快照覆盖。
+    pub fn update_slot<R>(&self, slot: usize, f: impl FnOnce(ItemStack) -> (ItemStack, R)) -> R {
+        if slot < Self::MAIN_SIZE {
+            let mut inv = self
+                .main_inventory
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = inv[slot].clone();
+            let (new_stack, result) = f(current);
+            inv[slot] = new_stack;
+            result
+        } else if let Some(slot_type) = self.equipment_slots.get(&slot) {
+            let mut equipment = self
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let current = equipment.get(slot_type);
+            let (new_stack, result) = f(current);
+            equipment.put(slot_type, new_stack);
+            result
+        } else {
+            let (_, result) = f(ItemStack::EMPTY.clone());
+            result
+        }
+    }
+
+    /// 对手持槽位执行原子的"读取-修改-写回"。
+    ///
+    /// 闭包 `f` 在对应存储的写锁内执行：输入槽位当前堆的快照，
+    /// 返回要写回的新堆与附带结果。RCON/控制台命令与插件宿主线程
+    /// 会在刻相位之外触碰玩家物品栏（give/set-slot 等），与玩家
+    /// 自身包处理的"读快照 → 计算 → 整体写回"交错时，陈旧快照会
+    /// 覆盖并发写入（合并进来的物品凭空消失）。所有消耗/丢弃/换
+    /// 手持类路径都应改用本方法。闭包内只做纯计算，不得加锁、
+    /// 触发插件事件或发送数据包。
+    pub fn update_held<R>(&self, hand: Hand, f: impl FnOnce(ItemStack) -> (ItemStack, R)) -> R {
+        match hand {
+            Hand::Right => {
+                let selected = self.get_selected_slot() as usize;
+                let mut inv = self
+                    .main_inventory
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let current = inv[selected].clone();
+                let (new_stack, result) = f(current);
+                inv[selected] = new_stack;
+                result
+            }
+            Hand::Left => {
+                let Some(slot) = self.equipment_slots.get(&Self::OFF_HAND_SLOT) else {
+                    let (_, result) = f(ItemStack::EMPTY.clone());
+                    return result;
+                };
+                let mut equipment = self
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let current = equipment.get(slot);
+                let (new_stack, result) = f(current);
+                equipment.put(slot, new_stack);
+                result
+            }
+        }
+    }
+
     /// 获取副手中的物品。
     ///
     /// Mojang 名称：`getOffHandStack`
@@ -672,5 +820,83 @@ mod tests {
         assert!(!inserted, "不同物品不得并入同一槽位");
         assert_eq!(inv.get_slot(0).item_count, 10, "原槽位内容不得被触碰");
         assert_eq!(dirt.item_count, 5, "未容纳部分必须留在原堆");
+    }
+
+    /// 手持增量合并：本地扣减量应用到槽位当前数量上，
+    /// 并发并入的同类物品不被陈旧快照覆盖
+    #[test]
+    fn merge_held_delta_applies_count_delta_to_current() {
+        let inv = test_inventory();
+        // 读取快照 10 个；"期间"并发并入 3 个 → 槽位现为 13
+        inv.set_slot(0, ItemStack::new(13, &Item::COBBLESTONE));
+        let before = ItemStack::new(10, &Item::COBBLESTONE);
+        let after = ItemStack::new(9, &Item::COBBLESTONE);
+
+        let merged = inv
+            .merge_held_delta(Hand::Right, &before, &after)
+            .expect("同物品合并必须成功");
+        assert_eq!(merged.item_count, 12, "13 - 1 = 12");
+        assert_eq!(inv.held_item().item_count, 12);
+    }
+
+    /// 身份变化且数量守恒（1 换 1 原地替换，如瓶子装水）：允许整体替换
+    #[test]
+    fn merge_held_delta_allows_identity_swap_with_equal_count() {
+        let inv = test_inventory();
+        inv.set_slot(0, ItemStack::new(1, &Item::GLASS_BOTTLE));
+        let before = ItemStack::new(1, &Item::GLASS_BOTTLE);
+        let after = ItemStack::new(1, &Item::WATER_BUCKET);
+
+        let merged = inv
+            .merge_held_delta(Hand::Right, &before, &after)
+            .expect("1 换 1 必须允许");
+        assert_eq!(merged.item.id, Item::WATER_BUCKET.id);
+        assert_eq!(inv.held_item().item.id, Item::WATER_BUCKET.id);
+    }
+
+    /// 身份变化且数量不守恒（如整堆换装）：放弃写回，绝不以当前
+    /// 数量放大替换（那会复制物品）
+    #[test]
+    fn merge_held_delta_rejects_identity_swap_with_count_change() {
+        let inv = test_inventory();
+        inv.set_slot(0, ItemStack::new(3, &Item::GLASS_BOTTLE));
+        let before = ItemStack::new(3, &Item::GLASS_BOTTLE);
+        let after = ItemStack::new(1, &Item::WATER_BUCKET);
+
+        assert!(
+            inv.merge_held_delta(Hand::Right, &before, &after).is_none(),
+            "数量不守恒的身份替换必须放弃写回"
+        );
+        assert_eq!(
+            inv.held_item().item_count,
+            3,
+            "槽位必须保持不变（不得出现 3 个替换后物品）"
+        );
+    }
+
+    /// 读取时非空、写回时已被并发取空：不得复活物品
+    #[test]
+    fn merge_held_delta_rejects_reviving_emptied_slot() {
+        let inv = test_inventory();
+        let before = ItemStack::new(5, &Item::COBBLESTONE);
+        let after = ItemStack::new(4, &Item::COBBLESTONE);
+
+        assert!(inv.merge_held_delta(Hand::Right, &before, &after).is_none());
+        assert!(inv.held_item().is_empty());
+    }
+
+    /// 原子扣减（`update_held`）：取出的堆数量精确，槽位剩余正确
+    #[test]
+    fn update_held_split_takes_exact_amount() {
+        let inv = test_inventory();
+        inv.set_slot(0, ItemStack::new(7, &Item::COBBLESTONE));
+
+        let taken = inv.update_held(Hand::Right, |mut s| {
+            let taken = s.split(3);
+            (s, taken)
+        });
+
+        assert_eq!(taken.item_count, 3);
+        assert_eq!(inv.held_item().item_count, 4);
     }
 }
