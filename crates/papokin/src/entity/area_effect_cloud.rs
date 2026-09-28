@@ -6,11 +6,71 @@ use crate::{
     server::Server,
 };
 use papokin_data::effect::StatusEffect;
+use papokin_nbt::compound::NbtCompound;
+use papokin_nbt::tag::NbtTag;
 use papokin_util::math::boundingbox::BoundingBox;
 use papokin_util::math::vector3::Vector3;
 
 type EffectEntry = (&'static StatusEffect, i32, u8, bool, bool, bool);
 use papokin_data::item_stack::ItemStack;
+
+/// 将效果列表序列化为复合标签列表（`id`/`duration`/`amplifier`/
+/// `ambient`/`show_particles`/`show_icon`）。
+fn write_effect_list(effects: &[EffectEntry]) -> NbtTag {
+    NbtTag::List(
+        effects
+            .iter()
+            .map(
+                |(eff, duration, amplifier, ambient, show_particles, show_icon)| {
+                    let mut entry = NbtCompound::new();
+                    entry.put_string("id", eff.minecraft_name.to_string());
+                    entry.put_int("duration", *duration);
+                    entry.put_byte("amplifier", *amplifier as i8);
+                    entry.put_bool("ambient", *ambient);
+                    entry.put_bool("show_particles", *show_particles);
+                    entry.put_bool("show_icon", *show_icon);
+                    NbtTag::Compound(entry)
+                },
+            )
+            .collect(),
+    )
+}
+
+/// 读回 [`write_effect_list`] 的产物：未知效果 id 与畸形条目跳过
+/// 并告警（单个坏条目不得清空整张效果表），amplifier 钳到 0..=255，
+/// duration/duration 语义要求非负。
+fn read_effect_list(list: &[NbtTag]) -> Vec<EffectEntry> {
+    // 存档可被外部编辑注入：效果列表无条数上限时，每刻对每个候选
+    // 实体 clone 整个效果列表的成本随之无界放大。16 远超原版药水
+    // 的效果数上限。
+    const MAX_EFFECTS: usize = 16;
+    let mut out = Vec::new();
+    for tag in list {
+        if out.len() >= MAX_EFFECTS {
+            tracing::warn!("区域效果云效果列表超过 {MAX_EFFECTS} 条，多余条目已丢弃");
+            break;
+        }
+        let Some(entry) = tag.extract_compound() else {
+            continue;
+        };
+        let Some(name) = entry.get_string("id") else {
+            continue;
+        };
+        let Some(effect) = StatusEffect::from_minecraft_name(name) else {
+            tracing::warn!("跳过区域效果云中的未知状态效果 id \"{name}\"");
+            continue;
+        };
+        out.push((
+            effect,
+            entry.get_int("duration").unwrap_or(0).max(0),
+            entry.get_byte("amplifier").unwrap_or(0).max(0) as u8,
+            entry.get_bool("ambient").unwrap_or(false),
+            entry.get_bool("show_particles").unwrap_or(true),
+            entry.get_bool("show_icon").unwrap_or(true),
+        ));
+    }
+    out
+}
 
 #[derive(Clone)]
 struct ParticleMeta {
@@ -208,6 +268,11 @@ impl EntityBase for AreaEffectCloudEntity {
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::semicolon_outside_block)]
     fn tick(&self, _caller: &dyn EntityBase, _server: &Server) {
+        // 硬上限：半径无界增长会把 get_entities_at_box 的扫描范围与
+        // 元数据广播同步放大到接近全服（存档注入或插件设置的正
+        // RadiusPerTick 叠加长 Duration）
+        const MAX_RADIUS: f32 = 64.0;
+
         // 年龄与持续时间处理
         {
             let mut age = self
@@ -260,6 +325,9 @@ impl EntityBase for AreaEffectCloudEntity {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *radius += delta;
+            if *radius > MAX_RADIUS {
+                *radius = MAX_RADIUS;
+            }
             let current_radius = *radius;
             if current_radius <= 0.0 {
                 self.entity.remove();
@@ -482,11 +550,224 @@ impl EntityBase for AreaEffectCloudEntity {
         &self.entity
     }
 
+    fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
+        // 效果云的完整参数面：缺任何一项都会让滞留效果在重载后
+        // 退化为默认值（默认云=3 格/600 刻/无效果，等于清空药水）。
+        nbt.put_int(
+            "Age",
+            *self
+                .age
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_int(
+            "Duration",
+            *self
+                .duration
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_int(
+            "DurationOnUse",
+            *self
+                .duration_on_use
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_float(
+            "Radius",
+            *self
+                .radius
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_float(
+            "RadiusOnUse",
+            *self
+                .radius_on_use
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_float(
+            "RadiusPerTick",
+            *self
+                .radius_on_tick
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_int(
+            "ReapplicationDelay",
+            *self
+                .reapplication_delay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        nbt.put_int(
+            "WaitTime",
+            *self
+                .wait_time
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        let effects = self
+            .effects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if !effects.is_empty() {
+            nbt.put("Effects", write_effect_list(&effects));
+        }
+        // 药水物品堆承载 PotionContents（药水 id/自定义效果/颜色），
+        // 是效果云重载后仍能正确染色的依据
+        let stack = self
+            .item_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let mut item_compound = NbtCompound::new();
+        stack.write_item_stack(&mut item_compound);
+        nbt.put_compound("Item", item_compound);
+    }
+
+    fn read_custom_nbt(&self, nbt: &NbtCompound) {
+        if let Some(age) = nbt.get_int("Age") {
+            *self
+                .age
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = age.max(0);
+        }
+        if let Some(duration) = nbt.get_int("Duration") {
+            // -1 语义为无限时长，原样保留
+            *self
+                .duration
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = duration;
+        }
+        if let Some(v) = nbt.get_int("DurationOnUse") {
+            *self
+                .duration_on_use
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = v;
+        }
+        // 存档可被外部编辑注入：半径/每刻变化无上界时，半径随时间
+        // 线性无界增长，get_entities_at_box 的扫描范围与 RADIUS 元
+        // 数据广播同步膨胀（数小时后接近全服扫描）。钳制到远超原版
+        // 上限（~12.5 格）的宽松值。
+        if let Some(radius) = nbt
+            .get_float("Radius")
+            .filter(|r| r.is_finite() && *r > 0.0)
+        {
+            *self
+                .radius
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = radius.min(64.0);
+        }
+        if let Some(v) = nbt.get_float("RadiusOnUse").filter(|r| r.is_finite()) {
+            *self
+                .radius_on_use
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = v.clamp(-8.0, 8.0);
+        }
+        if let Some(v) = nbt.get_float("RadiusPerTick").filter(|r| r.is_finite()) {
+            *self
+                .radius_on_tick
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = v.clamp(-1.0, 1.0);
+        }
+        if let Some(v) = nbt.get_int("ReapplicationDelay") {
+            *self
+                .reapplication_delay
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = v.max(0);
+        }
+        if let Some(v) = nbt.get_int("WaitTime") {
+            *self
+                .wait_time
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = v.max(0);
+        }
+        if let Some(list) = nbt.get_list("Effects") {
+            *self
+                .effects
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = read_effect_list(list);
+        }
+        if let Some(item_compound) = nbt.get_compound("Item")
+            && let Some(stack) = ItemStack::read_item_stack(item_compound)
+            && !stack.is_empty()
+        {
+            *self
+                .item_stack
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = stack;
+        }
+        // 重载后立即同步追踪数据：常规加载路径 spawn 的
+        // init_data_tracker 会在其后用已加载值重算；结构生成路径
+        // 先 spawn 后读 NBT，则依赖这里的兜底同步。
+        let radius = *self
+            .radius
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.entity.set_synced_data(
+            papokin_data::tracked_data::area_effect_cloud::RADIUS,
+            radius,
+        );
+        let wait_time = *self
+            .wait_time
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.entity.set_synced_data(
+            papokin_data::tracked_data::area_effect_cloud::WAITING,
+            0 < wait_time,
+        );
+    }
+
     fn get_living_entity(&self) -> Option<&crate::entity::living::LivingEntity> {
         None
     }
 
     fn cast_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effect_list_roundtrip_and_bad_entries_skip() {
+        let effects: Vec<EffectEntry> = vec![
+            (&StatusEffect::SPEED, 200, 1, false, true, true),
+            (&StatusEffect::REGENERATION, 100, 0, true, false, false),
+        ];
+        let tag = write_effect_list(&effects);
+        let NbtTag::List(list) = &tag else {
+            panic!("效果列表应序列化为 NBT 列表");
+        };
+        // 字段级对比（StatusEffect 未派生 PartialEq）
+        let decoded = read_effect_list(list);
+        assert_eq!(decoded.len(), effects.len());
+        for ((eff, d, a, amb, sp, si), (eff0, d0, a0, amb0, sp0, si0)) in
+            decoded.iter().zip(&effects)
+        {
+            assert_eq!(eff.minecraft_name, eff0.minecraft_name);
+            assert_eq!(*d, *d0);
+            assert_eq!(*a, *a0);
+            assert_eq!(*amb, *amb0);
+            assert_eq!(*sp, *sp0);
+            assert_eq!(*si, *si0);
+        }
+
+        // 未知效果 id / 非复合条目跳过，不得清空其余条目
+        let mut bad = NbtCompound::new();
+        bad.put_string("id", "minecraft:not_an_effect".to_string());
+        let mut mixed: Vec<NbtTag> = vec![NbtTag::Compound(bad), NbtTag::Int(7)];
+        if let NbtTag::List(good) = write_effect_list(&effects) {
+            mixed.extend(good);
+        } else {
+            panic!("效果列表应序列化为 NBT 列表");
+        }
+        assert_eq!(read_effect_list(&mixed).len(), effects.len());
     }
 }
