@@ -278,6 +278,11 @@ pub struct CombatTracker {
 }
 
 impl CombatTracker {
+    /// 持续受击（岩浆/毒/恶意攻击流）期间条目单调增长：被治疗的
+    /// boss/无敌实体可长期积累。死亡消息只需最近的若干条，保留
+    /// 最新 64 条足够。
+    const MAX_ENTRIES: usize = 64;
+
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -351,6 +356,10 @@ impl CombatTracker {
         };
 
         self.entries.push(entry);
+        if self.entries.len() > Self::MAX_ENTRIES {
+            let excess = self.entries.len() - Self::MAX_ENTRIES;
+            self.entries.drain(0..excess);
+        }
         self.last_damage_time = current_tick;
         self.taking_damage = true;
 
