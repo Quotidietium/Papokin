@@ -3982,20 +3982,10 @@ impl Player {
         }) < d * d
     }
 
-    /// 实体交互范围（对应原版 `entity_interaction_range` 属性的默认值）。
-    pub const fn entity_interaction_range(&self) -> f64 {
-        3.0
-    }
-
-    /// 玩家是否能触及目标实体：眼睛位置到实体包围盒最近点的距离
-    /// 须在实体交互范围内（对应原版 canInteractWithEntity）。
-    /// 攻击与右键实体共用此检查，防止改过的客户端超距打击实体。
-    pub fn can_interact_with_entity(&self, target: &dyn EntityBase) -> bool {
-        let d = self.entity_interaction_range();
-        let eye = self.eye_position();
-        let target_box = target.get_entity().bounding_box.load();
-        target_box.squared_magnitude(eye) <= d * d
-    }
+    // 实体交互距离稽查（entity_interaction_range / can_interact_with_entity）
+    // 已随反作弊职责边界调整移除（2026-09-29）：距离执法由插件在交互
+    // 事件中实现。方块侧 can_interact_with_block_at 因告示牌编辑会话
+    // 新鲜度判定仍需而保留。
 
     #[must_use]
     pub fn may_build(&self) -> bool {

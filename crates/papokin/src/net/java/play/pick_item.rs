@@ -7,10 +7,7 @@ impl JavaClient {
         player: &Arc<Player>,
         pick_item: &SPickItemFromBlock,
     ) {
-        if !player.can_interact_with_block_at(&pick_item.pos, 1.0) {
-            return;
-        }
-
+        // 距离稽查已移除（反作弊属插件职责）。
         let world = player.world();
         let block = world.get_block(&pick_item.pos);
 

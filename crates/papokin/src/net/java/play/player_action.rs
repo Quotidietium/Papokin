@@ -16,14 +16,7 @@ impl JavaClient {
         match Status::try_from(player_action.status.0) {
             Ok(status) => match status {
                 Status::StartedDigging => {
-                    if !player.can_interact_with_block_at(&player_action.position, 1.0) {
-                        warn!(
-                            "玩家 {0} 试图交互 {1} 处无法触及的方块",
-                            player.gameprofile.name, player_action.position
-                        );
-                        self.update_sequence(player_action.sequence.0);
-                        return;
-                    }
+                    // 方块交互距离稽查已移除（反作弊属插件职责）。
                     let position = player_action.position;
                     let entity = &player.get_entity();
                     let world = entity.world.load_full();
@@ -149,14 +142,7 @@ impl JavaClient {
                     self.update_sequence(player_action.sequence.0);
                 }
                 Status::CancelledDigging => {
-                    if !player.can_interact_with_block_at(&player_action.position, 1.0) {
-                        warn!(
-                            "玩家 {0} 试图交互 {1} 处无法触及的方块",
-                            player.gameprofile.name, player_action.position
-                        );
-                        self.update_sequence(player_action.sequence.0);
-                        return;
-                    }
+                    // 方块交互距离稽查已移除（反作弊属插件职责）。
                     let entity = &player.get_entity();
                     let world = entity.world.load_full();
                     if let Some(server_arc) = world.server.upgrade() {
@@ -181,14 +167,8 @@ impl JavaClient {
                 }
                 Status::FinishedDigging => {
                     let location = player_action.position;
-                    if !player.can_interact_with_block_at(&location, 1.0) {
-                        warn!(
-                            "玩家 {0} 试图交互 {1} 处无法触及的方块",
-                            player.gameprofile.name, player_action.position
-                        );
-                        self.update_sequence(player_action.sequence.0);
-                        return;
-                    }
+                    // 方块交互距离稽查已移除（反作弊属插件职责）；下方
+                    // 的挖掘进度校验是服务端权威的方块破坏机制，保留。
 
                     // 原版行为：服务端只承认进度达标的挖掘完成。改过的
                     // 客户端可以不等待挖掘时间直接连发 Started/Finished

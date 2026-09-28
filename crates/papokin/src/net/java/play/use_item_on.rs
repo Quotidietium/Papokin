@@ -21,10 +21,8 @@ impl JavaClient {
 
         let mut should_try_decrement = false;
 
-        if !player.can_interact_with_block_at(&position, 1.0) {
-            // TODO: 也许该记录日志？
-            return Err(BlockPlacingError::BlockOutOfReach);
-        }
+        // 方块交互距离稽查已移除：只对被修改的客户端生效，属反作弊
+        // 插件职责（插件可经方块交互事件自行校验距离后取消）。
 
         let Ok(face) = BlockDirection::try_from(use_item_on.face.0) else {
             return Err(BlockPlacingError::InvalidBlockFace);
