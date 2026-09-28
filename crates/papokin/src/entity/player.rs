@@ -885,6 +885,16 @@ impl Player {
 
     /// 将 [`Player`] 从当前 [`World`] 中移除。
     pub async fn remove(self: &Arc<Self>) {
+        // 标记移除原因：玩家退出不经过 World::remove_entity（那是
+        // 普通实体的路径），removal_reason 此前从不设置——拴绳持有
+        // 者/生物目标等强引用路径以 is_alive() 判定存活，鬼魂玩家
+        // 恒为"存活"，拴绳永不断开且整件 Player/JavaClient 对象被
+        // 无限期持有（每次断线泄漏一整套）。
+        self.living_entity
+            .entity
+            .removal_reason
+            .store(Some(crate::entity::RemovalReason::UnloadedWithPlayer));
+
         if !self
             .current_screen_handler
             .lock()
