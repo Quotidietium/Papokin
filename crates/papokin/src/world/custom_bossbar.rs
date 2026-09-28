@@ -73,6 +73,17 @@ impl CustomBossbars {
         None
     }
 
+    /// 玩家断开时从全部 Boss 栏移除其 UUID。
+    ///
+    /// 断线清理链此前不触碰 Boss 栏：陈旧 UUID 在每个 Boss 栏的
+    /// players 列表中永久累积（join/quit 高频循环下无界增长），且
+    /// 重连后服务端仍认为"已订阅"，不会向其重发 Boss 栏。
+    pub fn remove_player(&mut self, uuid: &Uuid) {
+        for bossbar in self.custom_bossbars.values_mut() {
+            bossbar.players.retain(|p| p != uuid);
+        }
+    }
+
     pub fn create_bossbar(&mut self, namespace: String, bossbar_data: Bossbar) {
         self.custom_bossbars.insert(
             namespace.clone(),

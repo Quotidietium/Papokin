@@ -754,6 +754,11 @@ impl Server {
             papokin_data::statistic::CustomStatistic::LeaveGame as i32,
             1,
         );
+        // Boss 栏订阅随断线清理（防陈旧 UUID 累积与重连不重发）
+        self.bossbars
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove_player(&player.gameprofile.id);
         // TODO: 若想让在线人数下降就做成配置
         self.listing
             .lock()
