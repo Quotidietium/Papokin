@@ -229,18 +229,21 @@ pub fn is_texture_url_valid(url: &Url, config: &TextureConfig) -> Result<(), Tex
     if !config
         .allowed_url_schemes
         .iter()
-        .any(|allowed_scheme| scheme.ends_with(allowed_scheme))
+        .any(|allowed_scheme| scheme == *allowed_scheme)
     {
         return Err(TextureError::DisallowedUrlScheme(scheme.to_string()));
     }
     let Some(domain) = url.domain() else {
         return Err(TextureError::InvalidURL);
     };
-    if !config
-        .allowed_url_domains
-        .iter()
-        .any(|allowed_domain| domain.ends_with(allowed_domain))
-    {
+    // 必须是精确域名或带点边界的子域：裸 ends_with 会让
+    // `evil-textures.minecraft.net` 匹配 `textures.minecraft.net`。
+    if !config.allowed_url_domains.iter().any(|allowed_domain| {
+        domain == *allowed_domain
+            || domain
+                .strip_suffix(allowed_domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    }) {
         return Err(TextureError::DisallowedUrlDomain(domain.to_string()));
     }
     Ok(())
