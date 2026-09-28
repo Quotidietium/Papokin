@@ -42,10 +42,34 @@ impl JavaClient {
             ));
             return;
         }
+        // 与玩家移动包相同的三项守卫：等待传送确认期间忽略（否则传送后
+        // 载具仍会被留在客户端声称的位置）、插件锁定移动时拉回、坐标
+        // clamp 到世界边界内。
+        if player
+            .awaiting_teleport
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+        {
+            return;
+        }
+        if player.is_movement_locked.load(Ordering::Relaxed) {
+            self.force_tp(player, player.get_entity().pos.load());
+            return;
+        }
+        let pos = Vector3::new(
+            Self::clamp_horizontal(packet.x),
+            Self::clamp_vertical(packet.y),
+            Self::clamp_horizontal(packet.z),
+        );
         let last_pos = entity.pos.load();
-        let pos = Vector3::new(packet.x, packet.y, packet.z);
-        // 原版 moved too quickly（载具）：单包平方位移超过 100 驳回并拉回
-        if last_pos.squared_distance_to_vec(&pos) > 100.0 {
+        // 原版 moved too quickly（载具）：阈值随本刻移动包序缩放
+        //（与玩家移动包一致的按刻累积语义）
+        let packet_index = self
+            .movement_packets_this_tick
+            .fetch_add(1, Ordering::Relaxed);
+        let allowed_delta_squared = 100.0 * f64::from(packet_index.max(1));
+        if last_pos.squared_distance_to_vec(&pos) > allowed_delta_squared {
             warn!(
                 "玩家 {} 的载具移动过快（单包 {} 格），已驳回并拉回",
                 player.gameprofile.name,
