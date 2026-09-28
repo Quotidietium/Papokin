@@ -185,6 +185,13 @@ impl ScreenHandler for StonecutterScreenHandler {
         }
     }
 
+    fn on_closed(&mut self, player: &dyn InventoryPlayer) {
+        // 归还输入槽物品：此前未覆写 on_closed，输入物品随界面一起
+        // 丢弃（关界面/断线/死亡 = 物品凭空消失）
+        self.default_on_closed(player);
+        self.drop_inventory(player, self.input_inventory.clone());
+    }
+
     fn quick_move(&mut self, player: &dyn InventoryPlayer, slot_index: i32) -> ItemStack {
         let mut stack = ItemStack::EMPTY.clone();
         let slot = self.get_behaviour().slots.get(slot_index as usize).cloned();
