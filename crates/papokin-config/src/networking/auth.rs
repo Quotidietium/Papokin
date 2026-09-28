@@ -106,7 +106,7 @@ impl Default for TextureConfig {
         Self {
             enabled: true,
             allowed_url_schemes: vec!["http".into(), "https".into()],
-            allowed_url_domains: vec![".minecraft.net".into(), ".mojang.com".into()],
+            allowed_url_domains: vec!["minecraft.net".into(), "mojang.com".into()],
             types: TextureTypes::default(),
         }
     }

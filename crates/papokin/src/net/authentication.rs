@@ -238,10 +238,13 @@ pub fn is_texture_url_valid(url: &Url, config: &TextureConfig) -> Result<(), Tex
     };
     // 必须是精确域名或带点边界的子域：裸 ends_with 会让
     // `evil-textures.minecraft.net` 匹配 `textures.minecraft.net`。
-    if !config.allowed_url_domains.iter().any(|allowed_domain| {
-        domain == *allowed_domain
+    // 旧配置文件里的允许项带前导点（如 `.minecraft.net`，配合旧的
+    // ends_with 语义），归一化后再比较，避免合法域被拒。
+    if !config.allowed_url_domains.iter().any(|raw| {
+        let allowed = raw.trim_matches('.');
+        domain == allowed
             || domain
-                .strip_suffix(allowed_domain)
+                .strip_suffix(allowed)
                 .is_some_and(|prefix| prefix.ends_with('.'))
     }) {
         return Err(TextureError::DisallowedUrlDomain(domain.to_string()));
@@ -543,7 +546,8 @@ pub enum TextureError {
 
 #[cfg(test)]
 mod tests {
-    use super::ProfileTextures;
+    use super::{ProfileTextures, is_texture_url_valid};
+    use reqwest::Url;
 
     // 第三方认证服务器（drasl、Blessing Skin、littleskin.cn）不会发送
     // `signatureRequired`。档案仍必须能解析。参见 issue #301。
@@ -638,5 +642,64 @@ mod tests {
             config.fallbacks[0],
             "https://fallback1.auth/hasJoined?username={username}&serverId={server_hash}"
         );
+    }
+
+    fn texture_config(domains: &[&str]) -> papokin_config::networking::auth::TextureConfig {
+        papokin_config::networking::auth::TextureConfig {
+            allowed_url_schemes: vec!["https".into()],
+            allowed_url_domains: domains.iter().map(|d| (*d).into()).collect(),
+            ..papokin_config::networking::auth::TextureConfig::default()
+        }
+    }
+
+    /// 旧配置的允许项带前导点（`.minecraft.net`，配合旧 `ends_with` 语义）：
+    /// 归一化后精确域与真子域都必须放行——否则正版 `textures.minecraft.net`
+    /// 皮肤全部被拒（在线模式全量断皮肤）。
+    #[test]
+    fn texture_domain_accepts_legacy_leading_dot_entries() {
+        let config = texture_config(&[".minecraft.net"]);
+        let exact = Url::parse("https://minecraft.net/texture/a").expect("URL 应合法");
+        assert!(
+            is_texture_url_valid(&exact, &config).is_ok(),
+            "精确域须放行"
+        );
+        let subdomain = Url::parse("https://textures.minecraft.net/texture/a").expect("URL 应合法");
+        assert!(
+            is_texture_url_valid(&subdomain, &config).is_ok(),
+            "带点边界子域须放行"
+        );
+    }
+
+    /// 前导点归一化不得重新打开后缀绕过：对允许项 `.minecraft.net`
+    /// （整个 minecraft.net 区域），无点边界的 `evil-minecraft.net` 与
+    /// 后缀嫁接的 `textures.minecraft.net.evil.example` 仍须拒绝。
+    /// 注：`evil-textures.minecraft.net` 属该区域真子域，放行是正确语义。
+    #[test]
+    fn texture_domain_still_rejects_suffix_spoof_with_legacy_entry() {
+        let config = texture_config(&[".minecraft.net"]);
+        for bad in [
+            "https://evil-minecraft.net/texture/a",
+            "https://textures.minecraft.net.evil.example/texture/a",
+            "https://mojang.com/texture/a",
+        ] {
+            let url = Url::parse(bad).expect("URL 应合法");
+            assert!(is_texture_url_valid(&url, &config).is_err(), "{bad} 须拒绝");
+        }
+    }
+
+    /// 规范（无前导点）允许项：精确、真子域放行，兄弟域/无点边界拒绝。
+    #[test]
+    fn texture_domain_exact_or_dot_boundary_subdomain_only() {
+        let config = texture_config(&["textures.minecraft.net"]);
+        let ok = Url::parse("https://textures.minecraft.net/texture/a").expect("URL 应合法");
+        assert!(is_texture_url_valid(&ok, &config).is_ok());
+        for bad in [
+            "https://evil-textures.minecraft.net/texture/a",
+            "https://textures.minecraft.net.evil.example/texture/a",
+            "https://mojang.com/texture/a",
+        ] {
+            let url = Url::parse(bad).expect("URL 应合法");
+            assert!(is_texture_url_valid(&url, &config).is_err(), "{bad} 须拒绝");
+        }
     }
 }
