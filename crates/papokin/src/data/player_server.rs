@@ -72,13 +72,14 @@ impl ServerPlayerData {
 
         if should_save && self.storage.is_save_enabled() {
             self.last_save.store(now);
-            // 定期对所有世界中的所有在线玩家做快照
+            // 定期对所有世界中的所有在线玩家做快照（连同玩家引用，
+            // 落盘前用于过期检测）
             let mut snapshots = Vec::new();
             for world in server.worlds.load().iter() {
                 for player in world.players.load().iter() {
                     let mut nbt = NbtCompound::new();
                     player.write_nbt(&mut nbt);
-                    snapshots.push((player.gameprofile.id, nbt));
+                    snapshots.push((player.clone(), nbt));
                 }
             }
 
@@ -88,8 +89,15 @@ impl ServerPlayerData {
 
             let storage = self.storage.clone();
             rayon::spawn(move || {
-                for (uuid, nbt) in snapshots {
-                    if let Err(e) = storage.save_player_data(&uuid, nbt) {
+                for (player, nbt) in snapshots {
+                    let uuid = player.gameprofile.id;
+                    // 快照之后玩家可能已退出：退出保存的数据更新，
+                    // 旧快照覆盖它会回档（如已丢出的物品被复制回来）。
+                    // is_stale 在保存锁内执行——等锁期间退出保存要么
+                    // 已完成（此时放弃本快照），要么在等待本线程
+                    // （随后会以更新数据覆盖），两种情况都安全。
+                    let is_stale = || player.client.is_closed();
+                    if let Err(e) = storage.save_player_data_unless(&uuid, nbt, &is_stale) {
                         error!("保存玩家 {uuid} 的数据失败：{e}");
                     }
                 }
