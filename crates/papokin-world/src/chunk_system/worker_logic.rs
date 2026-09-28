@@ -5,7 +5,7 @@ use crate::ProtoChunk;
 use crate::chunk::format::LightContainer;
 use crate::chunk::io::LoadedData::Loaded;
 use crate::chunk::io::{FileIO, LoadedData, run_blocking};
-use crate::level::Level;
+use crate::level::{Level, SyncChunk};
 use papokin_config::lighting::LightingEngineConfig;
 use papokin_data::chunk::ChunkStatus;
 use std::collections::hash_map::Entry;
@@ -175,6 +175,61 @@ pub async fn io_read_work(
     debug!("IO 读取线程停止");
 }
 
+/// 以有界次数内联重试执行一次区块批量保存。
+///
+/// IO 写线程是区块写盘的唯一通道，而卸载路径送来的区块已不在
+/// 内存中——保存失败即丢弃意味着数据永久回退到上次落盘版本。
+/// 磁盘故障期间阻塞本线程重试比丢弃更安全（后续批次只是延后
+/// 落盘）。`save_chunks` 同样包 panic 防护：panic 会让 `io_write`
+/// 任务死亡，之后全部脏区块只剩 `blocking_send` 失败日志（永丢）
+/// 加 `io_lock` 泄漏（相关区块永远无法加载）。重试耗尽才丢弃并
+/// 记日志，位置后续按缺失重新生成。
+async fn save_chunks_with_retry(level: &Level, retry_data: &[(ChunkPos, SyncChunk)]) {
+    const MAX_SAVE_ATTEMPTS: u32 = 3;
+    const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
+    for attempt in 1..=MAX_SAVE_ATTEMPTS {
+        let save_result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            level
+                .chunk_saver
+                .save_chunks(&level.level_folder, retry_data.to_vec()),
+        ))
+        .await;
+        match save_result {
+            Ok(Ok(())) => break,
+            Ok(Err(e)) => {
+                if attempt < MAX_SAVE_ATTEMPTS {
+                    warn!(
+                        "保存区块失败（第 {attempt}/{MAX_SAVE_ATTEMPTS} 次尝试，{RETRY_DELAY:?} 后重试）：{e:?}"
+                    );
+                    tokio::time::sleep(RETRY_DELAY).await;
+                } else {
+                    error!(
+                        "保存区块失败且 {MAX_SAVE_ATTEMPTS} 次尝试均未成功（该批区块回退到上次成功落盘的版本）：{e:?}"
+                    );
+                }
+            }
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("未知的 panic 负载");
+                if attempt < MAX_SAVE_ATTEMPTS {
+                    warn!(
+                        "保存区块时发生 panic（第 {attempt}/{MAX_SAVE_ATTEMPTS} 次尝试，{RETRY_DELAY:?} 后重试）：{msg}"
+                    );
+                    tokio::time::sleep(RETRY_DELAY).await;
+                } else {
+                    error!(
+                        "保存区块时发生 panic 且 {MAX_SAVE_ATTEMPTS} 次尝试均未成功（该批区块已丢弃）：{msg}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 pub async fn io_write_work(
     mut recv: tokio::sync::mpsc::Receiver<Vec<(ChunkPos, Chunk)>>,
     level: Arc<Level>,
@@ -231,13 +286,8 @@ pub async fn io_write_work(
         .await;
         // 闭包内部已逐块 catch_unwind，JoinError 只会来自任务取消
         // （通常为关停），此时保持退出以配合关停流程。
-        if let Ok(vec) = upgrade_result
-            && let Err(e) = level
-                .chunk_saver
-                .save_chunks(&level.level_folder, vec)
-                .await
-        {
-            error!("保存区块失败：{:?}", e);
+        if let Ok(vec) = upgrade_result {
+            save_chunks_with_retry(&level, &vec).await;
         }
 
         {
