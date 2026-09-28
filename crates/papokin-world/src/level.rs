@@ -969,6 +969,16 @@ impl Level {
             .map(|x| x.value().clone())
     }
 
+    /// 该区块的实体数据是否仍在内存（卸载保存尚未完成）。
+    ///
+    /// 调度器据此暂缓方块区块的卸载：玩家任务链上的实体/方块
+    /// 实体保存是异步的，若调度器先把区块从内存移走，保存任务
+    /// 写入的最新方块实体 NBT 会被静默丢弃（存档回退/物品复制）。
+    /// `clean_entity_chunks` 完成写入后会移除条目，届时再卸载。
+    pub fn is_entity_chunk_pending_save(&self, pos: &Vector2<i32>) -> bool {
+        self.loaded_entity_chunks.contains_key(pos)
+    }
+
     #[must_use]
     pub fn live_entity_chunk_positions(&self) -> Vec<Vector2<i32>> {
         self.loaded_entity_chunks

@@ -839,7 +839,7 @@ impl GenerationSchedule {
         }
     }
 
-    fn process_unload_queue(&mut self) {
+    fn process_unload_queue(&mut self, level: &Level) {
         if self.unload_chunks.is_empty() {
             return;
         }
@@ -848,6 +848,16 @@ impl GenerationSchedule {
         swap(&mut unload_chunks, &mut self.unload_chunks);
         let mut chunks = Vec::with_capacity(unload_chunks.len());
         for pos in unload_chunks {
+            // 实体/方块实体的卸载保存在玩家任务链上异步执行；
+            // loaded_entity_chunks 仍持有该区块说明保存尚未完成，
+            // 先暂缓卸载并重新入队，等条目被移除后再卸载——否则
+            // 保存任务会把最新方块实体 NBT 写向已不在内存的区块
+            // （静默丢弃 → 存档回退/物品复制）。关停路径不受影响：
+            // 暂缓的区块留在 chunk_map，由 save_all_chunk(true) 兜底。
+            if level.is_entity_chunk_pending_save(&pos) {
+                self.unload_chunks.insert(pos);
+                continue;
+            }
             let Some(mut holder) = self.chunk_map.remove(&pos) else {
                 continue;
             };
@@ -1268,7 +1278,7 @@ impl GenerationSchedule {
         loop {
             if level.should_unload.swap(false, Relaxed) {
                 self.garbage_collect_dependencies();
-                self.process_unload_queue();
+                self.process_unload_queue(level);
             }
             if level.should_save.swap(false, Relaxed) {
                 self.save_all_chunk(false);
@@ -1276,7 +1286,7 @@ impl GenerationSchedule {
             if level.shut_down_chunk_system.load(Relaxed) {
                 info!("关停前正在保存区块...");
                 self.garbage_collect_dependencies();
-                self.process_unload_queue();
+                self.process_unload_queue(level);
                 self.save_all_chunk(true);
                 break;
             }
@@ -1292,7 +1302,7 @@ impl GenerationSchedule {
             // 正是把过期的依赖持有者放进队列的罪魁祸首。
             if self.last_unload.elapsed() >= std::time::Duration::from_secs(1) {
                 self.garbage_collect_dependencies();
-                self.process_unload_queue();
+                self.process_unload_queue(level);
                 self.last_unload = std::time::Instant::now();
             }
 
