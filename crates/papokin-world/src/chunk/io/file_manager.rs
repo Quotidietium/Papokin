@@ -10,7 +10,7 @@ use tokio::{
     join,
     sync::{OnceCell, RwLock, mpsc},
 };
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     chunk::{ChunkReadingError, ChunkWritingError, io::Dirtiable},
@@ -115,6 +115,21 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLo
             Ok(bytes) => {
                 if bytes.is_empty() {
                     trace!("文件为空（0 字节），使用默认值: {}", self.path.display());
+                    return Ok(S::default());
+                }
+                // 损坏保护：文件明显小于任何合法区域头（8 KiB）时，
+                // 反序列化会"按空处理"，随后首次保存就会用空内存态
+                // 整写覆盖原文件。先把可疑文件改名留档（*.corrupt），
+                // 数据可手工恢复，而不是被静默清空。
+                if bytes.len() < 8192 {
+                    let backup = self.path.with_extension("corrupt");
+                    warn!(
+                        "文件 {} 仅 {} 字节（小于 8 KiB 区域头），疑似损坏；已改名为 {} 留档并按空文件处理",
+                        self.path.display(),
+                        bytes.len(),
+                        backup.display()
+                    );
+                    let _ = tokio::fs::rename(&self.path, &backup).await;
                     return Ok(S::default());
                 }
                 let path = self.path.clone();
