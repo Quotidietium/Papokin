@@ -4281,6 +4281,11 @@ impl World {
                 entity.on_block_replaced(self, position);
             }
             self.remove_block_entity(position);
+            // 容器类方块被替换/破坏时强制关闭正在查看它的界面：
+            // 否则观察者的 ScreenHandler 仍持有已脱离世界的库存，
+            // 继续放入的物品无处持久化，会凭空消失（原版同样在
+            // 方块移除时关闭观察者）。爆炸路径的显式调用与此幂等。
+            self.close_container_screens_at(position);
         }
 
         if is_new_block && (flags.contains(BlockFlags::NOTIFY_NEIGHBORS) || block_moved) {
