@@ -271,6 +271,11 @@ pub struct Player {
     pub camera_target_id: AtomicCell<Option<i32>>,
     /// 玩家的生成点
     pub respawn_point: std::sync::Mutex<Option<RespawnPoint>>,
+    /// 重生进行中标志。`respawn_player` 是异步任务且血量直到其深处才
+    /// 恢复，死亡客户端连发复活包（或插件并发调用 respawn）会并发执行
+    /// 两次重生，导致玩家在世界列表中被重复插入、PlayerRespawnEvent
+    /// 双触发（依赖该事件的插件会双发物品）。用 CAS 占用来互斥。
+    pub respawn_in_progress: AtomicBool,
     /// 玩家的睡眠状态
     pub sleeping_since: AtomicCell<Option<u8>>,
     /// 玩家当前所睡床的床头位置。
@@ -563,6 +568,7 @@ impl Player {
             is_movement_locked: AtomicBool::new(false),
             // TODO: 客户端连接时发送携带正确数值的 CPlayerSpawnPosition 数据包
             respawn_point: std::sync::Mutex::new(None),
+            respawn_in_progress: AtomicBool::new(false),
             sleeping_since: AtomicCell::new(None),
             sleeping_bed_pos: AtomicCell::new(None),
             // 我们希望它成为一个不可能被观察的区块段，使 `chunker::update_position`

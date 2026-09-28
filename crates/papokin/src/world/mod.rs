@@ -247,6 +247,15 @@ impl PartialEq for World {
 
 impl Eq for World {}
 
+/// 重生互斥门守卫：Drop 时复位 `respawn_in_progress`，保证 panic 或
+/// 提前返回也不会把玩家永久锁死在"重生中"状态。
+struct RespawnGate(Arc<Player>);
+impl Drop for RespawnGate {
+    fn drop(&mut self) {
+        self.0.respawn_in_progress.store(false, Ordering::Release);
+    }
+}
+
 impl World {
     pub async fn get_block_state_id_async(&self, position: &BlockPos) -> BlockStateId {
         if !self.is_in_build_limit(*position) {
@@ -3142,6 +3151,18 @@ impl World {
 
     #[allow(clippy::too_many_lines)]
     pub async fn respawn_player(self: &Arc<Self>, player: &Arc<Player>, alive: bool) {
+        // 互斥门：血量直到本函数深处（reset_state）才恢复，而调用方
+        // （复活包与插件 respawn API）只做同步血量检查；两次并发重生
+        // 会把玩家重复插入目标世界列表、双触发 PlayerRespawnEvent
+        // （依赖该事件的插件会双发物品）。
+        if player
+            .respawn_in_progress
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let _respawn_gate = RespawnGate(player.clone());
         let last_pos = player.get_entity().last_pos.load();
         let death_dimension = ResourceLocation::from(player.world().dimension.minecraft_name);
         let death_location = BlockPos(Vector3::new(
