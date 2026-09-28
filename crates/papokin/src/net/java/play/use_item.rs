@@ -7,6 +7,11 @@ impl JavaClient {
         if !player.has_client_loaded() {
             return;
         }
+        // 旁观者不能使用物品：否则改过的客户端可借末影珍珠传送、
+        // 投掷药水/雪球生成实体（原版 handleUseItem 同样先拒绝旁观者）。
+        if player.gamemode.load() == GameMode::Spectator {
+            return;
+        }
         player.update_last_action_time();
 
         let inventory = player.inventory();

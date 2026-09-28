@@ -6,6 +6,11 @@ impl JavaClient {
         if !player.has_client_loaded() {
             return;
         }
+        // 旁观者无敌但自身不可参与战斗：与 handle_interact 的旁观分支
+        // 对齐，防止改过的客户端借旁观模式攻击实体。
+        if player.gamemode.load() == GameMode::Spectator {
+            return;
+        }
         player.update_last_action_time();
         let entity_id = attack.entity_id;
         let player_entity = &player.get_entity();
