@@ -22,6 +22,8 @@ pub enum BungeeCordError {
     FailedParseProperties,
     #[error("Failed to make offline UUID")]
     FailedMakeOfflineUUID,
+    #[error("BungeeCord proxy secret is not configured")]
+    MissingSecret,
     #[error("No BungeeGuard token in forwarded data")]
     MissingToken,
     #[error("Invalid BungeeGuard token")]
@@ -52,6 +54,15 @@ pub fn bungeecord_login(
     name: String,
     secret: &str,
 ) -> Result<(IpAddr, GameProfile), BungeeCordError> {
+    // 无共享密钥时必须整体拒绝：BungeeCord 转发的身份/IP 完全来自
+    // 握手包中的 server_address（客户端可伪造），没有 BungeeGuard
+    // 令牌校验就直接采信等于允许任何人伪造任意名称/UUID 直连后端
+    // （Velocity 路径对空 secret 同样拒绝）。
+    if secret.is_empty() {
+        warn!("BungeeCord 转发未配置共享密钥（bungeecord.secret），已拒绝登录");
+        return Err(BungeeCordError::MissingSecret);
+    }
+
     let mut parts = server_address.split('\0');
 
     // 跳过第一部分（实际的服务器地址/主机）
@@ -156,9 +167,14 @@ mod tests {
     async fn logs_in_from_a_handshake_decoded_off_the_wire() {
         let textures = "e".repeat(432);
         let signature = "s".repeat(684);
+        // 转发属性同时携带 textures 与 BungeeGuard 令牌：
+        // 空 secret 已被整体拒绝，正常路径必须配置 secret。
+        let properties = format!(
+            "[{{\"name\":\"textures\",\"value\":\"{textures}\",\"signature\":\"{signature}\"}},\
+             {{\"name\":\"bungeeguard-token\",\"value\":\"bungeeguard-token\",\"signature\":\"\"}}]"
+        );
         let address = format!(
-            "mc.example.com\0192.0.2.10\0d8f4a1e0-0f1b-4c3a-9f2e-1a2b3c4d5e6f\0\
-             [{{\"name\":\"textures\",\"value\":\"{textures}\",\"signature\":\"{signature}\"}}]"
+            "mc.example.com\0192.0.2.10\0d8f4a1e0-0f1b-4c3a-9f2e-1a2b3c4d5e6f\0{properties}"
         );
 
         let mut buf = Vec::new();
@@ -177,7 +193,7 @@ mod tests {
             &client_address,
             &handshake.server_address,
             "Steve".to_string(),
-            "",
+            "bungeeguard-token",
         )
         .expect("转发地址应能生成游戏档案");
 
@@ -287,15 +303,18 @@ mod tests {
         assert!(matches!(result, Err(BungeeCordError::MissingToken)));
     }
 
+    /// 未配置 secret 时必须整体拒绝：转发的身份完全来自客户端可伪造
+    /// 的握手数据，没有令牌校验等于允许任何人伪造任意名称/UUID
+    /// （含 OP 的 UUID）直连后端提权。
     #[test]
-    fn ignores_token_when_no_secret_is_configured() {
+    fn rejects_when_no_secret_is_configured() {
         let address = forwarded_address(&properties_array(&[&token_property(SECRET)]));
 
         let result = bungeecord_login(&client_address(), &address, "Steve".to_string(), "");
 
         assert!(
-            result.is_ok(),
-            "an unconfigured secret must not reject logins"
+            matches!(result, Err(BungeeCordError::MissingSecret)),
+            "an unconfigured secret must reject logins"
         );
     }
 }
