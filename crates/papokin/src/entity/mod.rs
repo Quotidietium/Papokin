@@ -992,6 +992,9 @@ pub struct Entity {
     mount_lock: std::sync::Mutex<()>,
     /// 此实体被附着/拴系到的实体（如有）
     pub leashed_to: std::sync::Mutex<Option<Arc<dyn EntityBase>>>,
+    /// 重载后待重绑的拴绳目标（写入 `Leash` 标签、加载后按
+    /// UUID/锚点延迟解析，见 [`Entity::tick_leash`]）
+    pending_leash: std::sync::Mutex<Option<PendingLeash>>,
     /// 实体下坐骑后再次骑乘前的冷却时间
     pub riding_cooldown: AtomicI32,
     /// 实体的年龄（以刻为单位）。负值表示幼年。
@@ -1039,6 +1042,54 @@ pub struct Entity {
     /// （见 `World::register_entity_in_chunk_index`）。`set_pos` 跨块
     /// 移动时凭它向新桶插入，供 `get_entities_at_box` 分块索引查询。
     pub chunk_index_handle: OnceLock<Weak<dyn EntityBase>>,
+}
+
+/// 重载后待重绑的拴绳目标。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeashTarget {
+    /// 拴到实体（玩家/生物）：按 UUID 延迟解析。
+    EntityId(uuid::Uuid),
+    /// 拴到拴绳结：拴绳结实体 `saveable=false` 不落盘，
+    /// 按锚点方块在重载后重建。
+    Knot(BlockPos),
+}
+
+/// 待解析的拴绳状态：目标 + 解析重试计数。
+#[derive(Debug)]
+pub(crate) struct PendingLeash {
+    target: LeashTarget,
+    attempts: u32,
+}
+
+/// 将拴绳目标写为原版 `Leash` 复合标签：实体持有者写
+/// `UUID`，拴绳结写 `X`/`Y`/`Z` 锚点整数。
+pub(crate) fn write_leash_target(target: &LeashTarget, nbt: &mut NbtCompound) {
+    let mut leash = NbtCompound::new();
+    match target {
+        LeashTarget::EntityId(uuid) => {
+            leash.put_uuid("UUID", *uuid);
+        }
+        LeashTarget::Knot(pos) => {
+            leash.put_int("X", pos.0.x);
+            leash.put_int("Y", pos.0.y);
+            leash.put_int("Z", pos.0.z);
+        }
+    }
+    nbt.put_compound("Leash", leash);
+}
+
+/// 解析原版 `Leash` 复合标签；`UUID` 与坐标并存时优先 UUID
+/// （原版语义）。
+#[must_use]
+pub(crate) fn read_leash_target(nbt: &NbtCompound) -> Option<LeashTarget> {
+    let leash = nbt.get_compound("Leash")?;
+    if let Some(uuid) = leash.get_uuid("UUID") {
+        return Some(LeashTarget::EntityId(uuid));
+    }
+    let x = leash.get_int("X")?;
+    let y = leash.get_int("Y")?;
+    let z = leash.get_int("Z")?;
+    Some(LeashTarget::Knot(BlockPos::new(x, y, z)))
 }
 
 impl Entity {
@@ -1146,6 +1197,7 @@ impl Entity {
             velocity_lock: std::sync::Mutex::new(()),
             mount_lock: std::sync::Mutex::new(()),
             leashed_to: std::sync::Mutex::new(None),
+            pending_leash: std::sync::Mutex::new(None),
 
             riding_cooldown: AtomicI32::new(0),
             age: AtomicI32::new(0),
@@ -3401,6 +3453,11 @@ impl Entity {
     }
 
     pub fn tick_leash(&self) {
+        // 重载后的拴绳重绑优先：未绑定时每刻尝试解析待定目标
+        if !self.is_leashed() {
+            self.try_resolve_pending_leash();
+        }
+
         let holder = {
             let Ok(guard) = self.leashed_to.try_lock() else {
                 return;
@@ -3476,6 +3533,96 @@ impl Entity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_some()
+    }
+
+    /// 重载后的拴绳重绑（由 [`Self::tick_leash`] 驱动）。
+    ///
+    /// - 实体持有者按 UUID 解析：持有者区块可能尚未加载，最多等
+    ///   600 刻（30 秒），超时视为持有者已消失，掉落拴绳对齐原版；
+    /// - 拴绳结锚点：先找现存结；锚点区块未加载则继续等待（方块
+    ///   不会在区块离线时消失，无需超时），区块已加载却既无结也
+    ///   非栅栏则掉落拴绳，仍是栅栏则静默重建结。
+    ///
+    /// 恢复持久化状态不重发 `PlayerLeashEntityEvent`（那是玩家
+    /// 动作事件），直接绑定并广播链接包。
+    fn try_resolve_pending_leash(&self) {
+        /// 单刻解析结果：绑定持有者 / 放弃并掉落拴绳 / 本刻无法
+        /// 判定继续等待。
+        enum Resolution {
+            Bind(Arc<dyn EntityBase>),
+            Drop,
+            Wait,
+        }
+        let mut pending = self
+            .pending_leash
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(state) = pending.as_mut() else {
+            return;
+        };
+
+        let world = self.world.load();
+        let resolution = match state.target {
+            LeashTarget::EntityId(uuid) => match world.get_entity_by_uuid(uuid) {
+                Some(holder) if holder.get_entity().entity_id != self.entity_id => {
+                    Resolution::Bind(holder)
+                }
+                // 自拴（损坏存档）或超时未出现：持有者视为不存在
+                _ if state.attempts >= 600 => Resolution::Drop,
+                _ => {
+                    state.attempts += 1;
+                    Resolution::Wait
+                }
+            },
+            LeashTarget::Knot(pos) => {
+                crate::entity::decoration::leash_knot::LeashKnotEntity::get_knot(&world, pos)
+                    .map_or_else(
+                        || match world.get_block_state_id_if_loaded(&pos) {
+                            // 锚点区块尚未加载：等待（方块不会在
+                            // 区块离线时消失，无超时必要）
+                            None => Resolution::Wait,
+                            // 仍是栅栏：静默重建拴绳结
+                            Some(state_id) if Block::from_state_id(state_id)
+                                .has_tag(&tag::Block::MINECRAFT_FENCES) =>
+                            {
+                                let knot = crate::entity::decoration::leash_knot::LeashKnotEntity::create_knot_silent(&world, pos);
+                                Resolution::Bind(knot as Arc<dyn EntityBase>)
+                            }
+                            // 锚点方块已不存在（离线期间栅栏被结构
+                            // 性移除/存档被编辑）：掉落拴绳
+                            Some(_) => Resolution::Drop,
+                        },
+                        |knot| Resolution::Bind(knot as Arc<dyn EntityBase>),
+                    )
+            }
+        };
+
+        match resolution {
+            Resolution::Wait => {}
+            Resolution::Bind(holder) => {
+                *pending = None;
+                drop(pending);
+                let holder_entity_id = holder.get_entity().entity_id;
+                *self
+                    .leashed_to
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(holder);
+                let je_packet = papokin_protocol::java::client::play::CSetEntityLink::new(
+                    self.entity_id,
+                    holder_entity_id,
+                    true,
+                );
+                self.world
+                    .load()
+                    .broadcast_to_chunk(self.chunk_pos.load(), &je_packet);
+            }
+            Resolution::Drop => {
+                *pending = None;
+                drop(pending);
+                let lead_item = ItemStack::new(1, &papokin_data::item::Item::LEAD);
+                world.drop_stack(&self.block_pos.load(), lead_item);
+            }
+        }
     }
 
     pub fn add_passenger(&self, vehicle: Arc<dyn EntityBase>, passenger: Arc<dyn EntityBase>) {
@@ -4187,6 +4334,31 @@ impl Entity {
             nbt.put_compound("PumpkinCustomData", custom_data.clone());
         }
 
+        // 拴绳关系：优先写活跃持有者；持有者尚未解析（重绑完成前
+        // 的再次保存）时写待解析目标，避免中途落盘把拴绳弄丢
+        let leashed = self
+            .leashed_to
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(holder) = leashed.as_ref() {
+            let target = holder
+                .cast_any()
+                .downcast_ref::<Arc<crate::entity::decoration::leash_knot::LeashKnotEntity>>()
+                .map_or_else(
+                    || LeashTarget::EntityId(holder.get_entity().entity_uuid),
+                    |knot| LeashTarget::Knot(knot.block_pos()),
+                );
+            write_leash_target(&target, nbt);
+        } else {
+            let pending = self
+                .pending_leash
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(pending) = pending.as_ref() {
+                write_leash_target(&pending.target, nbt);
+            }
+        }
+
         // todo 更多...
     }
 
@@ -4267,6 +4439,18 @@ impl Entity {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *data = custom_data.clone();
+        }
+
+        // 拴绳目标此刻无法解析为实体引用（持有者可能尚未加载），
+        // 先登记为待解析目标，由 `tick_leash` 延迟重绑
+        if let Some(target) = read_leash_target(nbt) {
+            *self
+                .pending_leash
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(PendingLeash {
+                target,
+                attempts: 0,
+            });
         }
 
         // todo 更多...
@@ -4382,6 +4566,43 @@ pub enum Flag {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leash_target_nbt_roundtrip_prefers_uuid() {
+        let uuid = uuid::Uuid::new_v4();
+        for target in [
+            LeashTarget::EntityId(uuid),
+            LeashTarget::Knot(BlockPos::new(10, -64, 320)),
+        ] {
+            let mut nbt = NbtCompound::new();
+            write_leash_target(&target, &mut nbt);
+            assert_eq!(read_leash_target(&nbt), Some(target));
+        }
+
+        // UUID 与锚点并存：优先 UUID（原版语义）
+        let mut nbt = NbtCompound::new();
+        write_leash_target(&LeashTarget::EntityId(uuid), &mut nbt);
+        if let Some(leash) = nbt.get_compound("Leash") {
+            let mut mixed = leash.clone();
+            mixed.put_int("X", 1);
+            mixed.put_int("Y", 2);
+            mixed.put_int("Z", 3);
+            let mut outer = NbtCompound::new();
+            outer.put_compound("Leash", mixed);
+            assert_eq!(read_leash_target(&outer), Some(LeashTarget::EntityId(uuid)));
+        } else {
+            panic!("Leash 复合标签应存在");
+        }
+
+        // 无 Leash 标签 / 缺坐标：None
+        let empty = NbtCompound::new();
+        assert_eq!(read_leash_target(&empty), None);
+        let mut knot_only = NbtCompound::new();
+        let mut leash = NbtCompound::new();
+        leash.put_int("X", 1);
+        knot_only.put_compound("Leash", leash);
+        assert_eq!(read_leash_target(&knot_only), None);
+    }
 
     #[test]
     fn equipment_break_status_maps_all_slots() {

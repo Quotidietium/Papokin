@@ -61,6 +61,19 @@ impl LeashKnotEntity {
     }
 
     pub fn create_knot(world: &Arc<World>, pos: BlockPos) -> Arc<Self> {
+        let knot = Self::create_knot_silent(world, pos);
+        let raw_pos = Vector3::new(
+            f64::from(pos.0.x) + 0.5,
+            f64::from(pos.0.y) + Self::OFFSET_Y,
+            f64::from(pos.0.z) + 0.5,
+        );
+        world.play_sound(Sound::ItemLeadTied, SoundCategory::Neutral, &raw_pos);
+        knot
+    }
+
+    /// 静默重建拴绳结（不播音效）：供重载后的拴绳重绑使用——
+    /// 玩家没有执行拴绳动作，不应听到系绳音效。
+    pub fn create_knot_silent(world: &Arc<World>, pos: BlockPos) -> Arc<Self> {
         let raw_pos = Vector3::new(
             f64::from(pos.0.x) + 0.5,
             f64::from(pos.0.y) + Self::OFFSET_Y,
@@ -70,8 +83,6 @@ impl LeashKnotEntity {
         let entity = Entity::new(world.clone(), raw_pos, &EntityType::LEASH_KNOT);
         let knot = Arc::new(Self::new(entity, pos));
         world.spawn_entity(knot.clone() as Arc<dyn EntityBase>);
-
-        world.play_sound(Sound::ItemLeadTied, SoundCategory::Neutral, &raw_pos);
 
         knot
     }

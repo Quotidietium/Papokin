@@ -14,6 +14,7 @@ use crate::entity::decoration::{
     display::{BlockDisplayEntity, ItemDisplayEntity, TextDisplayEntity},
     end_crystal::EndCrystalEntity,
     item_frame::ItemFrameEntity,
+    leash_knot::LeashKnotEntity,
     painting::PaintingEntity,
 };
 use crate::entity::experience_orb::ExperienceOrbEntity;
@@ -242,6 +243,19 @@ pub fn from_type(
         id if id == EntityType::ITEM_DISPLAY.id => ItemDisplayEntity::new(entity),
         id if id == EntityType::TEXT_DISPLAY.id => TextDisplayEntity::new(entity),
         id if id == EntityType::PAINTING.id => Arc::new(PaintingEntity::new(entity)),
+        id if id == EntityType::LEASH_KNOT.id => {
+            // 从实体位置反推锚点方块（写入时 pos = 方块中心 + 0.375
+            // 偏移）。此前无分支落入裸 Entity 回退：重载的拴绳结变成
+            // 无行为、无交互、永不自清的幽灵实体，随时间在实体区块
+            // 中累积。
+            let p = entity.pos.load();
+            let block = BlockPos::new(
+                p.x.floor() as i32,
+                (p.y - LeashKnotEntity::OFFSET_Y).round() as i32,
+                p.z.floor() as i32,
+            );
+            Arc::new(LeashKnotEntity::new(entity, block))
+        }
         id if id == EntityType::ITEM_FRAME.id || id == EntityType::GLOW_ITEM_FRAME.id => {
             Arc::new(ItemFrameEntity::new(entity))
         }
