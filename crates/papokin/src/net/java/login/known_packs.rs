@@ -5,6 +5,17 @@ use crate::server::registry::inject_custom_entries;
 
 impl PendingConnection {
     pub async fn handle_known_packs(&mut self, server: &Server) {
+        // 每个 Config 会话只允许一次：本函数会全量序列化并发送数百 KB
+        // 的注册表/标签数据，改过的客户端重复触发即是出站带宽与 CPU
+        // 的资源放大（数十字节的包换数十 MB 的响应）。
+        if self
+            .known_packs_handled
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!("连接 {} 重复触发注册表同步，已断开", self.id);
+            self.kick(TextComponent::text("重复的已知包响应")).await;
+            return;
+        }
         let version = self.version.load();
         if version.supports_configuration_state() {
             if version < JavaMinecraftVersion::V_1_20_5 {

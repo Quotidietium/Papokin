@@ -166,6 +166,11 @@ impl PendingConnection {
             uuid::Uuid::new_v4(),
         );
         self.send_packet_now(&packet).await;
+        // 记录 CLoginSuccess 已发送：SLoginAcknowledged 与
+        // SAcknowledgeFinishConfig 以此为前置条件，封堵跳过认证
+        // 直接推进阶段的伪造包序列。
+        self.login_success_sent
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if self.version.load().supports_configuration_state() {
             return None;
         }

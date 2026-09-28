@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZero, sync::Arc};
+use std::{net::SocketAddr, num::NonZero, sync::Arc, sync::atomic::AtomicBool};
 
 use bytes::Bytes;
 use crossbeam::atomic::AtomicCell;
@@ -80,6 +80,21 @@ pub struct PendingConnection {
     /// 代理现代转发（Velocity/Vine）插件请求的事务 id；
     /// 响应必须匹配，防止其他/重放的插件响应被当作转发数据。
     pub login_plugin_message_id: Option<i32>,
+    /// `CLoginSuccess` 是否已发送。没有它，`SLoginAcknowledged` 与
+    /// `SAcknowledgeFinishConfig` 只凭 `gameprofile` 是否非空放行——
+    /// 而 `gameprofile` 在加密握手**之前**就已写入，改过的客户端可
+    /// 以跳过 `SEncryptionResponse`（即跳过认证）直接推进阶段，以
+    /// 伪造的名称/UUID 进入服务器。
+    pub login_success_sent: AtomicBool,
+    /// Config 阶段的注册表同步是否已完成。`handle_known_packs` 会全量
+    /// 序列化并发送数百 KB 的注册表/标签数据，重复触发即资源放大。
+    pub known_packs_handled: AtomicBool,
+    /// 状态（ping）阶段是否已响应过一次状态请求；重复请求直接断开
+    /// （每个响应都重建完整状态 JSON 并触发插件事件）。
+    pub status_responded: AtomicBool,
+    /// 已下发资源包的 UUID；资源包响应必须匹配，防止伪造响应驱动
+    /// 配置流程推进。
+    pub resource_pack_id: AtomicCell<Option<uuid::Uuid>>,
 }
 
 impl PendingConnection {
@@ -109,6 +124,10 @@ impl PendingConnection {
             cookies: super::cookie::new_cookie_store(),
             pending_cookie_requests: super::cookie::new_pending_requests(),
             login_plugin_message_id: None,
+            login_success_sent: AtomicBool::new(false),
+            known_packs_handled: AtomicBool::new(false),
+            status_responded: AtomicBool::new(false),
+            resource_pack_id: AtomicCell::new(None),
         }
     }
 
@@ -443,6 +462,16 @@ impl PendingConnection {
                 Ok(None)
             }
             id if id == SAcknowledgeFinishConfig::to_id(version) => {
+                // 前置：登录必须真正完成（CLoginSuccess 已发送）。
+                // 仅凭 gameprofile 非空放行会被跳过认证的伪造序列利用。
+                if !self
+                    .login_success_sent
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    warn!("连接 {} 未完成登录即确认配置完成，已断开", self.id);
+                    self.kick(TextComponent::text("未完成登录")).await;
+                    return Ok(Some(PacketHandlerResult::Stop));
+                }
                 let Some(profile) = self.gameprofile.clone() else {
                     return Ok(Some(PacketHandlerResult::Stop));
                 };
@@ -535,9 +564,16 @@ impl PendingConnection {
         server: &Server,
         packet: SConfigResourcePack,
     ) {
+        use papokin_protocol::java::server::config::ResourcePackResponseResult;
         let resource_config = &server.advanced_config.resource_pack.java;
         if resource_config.enabled {
-            use papokin_protocol::java::server::config::ResourcePackResponseResult;
+            // 与 config 阶段一致的 UUID 校验：响应必须对应我们下发的
+            // 资源包，否则改过的客户端可用伪造响应驱动流程推进
+            // （叠加 known-packs 重放即资源放大）。
+            if self.resource_pack_id.load() != Some(packet.uuid) {
+                warn!("客户端 {} 返回了未下发资源包的响应，已忽略", self.id);
+                return;
+            }
             match packet.response_result() {
                 ResourcePackResponseResult::Downloaded
                 | ResourcePackResponseResult::DownloadSuccess

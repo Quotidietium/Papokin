@@ -15,6 +15,17 @@ use tracing::debug;
 impl PendingConnection {
     pub async fn handle_status_request(&mut self, server: &Arc<Server>) {
         debug!("正在处理状态请求");
+        // 每连接仅响应一次：每个响应都要克隆完整状态（含 favicon）、
+        // 触发插件事件并重新序列化 JSON，改过的客户端可在 500 包/秒
+        // 限速内持续放大出站带宽。重复请求直接断开（多数服务端同此）。
+        if self
+            .status_responded
+            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!("连接 {} 重复请求服务器状态，已断开", self.id);
+            self.close();
+            return;
+        }
         let mut status_response = {
             let status = server.get_status();
             status

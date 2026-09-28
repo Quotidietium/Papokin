@@ -7,6 +7,17 @@ impl PendingConnection {
         server: &Server,
     ) -> Option<PacketHandlerResult> {
         debug!("正在处理登录确认");
+        // 仅当 CLoginSuccess 已发送后才允许确认配置切换。没有该守卫，
+        // 改过的客户端可在 SLoginStart 之后跳过 SEncryptionResponse
+        // （即跳过认证）直接进入配置阶段，以伪造的名称/UUID 进服。
+        if !self
+            .login_success_sent
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            tracing::warn!("连接 {} 未完成登录即发送登录确认包，已断开", self.id);
+            self.kick(TextComponent::text("未完成登录")).await;
+            return Some(PacketHandlerResult::Stop);
+        }
         if !self.version.load().supports_configuration_state() {
             self.kick(TextComponent::text("此版本不支持配置状态")).await;
             return Some(PacketHandlerResult::Stop);
@@ -80,6 +91,9 @@ impl PendingConnection {
         let resource_config = &server.advanced_config.resource_pack.java;
         if resource_config.enabled {
             let uuid = Uuid::new_v3(&uuid::Uuid::NAMESPACE_DNS, resource_config.url.as_bytes());
+            // 记录已下发的资源包 UUID：后续资源包响应必须与之匹配，
+            // 防止伪造响应驱动配置流程推进（与 config 阶段同一校验）。
+            self.resource_pack_id.store(Some(uuid));
             let resource_pack = CConfigAddResourcePack::new(
                 &uuid,
                 &resource_config.url,

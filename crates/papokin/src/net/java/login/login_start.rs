@@ -8,6 +8,16 @@ impl PendingConnection {
         login_start: SLoginStart,
     ) -> Option<PacketHandlerResult> {
         debug!("登录开始");
+        // 拒绝重入：认证完成（或加密请求已发出、gameprofile 已写入）
+        // 后再发 SLoginStart，可用客户端自选 UUID 覆盖已认证档案。
+        if self.gameprofile.is_some()
+            || self
+                .login_success_sent
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            self.kick(TextComponent::text("登录已在进行中")).await;
+            return Some(PacketHandlerResult::Stop);
+        }
 
         let max_players = server.advanced_config.networking.java.max_players;
         if max_players > 0 && server.get_player_count() >= max_players as usize {
