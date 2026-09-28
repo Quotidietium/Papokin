@@ -23,6 +23,7 @@ use connection_cache::{CachedBranding, CachedStatus};
 use key_store::KeyStore;
 use papokin_config::{AdvancedConfiguration, BasicConfiguration, TelemetryConfig};
 use papokin_data::dimension::Dimension;
+use papokin_data::translation;
 use papokin_util::permission::PermissionManager;
 use papokin_util::text::color::NamedColor;
 use papokin_world::dimension::into_level;
@@ -705,7 +706,17 @@ impl Server {
             &mut PlayerLoginEvent::new(player.clone(), TextComponent::text("你已被踢出服务器"));
             'after: {
                 player.screen_handler_sync_handler.store_player(player.clone());
-                world.add_player(&player).is_ok().then(|| {
+                if let Err(e) = world.add_player(&player) {
+                    // 同 UUID 双连接的入列点兜底（World::add_player
+                    // 查重）：踢出第二条连接，防止双实例各自加载/
+                    // 保存同一份存档造成复制与回档
+                    warn!("拒绝加入：{e}");
+                    player.kick(&TextComponent::translate(
+                        translation::java::MULTIPLAYER_DISCONNECT_DUPLICATE_LOGIN,
+                        [],
+                    ));
+                    None
+                } else {
                     {
                         let mut user_cache = self
                             .data
@@ -726,8 +737,8 @@ impl Server {
                         }
                     }
 
-                    (player, world)
-                })
+                    Some((player, world))
+                }
             }
 
             'cancelled: {

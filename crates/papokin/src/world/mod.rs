@@ -3893,11 +3893,33 @@ impl World {
     ///
     /// * `player`: 指向玩家对象的 `Arc<Player>` 引用。
     pub fn add_player(&self, player: &Arc<Player>) -> Result<(), String> {
+        let mut duplicate = false;
         self.players.rcu(|current_list| {
+            // rcu 在 CAS 失败后会用新列表重跑本闭包：先复位标志
+            // （末次运行必为 CAS 成功那次）
+            duplicate = false;
             let mut new_list = (**current_list).clone();
+            // 同 UUID 双连接的入列点兜底：既有的重复登录查重只在
+            // 加密响应一处且存在 TOCTOU（入列发生在其后的任意长
+            // Config 阶段之后），离线/BungeeCord/Velocity 路径完全
+            // 无查重。两个 Player 实例各自加载同一份存档再各自保存
+            // 即物品/经验复制与回档。
+            if new_list
+                .iter()
+                .any(|p| p.gameprofile.id == player.gameprofile.id)
+            {
+                duplicate = true;
+                return new_list;
+            }
             new_list.push(player.clone());
             new_list
         });
+        if duplicate {
+            return Err(format!(
+                "UUID {}（{}）已在此世界中",
+                player.gameprofile.id, player.gameprofile.name
+            ));
+        }
         self.entity_tracker
             .add_entity(&(player.clone() as Arc<dyn EntityBase>), self);
         Ok(())
