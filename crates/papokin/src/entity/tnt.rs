@@ -2,6 +2,7 @@ use super::{Entity, EntityBase, living::LivingEntity};
 use crate::server::Server;
 use core::f32;
 use papokin_data::Block;
+use papokin_nbt::compound::NbtCompound;
 use papokin_protocol::codec::var_int::VarInt;
 use papokin_util::math::vector3::Vector3;
 use std::{
@@ -14,7 +15,9 @@ use std::{
 
 pub struct TNTEntity {
     entity: Entity,
-    power: f32,
+    /// 爆炸威力，按 f32 位模式原子存取（`read_custom_nbt` 只有
+    /// `&self`，重载需要内部可变性）。
+    power: AtomicU32,
     fuse: AtomicU32,
 }
 
@@ -22,7 +25,7 @@ impl TNTEntity {
     pub const fn new(entity: Entity, power: f32, fuse: u32) -> Self {
         Self {
             entity,
-            power,
+            power: AtomicU32::new(power.to_bits()),
             fuse: AtomicU32::new(fuse),
         }
     }
@@ -61,7 +64,7 @@ impl EntityBase for TNTEntity {
             self.entity.remove();
             let world = self.entity.world.load_full();
             let pos = self.entity.pos.load();
-            let power = self.power;
+            let power = f32::from_bits(self.power.load(Relaxed));
             if world.level_info.load().game_rules.tnt_explodes {
                 world.explode(pos, power, crate::world::ExplosionInteraction::Tnt);
             }
@@ -90,6 +93,27 @@ impl EntityBase for TNTEntity {
 
     fn get_entity(&self) -> &Entity {
         &self.entity
+    }
+
+    fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
+        // 引信饱和而非截断：引信只能来自本实现的有限递减，但防
+        // 御性饱和成本为零。
+        nbt.put_short("Fuse", self.fuse.load(Relaxed).min(i16::MAX as u32) as i16);
+        // 原版威力恒 4 不落盘；本实现允许按实体定制威力，不写回
+        // 会在重载后静默回落到默认威力（爆炸 API/发射器等场景）。
+        nbt.put_float("PumpkinPower", f32::from_bits(self.power.load(Relaxed)));
+    }
+
+    fn read_custom_nbt(&self, nbt: &NbtCompound) {
+        // 负值（损坏存档）按默认引信处理，不得符号扩展
+        self.fuse
+            .store(nbt.get_short("Fuse").unwrap_or(80).max(0) as u32, Relaxed);
+        if let Some(power) = nbt.get_float("PumpkinPower")
+            && power.is_finite()
+            && power >= 0.0
+        {
+            self.power.store(power.to_bits(), Relaxed);
+        }
     }
 
     fn get_living_entity(&self) -> Option<&LivingEntity> {
