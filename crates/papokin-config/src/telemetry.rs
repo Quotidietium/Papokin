@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn telemetry_rejects_short_interval_and_empty_endpoint() {
-        let mut config = TelemetryConfig {
+        let config = TelemetryConfig {
             interval_secs: 30,
             ..TelemetryConfig::default()
         };
