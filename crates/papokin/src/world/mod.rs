@@ -3958,6 +3958,11 @@ impl World {
         let mut removed_player: Option<Arc<Player>> = None;
 
         self.players.rcu(|current_list| {
+            // rcu 在 CAS 失败后会用新列表重跑本闭包：若上次失败的
+            // 尝试已写入 removed_player，重试必须先清空，否则并发
+            // 移除时两个调用方都会拿到 Some（重复广播与双份
+            // PlayerLeaveEvent）。
+            removed_player = None;
             let mut new_list = (**current_list).clone();
             // 在过滤掉玩家之前先找到玩家
             let pos = new_list
