@@ -21,6 +21,13 @@ impl ItemBehaviour for NameTagItem {
         if entity.entity_type.saveable
             && let Some(name) = item.get_data_component::<CustomNameImpl>()
         {
+            // 名字经 CustomName 组件（网络侧 NBT 文本树）注入，深嵌套
+            // 的 extra/translated 层可拼出巨量文本并随实体 NBT 永久
+            // 持久化；原版命名牌名字同样很短，超限直接忽略。
+            const MAX_NAME_CHARS: usize = 512;
+            if name.name.clone().get_text().chars().count() > MAX_NAME_CHARS {
+                return;
+            }
             let world = entity.world.load();
             let Some(player_arc) = world.get_player_by_id(player.entity_id()) else {
                 return;
