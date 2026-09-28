@@ -40,6 +40,16 @@ impl DoubleInventory {
 }
 
 impl Inventory for DoubleInventory {
+    /// 双联视图是每次开屏新建的临时实例（不同玩家各持一份），
+    /// 以自身地址为键无法跨玩家对上号；递归收集底层两个半箱
+    /// 的身份键，使点击串行化命中同一组共享实例。
+    fn collect_click_lock_ids(&self, _self_id: usize, out: &mut Vec<usize>) {
+        self.first
+            .collect_click_lock_ids(crate::inventory::inventory_lock_id(&self.first), out);
+        self.second
+            .collect_click_lock_ids(crate::inventory::inventory_lock_id(&self.second), out);
+    }
+
     fn size(&self) -> usize {
         self.first.size() + self.second.size()
     }
@@ -118,5 +128,36 @@ impl Clearable for DoubleInventory {
     fn clear(&self) {
         self.first.clear();
         self.second.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inventory::{SimpleInventory, inventory_lock_id};
+
+    #[test]
+    fn double_inventory_resolves_lock_ids_to_shared_halves() {
+        let first: Arc<dyn Inventory> = Arc::new(SimpleInventory::new(27));
+        let second: Arc<dyn Inventory> = Arc::new(SimpleInventory::new(27));
+        let first_id = inventory_lock_id(&first);
+        let second_id = inventory_lock_id(&second);
+
+        // 两个玩家各开一次大箱 = 两个不同的临时包装实例；
+        // 点击串行化键必须解析到同一对共享半箱，而不是包装自身
+        let view_a: Arc<dyn Inventory> = DoubleInventory::new(first.clone(), second.clone());
+        let view_b: Arc<dyn Inventory> = DoubleInventory::new(first.clone(), second.clone());
+
+        let mut ids_a = Vec::new();
+        let mut ids_b = Vec::new();
+        view_a.collect_click_lock_ids(1, &mut ids_a);
+        view_b.collect_click_lock_ids(2, &mut ids_b);
+        ids_a.sort_unstable();
+        ids_b.sort_unstable();
+
+        assert_eq!(ids_a, ids_b, "不同包装实例必须解析出相同键集合");
+        assert!(ids_a.contains(&first_id) && ids_a.contains(&second_id));
+        // 传入的包装自身 id（1/2，非真实指针）不应混入
+        assert!(!ids_a.contains(&1) && !ids_a.contains(&2));
     }
 }

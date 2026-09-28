@@ -7,7 +7,28 @@ use std::{
     sync::Arc,
 };
 
+/// 物品栏实例的点击串行化身份键（`Arc` 数据指针地址）。
+#[must_use]
+pub fn inventory_lock_id(inventory: &Arc<dyn Inventory>) -> usize {
+    Arc::as_ptr(inventory).cast::<()>() as usize
+}
+
 pub trait Inventory: Send + Sync + Clearable {
+    /// 收集本物品栏参与「点击串行化」的身份键。
+    ///
+    /// 不同玩家的屏幕处理器互斥锁互不相同，对同一共享容器（箱子、
+    /// 木桶等）的读-改-写可以交错：陈旧快照整体写回即复制/丢失物
+    /// 品。`ScreenHandler::on_slot_click` 会收集本屏涉及的全部身份
+    /// 键并映射到全局条带锁，跨玩家串行化整次点击。
+    ///
+    /// 默认实现以调用方传入的 `self_id`（[`inventory_lock_id`]）为
+    /// 键，共享方块实体等稳定实例直接适用；组合物品栏（如双箱的
+    /// [`crate::inventory::DoubleInventory`]）应覆写并递归到底层，
+    /// 使不同玩家打开的临时包装实例仍解析到同一组键。
+    fn collect_click_lock_ids(&self, self_id: usize, out: &mut Vec<usize>) {
+        out.push(self_id);
+    }
+
     fn size(&self) -> usize;
 
     fn is_empty(&self) -> bool;

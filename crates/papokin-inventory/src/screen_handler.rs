@@ -117,6 +117,15 @@ impl ScreenProperty {
 /// - 获得经验
 ///
 /// 实现者通常是能够打开容器的玩家实体。
+///
+/// 点击串行化条带锁：固定数量全局互斥锁，容器身份键按取模映射。
+/// 两个不同容器偶然共享一条带只是一次无害的额外串行化；同一
+/// 容器永远命中同一条带，从而跨玩家串行化对同一底层的整次
+/// 读-改-写点击（见 [`Inventory::collect_click_lock_ids`]）。
+const CLICK_LOCK_STRIPES_LEN: usize = 64;
+static CLICK_LOCK_STRIPES: [std::sync::Mutex<()>; CLICK_LOCK_STRIPES_LEN] =
+    [const { std::sync::Mutex::new(()) }; CLICK_LOCK_STRIPES_LEN];
+
 pub trait InventoryPlayer: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
     /// 将一件物品丢入世界。
@@ -798,7 +807,52 @@ pub trait ScreenHandler: Send + Sync {
         action_type: SlotActionType,
         player: &dyn InventoryPlayer,
     ) {
+        // 跨玩家竞态串行化：各玩家的屏幕处理器互斥锁互不相同，
+        // 对同一共享容器（箱子/木桶/发射器……）的「读槽-改-写回」
+        // 可以交错——陈旧快照整体覆盖槽位即复制或吞掉并发改动。
+        // 在整次点击期间持有该容器映射到的全局条带锁。
+        // 键去重 + 升序加锁保证任意两屏的加锁序一致（无死锁）；
+        // 键经 `collect_click_lock_ids` 解析，双箱等临时包装实例
+        // 递归到共享底层。
+        let inventories: Vec<Arc<dyn Inventory>> = self
+            .get_behaviour()
+            .slots
+            .iter()
+            .map(|slot| slot.get_inventory())
+            .collect();
+        let mut lock_ids: Vec<usize> = Vec::new();
+        for inventory in &inventories {
+            inventory.collect_click_lock_ids(
+                crate::inventory::inventory_lock_id(inventory),
+                &mut lock_ids,
+            );
+        }
+        // 关键：去重排序必须落在「条带号」而非原始键上——同一调用
+        // 里两个不同容器地址可能哈希到同一条带，按地址序逐个加锁
+        // 会让本线程对同一条带二次加锁（std::Mutex 不可重入，直接
+        // 自死锁；表现为随机挂起）。先归一到条带号再排序去重，
+        // 单线程内每条带至多加锁一次，跨线程按同一升序获取无环。
+        let mut stripes: Vec<usize> = lock_ids
+            .iter()
+            .map(|id| id % CLICK_LOCK_STRIPES_LEN)
+            .collect();
+        stripes.sort_unstable();
+        stripes.dedup();
+
+        let mut guards: Vec<std::sync::MutexGuard<'_, ()>> = Vec::with_capacity(stripes.len());
+        for stripe_index in stripes {
+            let stripe = &CLICK_LOCK_STRIPES[stripe_index];
+            guards.push(
+                stripe
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+        }
+
         self.internal_on_slot_click(slot_index, button, action_type, player);
+
+        // 守卫至此才释放（显式 drop 同时标记集合被消费）
+        drop(guards);
     }
 
     /// 内部的槽位点击处理实现。
