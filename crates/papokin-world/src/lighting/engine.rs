@@ -791,31 +791,6 @@ impl Default for LightEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chunk_system::Chunk;
-    use crate::chunk_system::generation_cache::Cache;
-    use crate::generation::get_world_gen;
-    use crate::generation::proto_chunk::ProtoChunk;
-    use papokin_data::dimension::Dimension;
-    use papokin_util::world_seed::Seed;
-
-    fn empty_cache() -> Cache {
-        let world_gen = get_world_gen(
-            Seed(1_786_192_857_164_469_025),
-            Dimension::OVERWORLD,
-            false,
-            Vec::new(),
-            String::new(),
-        );
-        let mut cache = Cache::new(-1, -1, 3);
-        for cx in -1..=1 {
-            for cz in -1..=1 {
-                cache
-                    .chunks
-                    .push(Chunk::Proto(Box::new(ProtoChunk::new(cx, cz, &world_gen))));
-            }
-        }
-        cache
-    }
 
     #[test]
     fn visited_bitset_before_capacity_returns_false() {
