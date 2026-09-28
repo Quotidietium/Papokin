@@ -3360,18 +3360,19 @@ impl Entity {
             }
         }
 
+        // 玩家侧事件必须先于摘除并尊重取消：此前 holder 先被
+        // take()、事件后发且不读标志，取消解绳后拴绳照样断开
         let old_holder = self
             .leashed_to
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if old_holder.is_none() {
+            .clone();
+        let Some(holder) = old_holder else {
             return;
-        }
+        };
 
-        if let Some(holder) = &old_holder
+        if let Some(player) = holder.get_player()
             && let Some(server) = world.server.upgrade()
-            && let Some(player) = holder.get_player()
             && let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
         {
             let mut event = crate::plugin::api::events::player::player_unleash_entity::PlayerUnleashEntityEvent {
@@ -3380,7 +3381,16 @@ impl Entity {
                 cancelled: false,
             };
             server.plugin_manager.fire_blocking(&server, &mut event);
+            if event.cancelled {
+                return;
+            }
         }
+
+        // 真正摘除（并发摘除竞态下 take 到 None 也照常广播断开包）
+        self.leashed_to
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
 
         let je_packet =
             papokin_protocol::java::client::play::CSetEntityLink::new(self.entity_id, -1, true);
