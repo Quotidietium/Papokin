@@ -472,20 +472,25 @@ impl crate::block::entities::BlockEntity for BrewingStandBlockEntity {
     {
         let mut entity = Self::new(position);
 
-        // 如果 NBT 中存在，加载酿造时间 / 燃料
+        // 如果 NBT 中存在，加载酿造时间 / 燃料（钳制到 i16 语义范围：
+        // 写侧按 i16 落盘，越界值会造成往返漂移与节奏异常）
         if let Some(bt) = nbt
             .get_short("BrewTime")
             .map(i32::from)
             .or_else(|| nbt.get_int("BrewTime"))
         {
-            entity.brew_time.store(bt, Ordering::Relaxed);
+            entity
+                .brew_time
+                .store(bt.clamp(0, i16::MAX as i32), Ordering::Relaxed);
         }
         if let Some(f) = nbt
             .get_byte("Fuel")
             .map(i32::from)
             .or_else(|| nbt.get_int("Fuel"))
         {
-            entity.fuel.store(f, Ordering::Relaxed);
+            entity
+                .fuel
+                .store(f.clamp(0, i16::MAX as i32), Ordering::Relaxed);
         }
 
         // 从 NBT 加载物品栏物品

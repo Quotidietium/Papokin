@@ -581,12 +581,14 @@ macro_rules! impl_block_entity_for_cooking {
                     nbt.get_short("lit_time_remaining")
                         .map_or(0, |lit_time_remaining| lit_time_remaining as u16),
                 );
-                // 从 NBT 加载 RecipesUsed（原版格式：配方 ID -> 合成次数的映射）
+                // 从 NBT 加载 RecipesUsed（原版格式：配方 ID -> 合成次数的映射）。
+                // 次数为负时按 0 处理：负 i32 直接 `as u32` 会变成近 2^31 的
+                // 巨额计数，玩家破坏熔炉时可凭空获得对应规模的巨额经验。
                 let mut recipes_used_map = HashMap::new();
                 if let Some(recipes_compound) = nbt.get_compound("RecipesUsed") {
                     for (recipe_id, tag) in &recipes_compound.child_tags {
                         if let papokin_nbt::tag::NbtTag::Int(count) = tag {
-                            recipes_used_map.insert(recipe_id.to_string(), *count as u32);
+                            recipes_used_map.insert(recipe_id.to_string(), (*count).max(0) as u32);
                         }
                     }
                 }

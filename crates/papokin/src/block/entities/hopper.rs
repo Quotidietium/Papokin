@@ -76,7 +76,11 @@ impl BlockEntity for HopperBlockEntity {
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             facing: FacingHopper::Down,
-            cooldown_time: AtomicI32::from(nbt.get_int("TransferCooldown").unwrap_or(-1)),
+            // 磁盘注入防御：正常冷却至多个位数 tick；不钳制的巨大
+            // 正值会让漏斗"冻结"数十亿 tick（对外表现为漏斗永久失效）。
+            cooldown_time: AtomicI32::from(
+                nbt.get_int("TransferCooldown").unwrap_or(-1).clamp(0, 6000),
+            ),
             ticked_game_time: AtomicI64::new(0),
         };
 
