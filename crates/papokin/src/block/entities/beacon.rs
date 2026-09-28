@@ -333,6 +333,11 @@ impl BlockEntity for BeaconBlockEntity {
             .or_else(|| nbt.get_string("custom_name"))
             .map(std::string::ToString::to_string);
         let lock_key = nbt.get_string("Lock").map(std::string::ToString::to_string);
+        // 付款物品往返持久化：此前不落盘，玩家放入后重启即丢
+        let payment = nbt
+            .get_compound("payment_item")
+            .and_then(ItemStack::read_item_stack)
+            .unwrap_or_else(|| ItemStack::EMPTY.clone());
 
         Self {
             position,
@@ -340,7 +345,7 @@ impl BlockEntity for BeaconBlockEntity {
             secondary_effect: AtomicI32::new(secondary),
             levels: AtomicI32::new(levels),
             dirty: AtomicBool::new(false),
-            payment: Arc::new(Mutex::new(ItemStack::EMPTY.clone())),
+            payment: Arc::new(Mutex::new(payment)),
             custom_name: Mutex::new(custom_name),
             lock_key: Mutex::new(lock_key),
             last_check_y: AtomicI32::new(position.0.y - 1),
@@ -365,6 +370,18 @@ impl BlockEntity for BeaconBlockEntity {
             }
         }
         nbt.put_int("Levels", self.levels.load(Ordering::Relaxed));
+
+        // 付款物品随方块实体持久化（原版字段），玩家放入的锭在
+        // 重启后不丢
+        let payment = self
+            .payment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !payment.is_empty() {
+            let mut item_compound = NbtCompound::new();
+            payment.write_item_stack(&mut item_compound);
+            nbt.put_compound("payment_item", item_compound);
+        }
 
         if let Some(name) = &*self
             .custom_name

@@ -1,13 +1,58 @@
 use std::{any::Any, sync::Arc};
 
 use crate::inventory::Inventory;
-use papokin_data::{item_stack::ItemStack, screen::WindowType};
+use papokin_data::{item::Item, item_stack::ItemStack, screen::WindowType};
 
 use crate::{
     player::player_inventory::PlayerInventory,
     screen_handler::{InventoryPlayer, ScreenHandler, ScreenHandlerBehaviour},
-    slot::NormalSlot,
+    slot::{NormalSlot, Slot},
 };
+
+/// 付款槽只接受原版白名单（`minecraft:beacon_payment_items`）：
+/// 铁/金/绿宝石/钻石/下界合金锭。此前是普通槽，任意物品都能
+/// 激活信标效果（付款物品被吞 1 个）。
+const fn is_beacon_payment(stack: &ItemStack) -> bool {
+    matches!(
+        stack.item.id,
+        id if id == Item::IRON_INGOT.id
+            || id == Item::GOLD_INGOT.id
+            || id == Item::EMERALD.id
+            || id == Item::DIAMOND.id
+            || id == Item::NETHERITE_INGOT.id
+    )
+}
+
+/// 信标付款槽：插入受限（仅矿物锭白名单）。
+struct BeaconPaymentSlot(NormalSlot);
+
+impl BeaconPaymentSlot {
+    fn new(inventory: Arc<dyn Inventory>) -> Self {
+        Self(NormalSlot::new(inventory, 0))
+    }
+}
+
+impl Slot for BeaconPaymentSlot {
+    fn get_inventory(&self) -> Arc<dyn Inventory> {
+        self.0.get_inventory()
+    }
+
+    fn get_index(&self) -> usize {
+        self.0.get_index()
+    }
+
+    fn set_id(&self, id: usize) {
+        self.0.set_id(id);
+    }
+
+    fn can_insert(&self, stack: &ItemStack) -> bool {
+        is_beacon_payment(stack)
+    }
+
+    fn mark_dirty(&self) {
+        self.0.mark_dirty();
+    }
+}
 
 /// 创建信标容器屏幕处理器。
 ///
@@ -42,8 +87,8 @@ impl BeaconScreenHandler {
 
         handler.inventory.on_open();
 
-        // 为信标添加单个支付槽（槽位 0）
-        handler.add_slot(Arc::new(NormalSlot::new(handler.inventory.clone(), 0)));
+        // 为信标添加单个支付槽（槽位 0，插入仅限矿物锭白名单）
+        handler.add_slot(Arc::new(BeaconPaymentSlot::new(handler.inventory.clone())));
 
         // 添加玩家的背包槽位（27 个储物槽 + 9 个快捷栏）
         let player_inventory_arc: Arc<dyn Inventory> = player_inventory.clone();

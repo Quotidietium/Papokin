@@ -36,13 +36,26 @@ impl JavaClient {
                 return;
             };
 
-            // 检查付款槽是否有物品
-            if beacon_entity
-                .payment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_empty()
-            {
+            // 检查付款槽是否有物品，且属于原版白名单
+            // （minecraft:beacon_payment_items：铁/金/绿宝石/钻石/
+            // 下界合金锭）——槽位插入已受限，此处对既有状态复验
+            // （付款槽内容也可能来自旧版本界面或方块实体 NBT）
+            let payment_valid = {
+                let payment = beacon_entity
+                    .payment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                !payment.is_empty()
+                    && matches!(
+                        payment.item.id,
+                        id if id == papokin_data::item::Item::IRON_INGOT.id
+                            || id == papokin_data::item::Item::GOLD_INGOT.id
+                            || id == papokin_data::item::Item::EMERALD.id
+                            || id == papokin_data::item::Item::DIAMOND.id
+                            || id == papokin_data::item::Item::NETHERITE_INGOT.id
+                    )
+            };
+            if !payment_valid {
                 return;
             }
 
