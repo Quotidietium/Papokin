@@ -98,6 +98,29 @@ fn format_auth_url(url_template: &str, username: &str, server_hash: &str, ip: &I
         .replace("{ip}", &ip.to_string())
 }
 
+/// 认证响应体上限：GameProfile（含签名纹理属性）正常只有几 KB。
+/// 自定义/备用认证 URL 被攻陷时可能返回超大响应体，`Response::json`
+/// 的无界读取会在 tokio 任务上逐块吃满内存，故先按块读取并在
+/// 超限时放弃该响应。
+const MAX_AUTH_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// 分块读取响应体并施加 [`MAX_AUTH_RESPONSE_BYTES`] 上限。
+async fn read_capped_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+    if let Some(len) = response.content_length()
+        && len as usize > MAX_AUTH_RESPONSE_BYTES
+    {
+        return Err("响应体声明长度超过上限".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > MAX_AUTH_RESPONSE_BYTES {
+            return Err("响应体长度超过上限".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 /// 向 Mojang 的（或自定义/备用）认证服务器发送 GET 请求，以验证客户端的 Minecraft 账户。
 ///
 /// **目的：**
@@ -159,10 +182,15 @@ pub async fn authenticate(
         }
 
         match status {
-            StatusCode::OK => match response.json::<GameProfile>().await {
-                Ok(profile) => return Ok(profile),
+            StatusCode::OK => match read_capped_body(response).await {
+                Ok(body) => match serde_json::from_slice::<GameProfile>(&body) {
+                    Ok(profile) => return Ok(profile),
+                    Err(err) => {
+                        tracing::warn!("解析来自 '{address}' 的 GameProfile 响应失败：{err}");
+                    }
+                },
                 Err(err) => {
-                    tracing::warn!("解析来自 '{address}' 的 GameProfile 响应失败：{err}");
+                    tracing::warn!("读取 '{address}' 的认证响应失败：{err}");
                 }
             },
             StatusCode::NO_CONTENT => {
@@ -241,8 +269,10 @@ pub async fn fetch_mojang_public_keys(
         other => Err(AuthError::UnknownStatusCode(other))?,
     }
 
-    let public_keys: MojangPublicKeys =
-        response.json().await.map_err(|_| AuthError::FailedParse)?;
+    let public_keys: MojangPublicKeys = read_capped_body(response)
+        .await
+        .and_then(|body| serde_json::from_slice(&body).map_err(|e| e.to_string()))
+        .map_err(|_| AuthError::FailedParse)?;
 
     let as_rsa_keys = public_keys
         .player_certificate_keys
@@ -309,27 +339,38 @@ pub async fn lookup_profile_by_name(
         }
 
         match status {
-            StatusCode::OK => match response.json::<MojangProfileByNameResponse>().await {
-                Ok(profile) => {
-                    let parsed_uuid =
-                        Uuid::parse_str(&profile.id).map_err(|_| AuthError::FailedParse)?;
-                    // 查询钩子：档案解析完成时触发。`properties`
-                    // 在这里始终为空；填充步骤稍后会获取它们。
-                    if let Some(server) = server {
-                        let mut lookup = LookupProfileEvent::new(
-                            name,
-                            parsed_uuid,
-                            Some(profile.name.clone()),
-                            Vec::new(),
-                        );
-                        server.plugin_manager.fire(server, &mut lookup).await;
+            StatusCode::OK => {
+                match read_capped_body(response).await {
+                    Ok(body) => {
+                        match serde_json::from_slice::<MojangProfileByNameResponse>(&body) {
+                            Ok(profile) => {
+                                let parsed_uuid = Uuid::parse_str(&profile.id)
+                                    .map_err(|_| AuthError::FailedParse)?;
+                                // 查询钩子：档案解析完成时触发。`properties`
+                                // 在这里始终为空；填充步骤稍后会获取它们。
+                                if let Some(server) = server {
+                                    let mut lookup = LookupProfileEvent::new(
+                                        name,
+                                        parsed_uuid,
+                                        Some(profile.name.clone()),
+                                        Vec::new(),
+                                    );
+                                    server.plugin_manager.fire(server, &mut lookup).await;
+                                }
+                                return Ok(Some((parsed_uuid, profile.name)));
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    "解析来自 '{address}' 的按名称查询档案响应失败：{err}"
+                                );
+                            }
+                        }
                     }
-                    return Ok(Some((parsed_uuid, profile.name)));
+                    Err(err) => {
+                        tracing::warn!("读取 '{address}' 的按名称查询档案响应失败：{err}");
+                    }
                 }
-                Err(err) => {
-                    tracing::warn!("解析来自 '{address}' 的按名称查询档案响应失败：{err}");
-                }
-            },
+            }
             StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => {
                 not_found_count += 1;
             }
@@ -414,30 +455,39 @@ pub async fn fetch_profile_by_uuid(
         }
 
         match status {
-            StatusCode::OK => match response.json::<GameProfile>().await {
-                Ok(profile) => {
-                    // Fill 钩子：在档案（含属性）就绪后触发一次
-                    // 已从认证服务器获取。
-                    if let Some(server) = server {
-                        let properties = profile
-                            .properties
-                            .load()
-                            .iter()
-                            .map(|property| (property.name.to_string(), property.value.to_string()))
-                            .collect();
-                        let mut fill = FillProfileEvent::new(
-                            profile.id,
-                            Some(profile.name.clone()),
-                            properties,
-                        );
-                        server.plugin_manager.fire(server, &mut fill).await;
+            StatusCode::OK => {
+                match read_capped_body(response).await {
+                    Ok(body) => match serde_json::from_slice::<GameProfile>(&body) {
+                        Ok(profile) => {
+                            // Fill 钩子：在档案（含属性）就绪后触发一次
+                            // 已从认证服务器获取。
+                            if let Some(server) = server {
+                                let properties = profile
+                                    .properties
+                                    .load()
+                                    .iter()
+                                    .map(|property| {
+                                        (property.name.to_string(), property.value.to_string())
+                                    })
+                                    .collect();
+                                let mut fill = FillProfileEvent::new(
+                                    profile.id,
+                                    Some(profile.name.clone()),
+                                    properties,
+                                );
+                                server.plugin_manager.fire(server, &mut fill).await;
+                            }
+                            return Ok(Some(profile));
+                        }
+                        Err(err) => {
+                            tracing::warn!("解析来自 '{address}' 的 GameProfile 响应失败：{err}");
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!("读取 '{address}' 的 GameProfile 响应失败：{err}");
                     }
-                    return Ok(Some(profile));
                 }
-                Err(err) => {
-                    tracing::warn!("解析来自 '{address}' 的 GameProfile 响应失败：{err}");
-                }
-            },
+            }
             StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => {
                 not_found_count += 1;
             }
