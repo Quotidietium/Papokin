@@ -22,20 +22,10 @@ impl JavaClient {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // 编辑会话必须由服务端建立（放置或右键打开编辑器时写入）：
         // 无会话（如磁盘加载的既有告示牌）或会话属于他人均拒绝，
-        // 防止客户端伪造更新包改写任意位置的告示牌文本
+        // 防止客户端伪造更新包改写任意位置的告示牌文本。
+        // 距离稽查不在此做：原版服务端对告示牌更新包只校验会话
+        // 归属，不加距离门；超距等玩法稽查属反作弊插件职责。
         if currently_editing != Some(player.gameprofile.id) {
-            return;
-        }
-
-        // 会话有效仍需在场：玩家开完编辑器后可能走远或被传送，
-        // 远程提交同样会改写告示牌（原版以 blockInteractionRange
-        // 约 4.5+1 格校验）。取 8 格平方距离，覆盖伸手可及范围。
-        let player_pos = player.get_entity().pos.load();
-        let sign_pos = sign_data.location.0;
-        let dx = player_pos.x - f64::from(sign_pos.x) - 0.5;
-        let dy = player_pos.y - f64::from(sign_pos.y) - 0.5;
-        let dz = player_pos.z - f64::from(sign_pos.z) - 0.5;
-        if dx.mul_add(dx, dy * dy + dz * dz) > 64.0 {
             return;
         }
 
