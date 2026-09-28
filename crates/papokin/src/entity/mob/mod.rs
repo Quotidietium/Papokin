@@ -1222,18 +1222,23 @@ pub trait Mob: EntityBase + Send + Sync {
         let mob = self.get_mob_entity();
         let target = self.as_valid_target(target);
         let target_id = target.as_ref().map(|t| t.get_entity().entity_id);
-        *mob.target
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = target;
         let world = mob.living_entity.entity.world.load_full();
         let entity_id = mob.living_entity.entity.entity_id;
+        // 先发事件并尊重取消：此前目标先写入、事件后发且不读标
+        // 志，插件取消后生物照样锁定/丢失目标
         if let Some(server) = world.server.upgrade() {
             let mut event =
                 crate::plugin::api::events::entity::entity_target::EntityTargetEvent::new(
                     entity_id, target_id,
                 );
             server.plugin_manager.fire_blocking(&server, &mut event);
+            if event.cancelled {
+                return;
+            }
         }
+        *mob.target
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = target;
     }
 
     fn mob_interact(&self, player: &Arc<Player>, item_stack: &mut ItemStack) -> bool {
