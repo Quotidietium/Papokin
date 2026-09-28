@@ -2800,8 +2800,14 @@ impl Player {
         if !self.supports_player_loaded() {
             return true;
         }
-        self.client_loaded.load(Ordering::Relaxed)
-            || self.client_loaded_timeout.load(Ordering::Relaxed) == 0
+        // 死亡期间动作门必须保持关闭：handle_killed 依赖
+        // set_client_loaded(false) 关闭动作处理器，但下方 60 刻超时
+        // 分支会在死亡 3 秒后绕过该标志（改过的客户端还可用伪造的
+        // SPlayerLoaded 立即重开大门），从而在尸体上继续攻击/交互/
+        // 移动。reset_state（重生）会复位 dead，不影响正常流程。
+        (self.client_loaded.load(Ordering::Relaxed)
+            || self.client_loaded_timeout.load(Ordering::Relaxed) == 0)
+            && !self.living_entity.dead.load(Ordering::Relaxed)
     }
 
     pub fn set_client_loaded(&self, loaded: bool) {
