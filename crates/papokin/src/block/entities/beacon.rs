@@ -110,6 +110,12 @@ impl BeaconBlockEntity {
         let primary_id = primary.unwrap_or(0);
         let secondary_id = secondary.unwrap_or(0);
 
+        // 效果 id 直接来自网络，不可信任：-1 是部分客户端"未选择"的
+        // 哨兵（等价于 None），其余负值均为伪造包，放行会把无效 id
+        // 持久化进存档并让玩家白白损失付款物品。
+        if primary_id < -1 || secondary_id < -1 {
+            return false;
+        }
         if primary_id > 0 && !Self::is_valid_primary_effect(primary_id, levels) {
             return false;
         }
@@ -515,5 +521,30 @@ impl Clearable for BeaconBlockEntity {
         if let Ok(mut payment) = self.payment.try_lock() {
             *payment = ItemStack::EMPTY.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_effects_tests {
+    use super::BeaconBlockEntity;
+
+    #[test]
+    fn rejects_forged_negative_effect_ids() {
+        // 效果 id 来自网络不可信：除 -1（“未选择”哨兵）外的负值
+        // 必须拒绝，否则会被持久化进存档并让玩家白丢付款物品
+        assert!(!BeaconBlockEntity::validate_effects(Some(-2), None, 4));
+        assert!(!BeaconBlockEntity::validate_effects(None, Some(-100), 4));
+        assert!(!BeaconBlockEntity::validate_effects(Some(-1), Some(-2), 4));
+    }
+
+    #[test]
+    fn accepts_sentinel_and_valid_ids() {
+        // -1 哨兵与 None 等价（未选择），不构成越界
+        assert!(BeaconBlockEntity::validate_effects(Some(-1), Some(-1), 4));
+        assert!(BeaconBlockEntity::validate_effects(None, None, 4));
+        // 迅捷（1）在 1 级信标即合法
+        assert!(BeaconBlockEntity::validate_effects(Some(1), None, 1));
+        // 等级不足的合法 id 仍应被原校验拒绝
+        assert!(!BeaconBlockEntity::validate_effects(Some(5), None, 1));
     }
 }
