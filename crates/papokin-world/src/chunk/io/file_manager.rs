@@ -278,8 +278,17 @@ where
                         return;
                     }
                     Err(err) => {
-                        // 尽力而为：报告批次中第一个坐标的错误。
+                        // 必须为批次内的每个坐标回执：消费方按坐标数
+                        // 收取消息，少发会让调度器的 running_task_count
+                        // 永久泄漏，在途配额耗尽后区块系统整体停摆。
+                        // 错误详情随首坐标回报，其余按 Missing 回执
+                        // （下游两者同样走重新生成）。
                         let _ = task_stream.send(LoadedData::Error((chunks[0], err))).await;
+                        for pos in chunks.iter().skip(1).copied() {
+                            if task_stream.send(LoadedData::Missing(pos)).await.is_err() {
+                                break;
+                            }
+                        }
                         return;
                     }
                 };
