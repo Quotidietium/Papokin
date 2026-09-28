@@ -914,6 +914,9 @@ impl GenerationSchedule {
                 "保存时向 IO 写入线程发送区块失败（线程可能已关停）: {:?}",
                 e
             );
+            // 发送失败时写线程不会再释放这些计数；不回滚会让
+            // 同名区块的加载方在 io_lock 上永久等待。
+            self.rollback_io_lock_entries(e.0.into_iter().map(|(pos, _)| pos));
         }
     }
 
@@ -966,6 +969,30 @@ impl GenerationSchedule {
 
         if let Err(e) = self.io_write.blocking_send(chunks) {
             error!("向 IO 写入线程发送区块失败: {:?}", e);
+            // 同 process_unload_queue：回滚刚登记的在途计数。
+            self.rollback_io_lock_entries(e.0.into_iter().map(|(pos, _)| pos));
+        }
+    }
+
+    /// 回滚 `blocking_send` 失败批次在 `io_lock` 中登记的在途保存
+    /// 计数（写线程已退出，不会有人释放它们）。
+    fn rollback_io_lock_entries(&self, positions: impl Iterator<Item = ChunkPos>) {
+        let mut data = self
+            .io_lock
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for pos in positions {
+            match data.entry(pos) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if *entry.get() <= 1 {
+                        entry.remove();
+                    } else {
+                        *entry.get_mut() -= 1;
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(_) => {}
+            }
         }
     }
 
