@@ -5,7 +5,6 @@ use crate::entity::player::Player;
 use crate::item::{ItemBehaviour, ItemMetadata};
 use papokin_data::entity::EntityType;
 use papokin_data::item::Item;
-use papokin_data::item_stack::ItemStack;
 
 pub struct CarrotOnAStickItem;
 pub struct WarpedFungusOnAStickItem;
@@ -29,13 +28,9 @@ impl ItemBehaviour for CarrotOnAStickItem {
             && let Some(steerable) = vehicle.get_item_steerable()
             && steerable.boost()
         {
-            let before = player.inventory.held_item();
+            // 原版：胡萝卜钓竿耐久耗尽直接损坏消失，不会返还钓鱼竿
+            // （此前凭空给新钓竿属于物品捏造）
             player.damage_held_item(7);
-            if !before.is_empty() && player.inventory.held_item().is_empty() {
-                player
-                    .inventory
-                    .set_held_item(ItemStack::new(1, &Item::FISHING_ROD));
-            }
         }
     }
 
@@ -63,13 +58,8 @@ impl ItemBehaviour for WarpedFungusOnAStickItem {
             && let Some(steerable) = vehicle.get_item_steerable()
             && steerable.boost()
         {
-            let before = player.inventory.held_item();
+            // 原版：诡异菌钓竿同理，损坏即消失
             player.damage_held_item(1);
-            if !before.is_empty() && player.inventory.held_item().is_empty() {
-                player
-                    .inventory
-                    .set_held_item(ItemStack::new(1, &Item::FISHING_ROD));
-            }
         }
     }
 
