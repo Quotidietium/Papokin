@@ -354,6 +354,10 @@ impl Level {
     }
 
     pub async fn shutdown(&self) {
+        // 无超时的 wait() 在单个被跟踪任务卡死（阻塞 IO/死锁）时
+        // 会让整个关停流程永久挂起——僵尸进程比"带告警继续关停"
+        // 更糟。超时上限与线程汇合同为 60s。
+        const TASK_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
         let world_id = self.level_folder.root_folder.display();
         info!("正在保存世界存档 ({})...", world_id);
         self.cancel_token.cancel();
@@ -402,8 +406,18 @@ impl Level {
             }
         }
 
-        self.tasks.wait().await;
-        self.chunk_system_tasks.wait().await;
+        // 无超时的 wait() 在单个被跟踪任务卡死（阻塞 IO/死锁）时
+        // 会让整个关停流程永久挂起——僵尸进程比"带告警继续关停"
+        // 更糟。超时上限与线程汇合同为 60s。
+        if timeout(TASK_WAIT_TIMEOUT, self.tasks.wait()).await.is_err() {
+            error!("等待 {world_id} 的后台任务超时，继续关停（部分任务可能未完成）");
+        }
+        if timeout(TASK_WAIT_TIMEOUT, self.chunk_system_tasks.wait())
+            .await
+            .is_err()
+        {
+            error!("等待 {world_id} 的区块系统任务超时，继续关停（部分任务可能未完成）");
+        }
 
         info!("正在将 {} 的区块数据写入磁盘...", world_id);
         self.chunk_saver.block_and_await_ongoing_tasks().await;
