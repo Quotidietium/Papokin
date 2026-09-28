@@ -520,6 +520,29 @@ where
 
         join_all(drain_tasks).await;
     }
+
+    /// 关停兜底：将所有仍持有未落盘更新（`has_pending_writes`）
+    /// 的序列化器强制写盘。见 `FileIO::flush_pending_writes`。
+    async fn flush_pending_writes(&self) {
+        let loaders: Vec<Arc<ChunkSerializerLazyLoader<S>>> =
+            { self.file_locks.read().await.values().cloned().collect() };
+
+        for loader in loaders {
+            let Some(serializer_arc) = loader.internal.get() else {
+                continue;
+            };
+            let serializer = serializer_arc.read().await;
+            if !serializer.has_pending_writes() {
+                continue;
+            }
+            if let Err(err) = serializer.write(&loader.path).await {
+                error!(
+                    "关停前刷写 {} 失败（该文件未落盘的更新丢失）：{err}",
+                    loader.path.display()
+                );
+            }
+        }
+    }
 }
 
 pub enum LevelFileIO<Linear, Anvil, Pump>
@@ -611,6 +634,14 @@ where
             Self::Linear(io) => io.block_and_await_ongoing_tasks().await,
             Self::Anvil(io) => io.block_and_await_ongoing_tasks().await,
             Self::Pump(io) => io.block_and_await_ongoing_tasks().await,
+        }
+    }
+
+    async fn flush_pending_writes(&self) {
+        match self {
+            Self::Linear(io) => io.flush_pending_writes().await,
+            Self::Anvil(io) => io.flush_pending_writes().await,
+            Self::Pump(io) => io.flush_pending_writes().await,
         }
     }
 }

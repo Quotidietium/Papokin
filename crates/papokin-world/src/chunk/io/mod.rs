@@ -124,6 +124,14 @@ where
 
     /// 确保所有正在进行的操作都已完成
     fn block_and_await_ongoing_tasks(&self) -> impl Future<Output = ()> + Send + '_;
+
+    /// 将所有仍持有未落盘更新的序列化器强制写盘。
+    ///
+    /// 此前保存中写盘失败（或因注视状态被合并进内存）的数据会在
+    /// 后续对同一区域文件的保存时顺带刷出，但若之后该区域再无
+    /// 保存，进程退出前这些更新就会丢失。关停路径必须在
+    /// `block_and_await_ongoing_tasks` 之后调用本方法兜底。
+    fn flush_pending_writes(&self) -> impl Future<Output = ()> + Send + '_;
 }
 
 /// 用于将区块数据序列化为字节以及从字节反序列化的 trait。

@@ -421,6 +421,12 @@ impl Level {
         // TODO: 我认为 chunk_saver 应该放在服务器层级
         self.entity_saver.clear_watched_chunks().await;
         self.write_entity_chunks(chunks_to_write).await;
+
+        // 关停兜底：此前写盘失败（或被合并进内存）的更新至此仍未
+        // 落盘的话，进程退出即永久丢失；强制刷出所有 pending 序列化器。
+        info!("正在刷写 {} 的未落盘序列化器...", world_id);
+        self.chunk_saver.flush_pending_writes().await;
+        self.entity_saver.flush_pending_writes().await;
     }
 
     pub fn loaded_chunk_count(&self) -> usize {
