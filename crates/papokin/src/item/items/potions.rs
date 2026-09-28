@@ -79,18 +79,20 @@ impl ItemBehaviour for SplashPotionItem {
 
         world.spawn_entity(Arc::new(splash));
 
-        // 递减已用的物品堆（清空）
-        if used_main {
-            let mut s = player.inventory.held_item();
-            s.decrement_unless_creative(player.gamemode.load(), 1);
-            player.inventory.set_held_item(s);
+        // 递减已用的物品堆（清空）：读取-校验-扣减-写回在写锁内原子完成
+        let hand = if used_main {
+            papokin_util::Hand::Right
         } else {
-            let mut s = player.inventory.off_hand_item();
-            s.decrement_unless_creative(player.gamemode.load(), 1);
-            player
-                .inventory
-                .set_stack_in_hand(papokin_util::Hand::Left, s);
-        }
+            papokin_util::Hand::Left
+        };
+        let potion_id = papokin_data::item::Item::SPLASH_POTION.id;
+        let gamemode = player.gamemode.load();
+        player.inventory.update_held(hand, |mut s| {
+            if !s.is_empty() && s.item.id == potion_id {
+                s.decrement_unless_creative(gamemode, 1);
+            }
+            (s, ())
+        });
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -131,18 +133,20 @@ impl ItemBehaviour for LingeringPotionItem {
 
         world.spawn_entity(Arc::new(ling));
 
-        // 递减已用的物品堆（清空）
-        if used_main {
-            let mut s = player.inventory.held_item();
-            s.decrement_unless_creative(player.gamemode.load(), 1);
-            player.inventory.set_held_item(s);
+        // 递减已用的物品堆（清空）：读取-校验-扣减-写回在写锁内原子完成
+        let hand = if used_main {
+            papokin_util::Hand::Right
         } else {
-            let mut s = player.inventory.off_hand_item();
-            s.decrement_unless_creative(player.gamemode.load(), 1);
-            player
-                .inventory
-                .set_stack_in_hand(papokin_util::Hand::Left, s);
-        }
+            papokin_util::Hand::Left
+        };
+        let potion_id = papokin_data::item::Item::LINGERING_POTION.id;
+        let gamemode = player.gamemode.load();
+        player.inventory.update_held(hand, |mut s| {
+            if !s.is_empty() && s.item.id == potion_id {
+                s.decrement_unless_creative(gamemode, 1);
+            }
+            (s, ())
+        });
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

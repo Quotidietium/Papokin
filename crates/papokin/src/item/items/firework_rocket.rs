@@ -69,14 +69,19 @@ impl ItemBehaviour for FireworkRocketItem {
                     return;
                 }
             }
-            held.decrement_unless_creative(player.gamemode.load(), 1);
-            if is_main {
-                player.inventory().set_held_item(held);
+            // 原子扣减：读取-校验-扣减-写回在写锁内完成，防止
+            // 期间并入该槽位的物品被陈旧快照覆盖
+            let hand = if is_main {
+                papokin_util::Hand::Right
             } else {
-                player
-                    .inventory()
-                    .set_stack_in_hand(papokin_util::Hand::Left, held);
-            }
+                papokin_util::Hand::Left
+            };
+            player.inventory().update_held(hand, |mut s| {
+                if !s.is_empty() && s.item.id == Item::FIREWORK_ROCKET.id {
+                    s.decrement_unless_creative(player.gamemode.load(), 1);
+                }
+                (s, ())
+            });
         }
     }
 

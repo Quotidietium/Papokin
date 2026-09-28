@@ -43,24 +43,28 @@ impl ItemBehaviour for EggItem {
         egg.thrown.set_velocity_from(pitch, yaw, 0.0, POWER, 1.0);
         world.spawn_entity(Arc::new(egg));
 
-        // 消耗物品
-        let mut main_hand = player.inventory.held_item();
-        let consumed = if !main_hand.is_empty() && Self::ids().contains(&main_hand.item.id) {
-            main_hand.decrement_unless_creative(player.gamemode.load(), 1);
-            player.inventory.set_held_item(main_hand);
-            true
-        } else {
-            false
-        };
+        // 消耗物品：读取-校验-扣减-写回在写锁内原子完成
+        let gamemode = player.gamemode.load();
+        let consumed = player
+            .inventory
+            .update_held(papokin_util::Hand::Right, |mut s| {
+                let ok = !s.is_empty() && Self::ids().contains(&s.item.id);
+                if ok {
+                    s.decrement_unless_creative(gamemode, 1);
+                }
+                (s, ok)
+            });
 
         if !consumed {
-            let mut off_hand = player.inventory.off_hand_item();
-            if !off_hand.is_empty() && Self::ids().contains(&off_hand.item.id) {
-                off_hand.decrement_unless_creative(player.gamemode.load(), 1);
-                player
-                    .inventory
-                    .set_stack_in_hand(papokin_util::Hand::Left, off_hand);
-            }
+            player
+                .inventory
+                .update_held(papokin_util::Hand::Left, |mut s| {
+                    let ok = !s.is_empty() && Self::ids().contains(&s.item.id);
+                    if ok {
+                        s.decrement_unless_creative(gamemode, 1);
+                    }
+                    (s, ok)
+                });
         }
     }
 

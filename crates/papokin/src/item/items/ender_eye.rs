@@ -120,9 +120,14 @@ impl ItemBehaviour for EnderEyeItem {
         player.trigger_advancement(
             crate::entity::player::advancement::trigger::AdvancementTrigger::LaunchedEyeOfEnder,
         );
-        let mut stack = player.inventory.held_item();
-        stack.decrement_unless_creative(player.gamemode.load(), 1);
-        player.inventory.set_held_item(stack);
+        player
+            .inventory
+            .update_held(papokin_util::Hand::Right, |mut s| {
+                if !s.is_empty() && s.item.id == Item::ENDER_EYE.id {
+                    s.decrement_unless_creative(player.gamemode.load(), 1);
+                }
+                (s, ())
+            });
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

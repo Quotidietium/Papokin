@@ -28,14 +28,17 @@ impl ItemBehaviour for KnowledgeBookItem {
 
         let _recipes = held.get_data_component::<RecipesImpl>();
 
-        held.decrement_unless_creative(player.gamemode.load(), 1);
-        if matched_main {
-            player.inventory().set_held_item(held);
+        let hand = if matched_main {
+            papokin_util::Hand::Right
         } else {
-            player
-                .inventory()
-                .set_stack_in_hand(papokin_util::Hand::Left, held);
-        }
+            papokin_util::Hand::Left
+        };
+        player.inventory().update_held(hand, |mut s| {
+            if !s.is_empty() && s.item.id == Item::KNOWLEDGE_BOOK.id {
+                s.decrement_unless_creative(player.gamemode.load(), 1);
+            }
+            (s, ())
+        });
     }
 
     fn as_any(&self) -> &dyn Any {
