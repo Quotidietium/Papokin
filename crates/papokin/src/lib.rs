@@ -453,7 +453,14 @@ impl PapokinServer {
         info!("正在结束玩家任务");
 
         tasks.close();
-        tasks.wait().await;
+        // 无超时的 wait() 会因单个卡死的玩家任务让关停永久挂起
+        // （与 Server/Level 关停同策略）
+        if tokio::time::timeout(Duration::from_secs(60), tasks.wait())
+            .await
+            .is_err()
+        {
+            error!("等待玩家后台任务超时，继续关停（部分任务可能未完成）");
+        }
 
         self.unload_plugins().await;
 

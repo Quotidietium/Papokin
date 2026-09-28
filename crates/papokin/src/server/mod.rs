@@ -781,7 +781,14 @@ impl Server {
     pub async fn shutdown(&self) {
         self.tasks.close();
         debug!("等待服务器任务");
-        self.tasks.wait().await;
+        // 无超时的 wait() 会因单个卡死任务让关停永久挂起（与
+        // Level::shutdown 的 TASK_WAIT_TIMEOUT 同策略）
+        if tokio::time::timeout(std::time::Duration::from_secs(60), self.tasks.wait())
+            .await
+            .is_err()
+        {
+            error!("等待服务器后台任务超时，继续关停（部分任务可能未完成）");
+        }
         debug!("服务器任务等待完成");
 
         info!("正在启动世界");
