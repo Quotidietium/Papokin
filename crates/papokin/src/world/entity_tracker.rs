@@ -1,4 +1,6 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::BufMut;
 use crossbeam::atomic::AtomicCell;
@@ -35,6 +37,25 @@ pub struct TrackedEntity {
     pub track_deltas: bool,
     pub seen_by: DashSet<Uuid>,
     pub last_section_pos: AtomicCell<Vector3<i32>>,
+    /// 串行化“配对决定 + 配对/解配对包入队”与“移除收尾
+    /// （置位 `finalized` + 快照广播 destroy + 清空 `seen_by`）”，
+    /// 关闭二者交错时客户端“只收到 spawn、漏掉 destroy”的
+    /// 幽灵实体窗口。锁序约束：本锁是叶子锁——持锁期间只做
+    /// `seen_by`/标志位读写与数据包入队，绝不取 `entity_map` 分片
+    /// 锁、绝不在锁内 `fire_blocking`（插件回调可能重入）。
+    pair_lock: Mutex<()>,
+    /// 移除收尾是否已执行（在 `pair_lock` 内置位/读取）。
+    finalized: AtomicBool,
+}
+
+/// `update_player` 单次评估得到的配对决定。
+enum PairingDecision {
+    /// 新配对：decide 阶段已写入 `seen_by`，待事件放行后补发 spawn。
+    Pair,
+    /// 取消配对：decide 阶段已移出 `seen_by`，待事件放行后补发 destroy。
+    Unpair,
+    /// 无变化。
+    Unchanged,
 }
 
 impl TrackedEntity {
@@ -60,6 +81,8 @@ impl TrackedEntity {
             track_deltas,
             seen_by: DashSet::new(),
             last_section_pos: AtomicCell::new(last_section_pos),
+            pair_lock: Mutex::new(()),
+            finalized: AtomicBool::new(false),
         }
     }
 
@@ -101,6 +124,46 @@ impl TrackedEntity {
             return;
         }
 
+        let is_visible = self.should_be_visible(player);
+
+        // 决定阶段：在 `pair_lock` 内检查移除状态并写入 `seen_by`，
+        // 与 finalize_removal 的“快照+广播+清空”互斥，保证本玩家的
+        // insert 要么进入移除快照（随后收到 destroy），要么观察到
+        // finalized 而根本不配对——不会出现只发 spawn 的中间态。
+        let decision = {
+            let _guard = self
+                .pair_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.finalized.load(Ordering::Relaxed) {
+                return;
+            }
+            if is_visible {
+                if self.seen_by.insert(player.gameprofile.id) {
+                    PairingDecision::Pair
+                } else {
+                    PairingDecision::Unchanged
+                }
+            } else if self.seen_by.remove(&player.gameprofile.id).is_some() {
+                PairingDecision::Unpair
+            } else {
+                PairingDecision::Unchanged
+            }
+        };
+
+        // 行动阶段：插件事件全部在锁外触发。锁内 fire_blocking 会与
+        // 重入本实体 pair_lock 的插件回调（如事件处理器里移除同一实体）
+        // 互锁，见 pair_lock 的字段注释。
+        match decision {
+            PairingDecision::Pair => self.apply_new_pairing(player, world),
+            PairingDecision::Unpair => self.apply_removed_pairing(player, world),
+            PairingDecision::Unchanged => {}
+        }
+    }
+
+    /// 原版 `isChunkTracked` 语义的可见性判定：距离 + 观战规则 +
+    /// 注视段 + 区块已就绪（绝不在区块数据包之前生成）。
+    fn should_be_visible(&self, player: &Player) -> bool {
         let player_entity = player.get_entity();
         let player_pos = player_entity.pos.load();
         let entity_pos = self.entity.get_entity().pos.load();
@@ -119,74 +182,107 @@ impl TrackedEntity {
             .load()
             .is_within_distance(entity_chunk.x, entity_chunk.y);
 
-        // 原版 `isChunkTracked`：绝不在区块数据包之前生成。
-        let is_visible = dist_sq <= range_sq
+        dist_sq <= range_sq
             && self.broadcast_to_player(player)
             && in_view
             && player
                 .chunk_sender
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_chunk_ready(&entity_chunk);
+                .is_chunk_ready(&entity_chunk)
+    }
 
-        if is_visible {
-            if self.seen_by.insert(player.gameprofile.id) {
-                let mut show_event = PlayerShowEntityEvent {
-                    player: player.clone(),
-                    entity_id: self.entity_id,
-                    cancelled: false,
-                };
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut show_event);
-                }
-                if show_event.cancelled {
-                    // 保持实体未配对状态，以便重新评估可见性
-                    // 在下一次追踪更新时。
-                    self.seen_by.remove(&player.gameprofile.id);
-                    return;
-                }
-                self.add_pairing(player);
-                // 追踪通知，在配对添加完成后触发。
-                let mut track_event =
-                    crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent::new(
-                        player.clone(),
-                        self.entity_id,
-                    );
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut track_event);
-                }
+    /// Pair 决定的行动阶段：show 事件放行后在 `pair_lock` 内补发
+    /// spawn；事件被否决或实体在事件期间被移除则回滚 `seen_by`。
+    fn apply_new_pairing(&self, player: &Arc<Player>, world: &World) {
+        let mut show_event = PlayerShowEntityEvent {
+            player: player.clone(),
+            entity_id: self.entity_id,
+            cancelled: false,
+        };
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut show_event);
+        }
+        if show_event.cancelled {
+            // 保持实体未配对状态，以便在下一次追踪更新时重新评估
+            // 可见性。（实体若已被并发移除，finalize_removal 的清空
+            // 会覆盖这次回滚，无影响。）
+            self.seen_by.remove(&player.gameprofile.id);
+            return;
+        }
+        // 事件处理期间实体可能被移除：不再补发 spawn，并回滚 decide
+        // 阶段写入的 seen_by 标记。spawn 包在锁内入队，与
+        // finalize_removal 的 destroy 入队经同一把锁定序，客户端
+        // 不会先收 destroy 后收 spawn。
+        if !self.try_commit_pairing(player) {
+            return;
+        }
+        // 追踪通知，在配对添加完成后触发。
+        let mut track_event =
+            crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent::new(
+                player.clone(),
+                self.entity_id,
+            );
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut track_event);
+        }
+    }
+
+    /// show 事件之后的复核与入队：在 `pair_lock` 内确认实体未被移除
+    /// 后补发 spawn。返回 false 表示实体已被移除（`seen_by` 已回滚）。
+    fn try_commit_pairing(&self, player: &Arc<Player>) -> bool {
+        let _guard = self
+            .pair_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.finalized.load(Ordering::Relaxed) {
+            self.seen_by.remove(&player.gameprofile.id);
+            return false;
+        }
+        self.add_pairing(player);
+        true
+    }
+
+    /// Unpair 决定的行动阶段：hide 事件放行后发送 destroy 并触发
+    /// untrack 通知；事件被否决则在锁内复活 `seen_by` 保持配对。
+    fn apply_removed_pairing(&self, player: &Arc<Player>, world: &World) {
+        let mut hide_event = PlayerHideEntityEvent {
+            player: player.clone(),
+            entity_id: self.entity_id,
+            cancelled: false,
+        };
+        if let Some(server) = world.server.upgrade() {
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut hide_event);
+        }
+        if hide_event.cancelled {
+            // 已否决：该实体对此玩家保持配对（可见）。
+            // 实体若已被并发移除则不复活 seen_by（finalize
+            // 即将清空它）。
+            let _guard = self
+                .pair_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !self.finalized.load(Ordering::Relaxed) {
+                self.seen_by.insert(player.gameprofile.id);
             }
-        } else if self.seen_by.remove(&player.gameprofile.id).is_some() {
-            let mut hide_event = PlayerHideEntityEvent {
-                player: player.clone(),
-                entity_id: self.entity_id,
-                cancelled: false,
-            };
+        } else {
+            self.remove_pairing(player);
+            // 取消跟踪通知，在配对被移除后触发。
+            let mut untrack_event =
+                crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent::new(
+                    player.clone(),
+                    self.entity_id,
+                );
             if let Some(server) = world.server.upgrade() {
                 server
                     .plugin_manager
-                    .fire_blocking(&server, &mut hide_event);
-            }
-            if hide_event.cancelled {
-                // 已否决：该实体对此玩家保持配对（可见）。
-                self.seen_by.insert(player.gameprofile.id);
-            } else {
-                self.remove_pairing(player);
-                // 取消跟踪通知，在配对被移除后触发。
-                let mut untrack_event =
-                    crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent::new(
-                        player.clone(),
-                        self.entity_id,
-                    );
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut untrack_event);
-                }
+                    .fire_blocking(&server, &mut untrack_event);
             }
         }
     }
@@ -353,6 +449,13 @@ impl TrackedEntity {
 
     /// 原版 `TrackedEntity.removePlayer`：在客户端上取消生成，仅当已配对时。
     pub fn remove_player(&self, player: &Player) {
+        let _guard = self
+            .pair_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.finalized.load(Ordering::Relaxed) {
+            return;
+        }
         if self.seen_by.remove(&player.gameprofile.id).is_some() {
             self.remove_pairing(player);
         }
@@ -376,6 +479,20 @@ impl TrackedEntity {
         if let Some(player) = self.entity.get_player() {
             player.try_send_client_packet(packet);
         }
+    }
+
+    /// 移除收尾：在 `pair_lock` 内置位 `finalized`、按 `seen_by` 快照广播
+    /// destroy 并清空集合。与 `update_player` 的决定/入队临界区互斥，
+    /// 客户端不会“只收到 spawn 而漏掉 destroy”（幽灵实体）。
+    /// 由 `EntityTracker::remove_entity` 在实体离开 `entity_map` 后调用，
+    /// 此后对该 `TrackedEntity` 的一切配对都会被拒绝。
+    pub fn finalize_removal(&self, world: &World) {
+        let _guard = self
+            .pair_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.finalized.store(true, Ordering::Relaxed);
+        self.broadcast_removed(world);
     }
 
     pub fn send_to_tracking_players_filtered<P: ClientPacket + Sync, F: Fn(&Player) -> bool>(
@@ -433,9 +550,13 @@ impl EntityTracker {
         player: &Player,
         mut f: F,
     ) {
-        for entry in &self.entity_map {
-            if entry.value().seen_by.contains(&player.gameprofile.id) {
-                f(&entry.value().entity);
+        // 先克隆快照再迭代：迭代期间回调 f 可能触发插件事件或增删
+        // 实体，DashMap 迭代器持分片读锁，与之互斥会造成死锁。
+        let tracked_entities: Vec<Arc<TrackedEntity>> =
+            self.entity_map.iter().map(|e| e.value().clone()).collect();
+        for tracked in &tracked_entities {
+            if tracked.seen_by.contains(&player.gameprofile.id) {
+                f(&tracked.entity);
             }
         }
     }
@@ -465,9 +586,13 @@ impl EntityTracker {
     /// 只能在玩家自身的 `CLogin` 数据包发送之后调用。
     pub fn pair_new_player_with_tracked_entities(&self, player_arc: &Arc<Player>, world: &World) {
         let entity_id = player_arc.get_entity().entity_id;
-        for entry in &self.entity_map {
-            if *entry.key() != entity_id {
-                entry.value().update_player(player_arc, world);
+        // 快照后迭代：update_player 会触发阻塞插件事件，不能在
+        // entity_map 分片读锁下进行。
+        let tracked_entities: Vec<Arc<TrackedEntity>> =
+            self.entity_map.iter().map(|e| e.value().clone()).collect();
+        for tracked in &tracked_entities {
+            if tracked.entity_id != entity_id {
+                tracked.update_player(player_arc, world);
             }
         }
     }
@@ -481,11 +606,14 @@ impl EntityTracker {
     ) {
         let chunks: FxHashSet<_> = chunks.iter().copied().collect();
         let entity_id = player.get_entity().entity_id;
-        for entry in &self.entity_map {
-            if *entry.key() != entity_id
-                && chunks.contains(&entry.value().entity.get_entity().chunk_pos.load())
+        // 快照后迭代，理由同 pair_new_player_with_tracked_entities。
+        let tracked_entities: Vec<Arc<TrackedEntity>> =
+            self.entity_map.iter().map(|e| e.value().clone()).collect();
+        for tracked in &tracked_entities {
+            if tracked.entity_id != entity_id
+                && chunks.contains(&tracked.entity.get_entity().chunk_pos.load())
             {
-                entry.value().update_player(player, world);
+                tracked.update_player(player, world);
             }
         }
     }
@@ -493,13 +621,15 @@ impl EntityTracker {
     pub fn remove_entity(&self, entity: &dyn EntityBase, world: &World) {
         let entity_id = entity.get_entity().entity_id;
         if let Some(player) = entity.get_player() {
-            for entry in &self.entity_map {
-                entry.value().remove_player(player);
+            let tracked_entities: Vec<Arc<TrackedEntity>> =
+                self.entity_map.iter().map(|e| e.value().clone()).collect();
+            for tracked in &tracked_entities {
+                tracked.remove_player(player);
             }
         }
 
         if let Some((_, tracked)) = self.entity_map.remove(&entity_id) {
-            tracked.broadcast_removed(world);
+            tracked.finalize_removal(world);
         }
     }
 
@@ -510,21 +640,27 @@ impl EntityTracker {
             get_section_cord(pos.y.floor() as i32),
             get_section_cord(pos.z.floor() as i32),
         );
-        if let Some(tracked) = self.entity_map.get(&player.get_entity().entity_id) {
+        if let Some(tracked) = self.get_tracked_entity(player.get_entity().entity_id) {
             tracked.last_section_pos.store(new_pos);
         }
-        for entry in &self.entity_map {
-            if *entry.key() == player.get_entity().entity_id {
+        // 快照后迭代：不能在 entity_map 分片读锁下触发阻塞插件事件
+        // 或让插件回调写 entity_map（跨线程分片锁死锁）。
+        let tracked_entities: Vec<Arc<TrackedEntity>> =
+            self.entity_map.iter().map(|e| e.value().clone()).collect();
+        for tracked in &tracked_entities {
+            if tracked.entity_id == player.get_entity().entity_id {
                 let players = world.players.load();
-                entry.value().update_players(players.as_ref(), world);
+                tracked.update_players(players.as_ref(), world);
             } else {
-                entry.value().update_player(player, world);
+                tracked.update_player(player, world);
             }
         }
     }
 
     pub fn update_entity_position(&self, entity: &dyn EntityBase, world: &World) {
-        if let Some(tracked) = self.entity_map.get(&entity.get_entity().entity_id) {
+        // 用克隆而非 map.get 的 Ref 守卫：后者在 update_players 触发
+        // 阻塞插件事件期间持续持有分片读锁，同样会死锁。
+        if let Some(tracked) = self.get_tracked_entity(entity.get_entity().entity_id) {
             let pos = entity.get_entity().pos.load();
             let new_pos = Vector3::new(
                 get_section_cord(pos.x.floor() as i32),
@@ -541,8 +677,10 @@ impl EntityTracker {
         let players = world.players.load();
         let mut moved_players = Vec::new();
 
-        for entry in &self.entity_map {
-            let tracked = entry.value();
+        // 快照后迭代，理由同 update_player_position。
+        let tracked_entities: Vec<Arc<TrackedEntity>> =
+            self.entity_map.iter().map(|e| e.value().clone()).collect();
+        for tracked in &tracked_entities {
             let pos = tracked.entity.get_entity().pos.load();
             let new_pos = Vector3::new(
                 get_section_cord(pos.x.floor() as i32),
@@ -562,13 +700,12 @@ impl EntityTracker {
         }
 
         if !moved_players.is_empty() {
-            for entry in &self.entity_map {
-                entry.value().update_players(&moved_players, world);
+            for tracked in &tracked_entities {
+                tracked.update_players(&moved_players, world);
             }
         }
 
-        for entry in &self.entity_map {
-            let tracked = entry.value();
+        for tracked in &tracked_entities {
             if tracked.entity.get_entity().synched_data.is_dirty() {
                 tracked.entity.get_entity().send_dirty_entity_data();
             }
