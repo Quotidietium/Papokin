@@ -2,7 +2,7 @@
 
 > 生成时间：2026-09-20 · 方法：双侧源码核查（Pumpkin 侧主代理逐点验证；Papo 侧三路并行源码扫描：核心架构 / 事件·权限·命令·调度 / Papo 自有定制与配置面）
 > **引用约定**：
-> - Pumpkin 侧：`相对路径:行号`，以仓库根为根，行号为 master @ 3eee993d1 实际行号。WIT 契约位于 `crates/pumpkin-plugin-wit/v0.1/`（下称 **[WIT]**）。
+> - Pumpkin 侧：`相对路径:行号`，以仓库根为根，行号为 master @ 3eee993d1 实际行号。WIT 契约位于 `crates/papokin-plugin-wit/v0.1/`（下称 **[WIT]**）。
 > - Papo 侧：相对 `REF/Papo-Java-0.80.0-src/` 的路径行号。`paper-server/src/main/java/**` 为直提交生效源码；`patches/sources/**` 为 vanilla 补丁（行号为补丁内行号）；**[00XX]** 指 `paper-server/patches/features/00XX-*.patch`（Papo 特性补丁，行号为补丁内行号）。
 >
 > **时效说明**：本笔记为成文时点的对比快照（Pumpkin 侧行号锚定上述 commit，后续改动不回流）。§12「Pumpkin 可向 Papo 学」的 6 项在成文当日**已全部落地**，实现记录见 [11-插件API强化实现记录](11-插件API强化实现记录-Papo机制级覆盖.md)；插件 API 的当前权威参考见 [12-插件API文档](12-插件API文档.md)。
@@ -66,7 +66,7 @@ graph TB
 | 文件发现 | 扫 `plugins/` 目录（loader 按扩展名认领） | 目录/flag/数组四类 ProviderSource（`provider/source/`），`update/` 目录自动更新（`FileProviderSource.java:42-96`） |
 | 字节码预处理 | 无（.wasm 直接编译，`*.cwasm` 缓存 `plugins/cache/`，`wasm_host/mod.rs:286`） | **PluginRemapper**：spigot/obf → mojang 映射改写，缓存 `<plugins>/.paper-remapped/`，hash 指纹跳过（`pluginremap/PluginRemapper.java:45,146-211,225-264`）；legacy 插件另过 Commodore API 降级改写（`PluginClassLoader.java:240`） |
 | 排序 | `topological_sort` 按依赖名（`plugin/mod.rs:412`，DFS + current_path 环报错） | Modern 策略：依赖合并 → 缺失硬依赖剔除 → `LoadOrderTree`（load-before/after 双向边）→ 拓扑排序 + `JohnsonSimpleCycles` 环检测；可 `-Dpaper.useLegacyPluginLoading` 回退 Spigot 迭代消解（`storage/ConfiguredProviderStorage.java:9-14`） |
-| 权限审批 | **加载期交互式审批**：插件申请的 WASI 能力权限逐条过 `allowed_permissions`/`blocked_permissions` 清单，未命中则控制台询问（`ask_permission_confirmation`，`pumpkin-config/src/plugins.rs`；审批流 `plugin/mod.rs:835+`） | 无此概念（权限一词仅指玩家权限系统） |
+| 权限审批 | **加载期交互式审批**：插件申请的 WASI 能力权限逐条过 `allowed_permissions`/`blocked_permissions` 清单，未命中则控制台询问（`ask_permission_confirmation`，`papokin-config/src/plugins.rs`；审批流 `plugin/mod.rs:835+`） | 无此概念（权限一词仅指玩家权限系统） |
 | 全程同步性 | 加载为 async 但启动期一次完成 | 同步（主线程）；唯一异步是重映射线程池（`PluginRemapper.java:409-441`） |
 
 ### 3.2 生命周期回调与异常处置
@@ -137,7 +137,7 @@ flowchart LR
 **插件能力权限（授权插件能做什么）——Pumpkin 独有维度**
 
 - 插件对宿主资源（TCP/UDP socket、环境变量、`plugins/data/<name>/` 之外的文件系统）的每次访问都是一次**显式能力**：清单预批（`allowed_permissions`/`blocked_permissions`）→ 交互审批（`ask_permission_confirmation`，默认 true）→ 运行期 WASI 钩子强制（socket 策略 `wasm_host/mod.rs:86,349-361`；env `:364-380`；FsPerms 目录权限）。
-- 支持**逐插件覆盖**（`[plugins.overrides.<name>]`：enabled/allow_unsigned/max_memory_mb/permissions/loopback_only/environment，`pumpkin-config/src/plugins.rs`）。
+- 支持**逐插件覆盖**（`[plugins.overrides.<name>]`：enabled/allow_unsigned/max_memory_mb/permissions/loopback_only/environment，`papokin-config/src/plugins.rs`）。
 - Papo 没有这一维度：插件=服务器进程全权，唯一的"插件侧防线"是类加载命名空间拒绝（`NamespaceChecker.java:9-26`）——防伪装服务器类，不防资源访问。
 
 ## 6. 命令系统
@@ -145,7 +145,7 @@ flowchart LR
 | 维度 | Pumpkin | Papo |
 |---|---|---|
 | 注册 | `register-command(command, permission)`（[WIT] context.wit）；命令树重建走 `ArcSwap<CommandDispatcher>` rcu **原子换树**并**对全体在线玩家重发命令包**（`plugin/api/context.rs:251-260`；笔记 04 §4.7） | legacy：plugin.yml `commands` → `PluginCommand` → `SimpleCommandMap.registerAll`（`PaperPluginInstanceManager.java:185-190`）；modern：`LifecycleEvents.COMMANDS` registrar |
-| 底层 | 自研 Brigadier 克隆（`pumpkin-command`） | vanilla Brigadier；**Bukkit 命令表已是 Brigadier root 的转发视图**（`CraftCommandMap.java:8` → `BukkitBrigForwardingMap`，put 即摘旧挂新） |
+| 底层 | 自研 Brigadier 克隆（`papokin-command`） | vanilla Brigadier；**Bukkit 命令表已是 Brigadier root 的转发视图**（`CraftCommandMap.java:8` → `BukkitBrigForwardingMap`，put 即摘旧挂新） |
 | 权限可见性 | 权限谓词在**解析期**过滤——无权限命令对补全也不可见（笔记 04 §4.7） | Brigadier `requires` 谓词（`BukkitCommandNode.java:41`）；下发树按权限异步构建（`Commands.java.patch:140+`，COMMAND_SENDING_POOL） |
 | 补全 | `handle-command-suggestion` guest 导出（[WIT] plugin.wit） | `tabComplete` + `BukkitBrigSuggestionProvider`（`BukkitCommandNode.java:54`） |
 | 冲突处理 | 树重建时插件命令按注册序（fallback 语义未发现专门机制） | label 被占自动改注 `插件名:label`（`SimpleCommandMap.java:72-84`） |
@@ -183,7 +183,7 @@ flowchart LR
 | 隔离边界 | WASM 线性内存 + 组件模型（无共享内存）；wasmtime 沙箱 | 无（JVM 同进程；SecurityManager 时代已终结） |
 | 资源能力 | socket 策略（默认禁，可 loopback-only）、env（默认不继承）、文件系统（预开 data 目录 + FsPerms）、内存上限（全局/逐插件 `max_memory_mb`） | 进程级资源全部可访问；唯一硬墙是命名空间检查 |
 | 完整性 | ed25519 签名写入 WASM custom section（`wasm_host/signature.rs`），`verify_signatures` 默认 true、`allow_unsigned` 默认 true（配置可收紧） | jar 可签名但生态基本不用；完整性靠分发渠道 |
-| 供应链 | **市场元数据进契约**：`marketplace-metadata`（license-key/is-paid/issued-at，[WIT] context.wit）+ `pumpkin-plugin-utils` LicenseChecker（在线校验 + lease 缓存 + 宽限）/UpdateChecker（笔记 04 §4.10） | 无宿主级机制（marketplace 在分发站侧） |
+| 供应链 | **市场元数据进契约**：`marketplace-metadata`（license-key/is-paid/issued-at，[WIT] context.wit）+ `papokin-plugin-utils` LicenseChecker（在线校验 + lease 缓存 + 宽限）/UpdateChecker（笔记 04 §4.10） | 无宿主级机制（marketplace 在分发站侧） |
 | 信息防泄露 | 插件列表不进入客户端可见面（生态新，无既有泄露面） | **Papo 特色战场**：作弊客户端可从 plugin-channels 广播/brand/ping 版本串/`/plugins` 推测插件存在——`fingerprint-hardening` 配置族三向加固 + 命令默认权限收紧（[批次 51/52]，`GlobalConfiguration.java:78-173`；`note/optimizations.md:1478-1524`） |
 | WASM/外部进程通道 | ——本体即 WASM | 确认不存在（全仓 grep wasm/wasmtime/extism/sandbox 零命中） |
 
@@ -203,7 +203,7 @@ flowchart LR
 
 ## 11. 配置面对照
 
-| 配置 | Pumpkin（pumpkin.toml `[plugins]`，`pumpkin-config/src/plugins.rs`） | Papo |
+| 配置 | Pumpkin（papokin.toml `[plugins]`，`papokin-config/src/plugins.rs`） | Papo |
 |---|---|---|
 | 总开关 | `enabled`（默认 true） | 无（插件系统不可关） |
 | 热重载 | `hot_reload`（默认 false） | 无（`/reload` 手动全量） |
@@ -238,6 +238,6 @@ flowchart LR
 
 ## 13. 证据索引（关键文件）
 
-**Pumpkin**：`crates/pumpkin-plugin-wit/v0.1/plugin.wit`（world 契约：32 import/16 export）、`event.wit`（273 事件 variant :2160+、EventPriority :25-32）、`context.wit`/`scheduler.wit`/`ipc.wit`/`permission.wit`/`command.wit`；`crates/pumpkin/src/plugin/mod.rs`（PluginManager :184、HandlerMap :173、topological_sort :412、load_plugins :675、卸载 :1102、unregister_handlers :1125、fire :1208、fire_blocking :1243）；`plugin/api/events/mod.rs`（Payload/Cancellable/EventPriority :133）；`plugin/api/context.rs`（register_event :319、命令重发 :251-260、register_plugin_loader :349）；`plugin/loader/wasm/wasm_host/`（沙箱 mod.rs:313-432、签名 signature.rs、事件分发 wit/v0_1/events/mod.rs:233-329、register_event 宿主实现 wit/v0_1/context.rs:1509）；`plugin/loader/native.rs`（API 版本符号门控 :30-41）；`server/scheduler.rs`（TaskScheduler :63-129）；`crates/pumpkin-config/src/plugins.rs`（全部插件配置）。
+**Pumpkin**：`crates/papokin-plugin-wit/v0.1/plugin.wit`（world 契约：32 import/16 export）、`event.wit`（273 事件 variant :2160+、EventPriority :25-32）、`context.wit`/`scheduler.wit`/`ipc.wit`/`permission.wit`/`command.wit`；`crates/papokin/src/plugin/mod.rs`（PluginManager :184、HandlerMap :173、topological_sort :412、load_plugins :675、卸载 :1102、unregister_handlers :1125、fire :1208、fire_blocking :1243）；`plugin/api/events/mod.rs`（Payload/Cancellable/EventPriority :133）；`plugin/api/context.rs`（register_event :319、命令重发 :251-260、register_plugin_loader :349）；`plugin/loader/wasm/wasm_host/`（沙箱 mod.rs:313-432、签名 signature.rs、事件分发 wit/v0_1/events/mod.rs:233-329、register_event 宿主实现 wit/v0_1/context.rs:1509）；`plugin/loader/native.rs`（API 版本符号门控 :30-41）；`server/scheduler.rs`（TaskScheduler :63-129）；`crates/papokin-config/src/plugins.rs`（全部插件配置）。
 
 **Papo**：`paper-api/src/main/java/org/bukkit/plugin/`（SimplePluginManager 转发壳、SimpleServicesManager、PluginDescriptionFile）；`org/bukkit/event/{HandlerList,EventPriority,EventHandler}.java`；`org/bukkit/permissions/PermissibleBase.java`；`org/bukkit/plugin/java/{JavaPlugin,PluginClassLoader,LibraryLoader}.java`；`paper-server/src/main/java/io/papermc/paper/plugin/`（PluginInitializerManager、provider/type/{PluginFileType,spigot/*,paper/PaperPluginParent}、provider/configuration/PaperPluginMeta、provider/source/*、storage/*、entrypoint/strategy/modern/LoadOrderTree、entrypoint/classloader/*、manager/{PaperPluginManagerImpl,PaperPluginInstanceManager,PaperEventManager,PaperPermissionManager}、pluginremap/PluginRemapper）；`io/papermc/paper/command/brigadier/`（BukkitBrigForwardingMap、BukkitCommandNode、PaperCommands）；`io/papermc/paper/threadedregions/`（EntityScheduler、FallbackRegionScheduler）；`org/bukkit/craftbukkit/`（CraftServer :554/:585/:957/:1123、CraftCommandMap:8、CraftEventFactory 快路、CraftPlayer:2372、CraftMagicNumbers:364-406）；patches：Main/Bootstrap/DedicatedServer/MinecraftServer/Commands/PlayerList/ServerGamePacketListenerImpl `.java.patch`；features [0025][0034][0050][0078][0079][0100]-[0240]；`io/papermc/paper/configuration/GlobalConfiguration.java:78-173,436`；`note/optimizations.md`（批次 5/6/23/29-52）、`note/report/2026-08-02-fingerprint-hardening*.md`。

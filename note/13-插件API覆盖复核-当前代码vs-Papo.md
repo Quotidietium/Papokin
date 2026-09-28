@@ -12,7 +12,7 @@
 
 | 指标 | Papokin（当前） | Papo（0.80.0） |
 |---|---|---|
-| 契约/API 文件 | 51 个 WIT（`crates/pumpkin-plugin-wit/v0.1`） | org.bukkit 1268 个 .java + io.papermc.paper 扩展 |
+| 契约/API 文件 | 51 个 WIT（`crates/papokin-plugin-wit/v0.1`） | org.bukkit 1268 个 .java + io.papermc.paper 扩展 |
 | 函数总数 | **896**（`grep -c ': func('`，含 resource 方法与 17 个 guest export） | 不可比（方法级数千） |
 | 事件类型 | **273**（event.wit variant 实测） | ~**395**（org.bukkit.event 304 文件约 296 个具体事件 + io.papermc.paper.event 99 个 Paper-only） |
 | 事件挂点 | **288 个 fire 调用点**（业务代码，另有 5 处 `send_cancellable!`、2 处 `has_handlers` 零监听器门控） | 遍布 vanilla 的 callEvent + ~40 个零监听器门控补丁 |
@@ -117,6 +117,8 @@ log 2 · i18n 2 · config 2 · metadata 1 · ipc 1
 8. 不做：Conversations/HelpMap（小众）、Maven 运行时依赖/类共享/Remapper（范式不适用）、Folia RegionScheduler（Papo 自己也是 fallback）。
 
 ## 六、Pumpkin 独有能力（本次复核确认全部保持）
+
+> **2026-09-21 批注**：基岩版支持随后整体移除（见 [11 §十](11-插件API强化实现记录-Papo机制级覆盖.md)），本清单及 §四 矩阵中的「Bedrock 表单」「java-packets/bedrock-packets 双版本裸包」条目随之失效，其余条目不受影响。
 
 AI 目标自定义注册（host 接线已活）· 区块生成阶段挂钩 · 包级可取消事件 + 双版本裸包访问 · Bedrock 表单 + Java 对话框同契约 · 逐插件热重载（500ms 去抖）· 自定义插件加载器 · 能力沙箱 15 权限 + 逐插件 override · ed25519 签名 + 市场元数据 · 插件间 IPC · 命令树 ArcSwap 原子换树全体重发 · non-blocking 结构性只读档 · 零监听器一行早退。
 

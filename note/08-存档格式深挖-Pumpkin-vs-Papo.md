@@ -28,7 +28,7 @@ Pumpkin 世界根/                              Papo 世界根/
 ```
 
 - Pumpkin 维度目录解析带 legacy 回退（`level.rs:157-182`：26.2 canonical `dimensions/<ns>/<name>` → 根 `region`/`DIM-1`/`DIM1`），Papo 继承 vanilla 同款逻辑。
-- **格式选择是每世界一个**（`pumpkin.toml [world.chunk] type = anvil|linear|pump`，`level.rs:251-264`），区块与实体区块共用同一选择各自实例化 saver（`level.rs:60-67`）；**POI 永远走手写 MCA**（`poi/mod.rs`），不受配置影响。
+- **格式选择是每世界一个**（`papokin.toml [world.chunk] type = anvil|linear|pump`，`level.rs:251-264`），区块与实体区块共用同一选择各自实例化 saver（`level.rs:60-67`）；**POI 永远走手写 MCA**（`poi/mod.rs`），不受配置影响。
 - 命名细节：anvil 键 `./r.{rx}.{rz}.mca`（`anvil.rs` get_chunk_key）、Linear 键 `./r.{rx}.{rz}.linear`（`linear.rs:386-389`）、Pump 键 `r.{rx}.{rz}.pump`（无 `./` 前缀，`pump.rs:44-48`）；Papo 全部 vanilla 式 `r.<rx>.<rz>.mca`（`RegionFileStorage.java.patch:20`）。
 - Pumpkin 独有世界级文件：`pumpkin_custom_data.nbt`（世界 PDC，`world/mod.rs:7097-7104`）；Papo 统计系统完整（stats JSON），Pumpkin 未实现统计。
 
@@ -53,7 +53,7 @@ Pumpkin 世界根/                              Papo 世界根/
 
 | | Pumpkin | Papo |
 |---|---|---|
-| 默认算法 | **LZ4，level 6**（`pumpkin-config/src/chunk.rs` `Default for ChunkCompression`）——非 vanilla 传统 ZLib；1.21+（24w04a 起）原版客户端/服务端可读 | **ZLIB，level 6** = 与 vanilla 输出**逐字节一致**（`GlobalConfiguration.java:284-290`） |
+| 默认算法 | **LZ4，level 6**（`papokin-config/src/chunk.rs` `Default for ChunkCompression`）——非 vanilla 传统 ZLib；1.21+（24w04a 起）原版客户端/服务端可读 | **ZLIB，level 6** = 与 vanilla 输出**逐字节一致**（`GlobalConfiguration.java:284-290`） |
 | 可配置项 | `algorithm: GZip\|ZLib\|LZ4\|Custom` + `level: u32` | `compression-format: GZIP\|ZLIB\|LZ4\|NONE` + `compression-level`（1=BEST_SPEED） |
 | 块级压缩继承 | **沿用磁盘上已有块的压缩类型**重压缩（`anvil.rs:625-628` "Default to the compression type read from the file"）——转档时保持世界内一致性 | 全局配置决定；级别默认 6 保字节等价 |
 | 实现优化 | flate2 / lz4-java-wrc 直接调用 | Deflater/Inflater ThreadLocal 池化 + 写缓冲 8K/32K（features 0066/0129；`PapoDeflaterOutputStream` close 时 `end()` 防原生泄漏） |
@@ -165,6 +165,6 @@ Pumpkin 世界根/                              Papo 世界根/
 
 ## 12. 证据索引（本文新增）
 
-**Pumpkin**：`crates/pumpkin-world/src/chunk/format/{anvil.rs, linear.rs, pump.rs, mod.rs}`（三格式全部实现与 NBT 载荷）、`chunk/io/file_manager.rs`、`crates/pumpkin-config/src/chunk.rs`（默认 LZ4-6、write_in_place）、`crates/pumpkin-world/src/poi/mod.rs`（手写 POI MCA）、`crates/pumpkin-world/src/world_info/anvil.rs`（level.dat）、`crates/pumpkin-world/src/data/player_data.rs`、`crates/pumpkin-world/src/level.rs:60-67,151-264`（格式选择与目录）。
+**Pumpkin**：`crates/papokin-world/src/chunk/format/{anvil.rs, linear.rs, pump.rs, mod.rs}`（三格式全部实现与 NBT 载荷）、`chunk/io/file_manager.rs`、`crates/papokin-config/src/chunk.rs`（默认 LZ4-6、write_in_place）、`crates/papokin-world/src/poi/mod.rs`（手写 POI MCA）、`crates/papokin-world/src/world_info/anvil.rs`（level.dat）、`crates/papokin-world/src/data/player_data.rs`、`crates/papokin-world/src/level.rs:60-67,151-264`（格式选择与目录）。
 
 **Papo**：[0001]（RegionFile/RegionFileStorage 的 Moonrise 化、Starlight 光照 hack、Entity/PoiDataController）、`patches/sources/net/minecraft/world/level/chunk/storage/{RegionFile,RegionFileStorage,RegionFileVersion,SerializableChunkData,SimpleRegionStorage}.java.patch`、`patches/sources/net/minecraft/world/level/storage/{PlayerDataStorage,LevelStorageSource}.java.patch`、`src/main/java/io/papermc/paper/configuration/{WorldConfiguration,GlobalConfiguration}.java`、features 0004/0009/0017/0018/0019/0020/0022/0066/0129。

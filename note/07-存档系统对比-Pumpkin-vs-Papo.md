@@ -41,7 +41,7 @@ graph TB
 
 | 触发 | Pumpkin | Papo |
 |---|---|---|
-| 周期 autosave | `world_age % autosave_ticks == 0` → `should_save` 标志 + 通知（`world/mod.rs:1891-1896`），默认 6000 tick（`pumpkin-config/src/world.rs:21,41`） | bukkit.yml `ticks-per.autosave` 默认 6000（`CraftServer.java:473`），区块级 `chunks.auto-save-interval` 回落到它；消费在 `ChunkHolderManager.autoSave()`（[0001]:6976-7005） |
+| 周期 autosave | `world_age % autosave_ticks == 0` → `should_save` 标志 + 通知（`world/mod.rs:1891-1896`），默认 6000 tick（`papokin-config/src/world.rs:21,41`） | bukkit.yml `ticks-per.autosave` 默认 6000（`CraftServer.java:473`），区块级 `chunks.auto-save-interval` 回落到它；消费在 `ChunkHolderManager.autoSave()`（[0001]:6976-7005） |
 | autosave 粒度 | **一次全量扫**：`save_all_chunk(false)` 遍历全部 holder 收集所有脏 Level 区块（`schedule.rs:917-960`）→ 一次突发 IO | **增量摊销**：`autoSaveQueue`（按 lastAutoSave 最旧优先的有序集）每 tick 最多取 `max-auto-save-chunks-per-tick`（默认 24）个 |
 | 区块卸载 | 每 100 tick `should_unload` → `clean_memory`；卸载队列每 1 秒批量处理（`schedule.rs:1302-1306`）；脏块保存（`schedule.rs:887-890`） | 三段式 `unloadStage1/2/3`（[0001]:10211-10315），stage2 保存 chunk/实体/POI；卸载延迟可配 `chunks.delay-chunk-unloads-by`（默认 10s，`WorldConfiguration.java:530`） |
 | /save-all | `Server::save_all`（`server/mod.rs:585-611`）：**level.dat/玩家/进度同步**，区块仅置 `should_save`+notify **异步触发、不等待完成**（`world/mod.rs:7101-7106`）；`flush` 子参数当前不改变行为（`saveall.rs:67`） | `saveAllChunks(flush)`：逐块保存 + 每 100 块 partialFlush + 结尾 `MoonriseRegionFileIO.flush` + `flushRegionStorages`，且 `PapoOrderedFileWrites.awaitAll(60s)` **等全部落盘才返回**（[0001]:7007-7096；`MinecraftServer.java.patch:552-554`） |
@@ -83,8 +83,8 @@ graph TB
 | 维度 | Pumpkin | Papo |
 |---|---|---|
 | 格式清单 | **三格式**：anvil(.mca) / Linear V2 / 自研 Pump（`level.rs:60-67`，由 `ChunkConfig` 选择，`level.rs:251-264`） | **仅 anvil(.mca)**；全仓库无 LinearRegionFile（探查确认零命中） |
-| 压缩算法 | anvil 每-块版本字节 GZip/ZLib/LZ4/Custom（`chunk/format/anvil.rs:45-52`），配置 `compression`（`pumpkin-config/src/chunk.rs:33`） | GZIP/ZLIB(默认)/LZ4/NONE 可配（`RegionFileVersion.java.patch:7-16`）+ **压缩级别**可配（默认 6=与 vanilla 逐字节一致，feature 0066）+ Deflater/Inflater 池化（feature 0129） |
-| 写入方式 | **整文件重写**：`WriteAction::{Pass,All,Parts}`——无脏块跳过 / tmp 文件全量重建 / `write_in_place` 按索引局部写（`anvil.rs` ChunkSerializer impl；`write_all` tmp+重建 header，`pumpkin-config/src/chunk.rs:35`） | **扇区级随机写**：FileChannel + ChunkBuffer 定位扇区写入；Spigot 255 扇区扩展 + 超 1MB 外部 `.mcc` 文件（`RegionFile.java.patch:13-23,49-60`；features 0004/0009） |
+| 压缩算法 | anvil 每-块版本字节 GZip/ZLib/LZ4/Custom（`chunk/format/anvil.rs:45-52`），配置 `compression`（`papokin-config/src/chunk.rs:33`） | GZIP/ZLIB(默认)/LZ4/NONE 可配（`RegionFileVersion.java.patch:7-16`）+ **压缩级别**可配（默认 6=与 vanilla 逐字节一致，feature 0066）+ Deflater/Inflater 池化（feature 0129） |
+| 写入方式 | **整文件重写**：`WriteAction::{Pass,All,Parts}`——无脏块跳过 / tmp 文件全量重建 / `write_in_place` 按索引局部写（`anvil.rs` ChunkSerializer impl；`write_all` tmp+重建 header，`papokin-config/src/chunk.rs:35`） | **扇区级随机写**：FileChannel + ChunkBuffer 定位扇区写入；Spigot 255 扇区扩展 + 超 1MB 外部 `.mcc` 文件（`RegionFile.java.patch:13-23,49-60`；features 0004/0009） |
 | 文件缓存 | BTreeMap 全量持有**整个文件内容在内存**，仅靠 watcher 计数逐出（**无容量上限**，`file_manager.rs:43-44`） | RegionFile 句柄 LRU 缓存上限 256（`misc.region-file-cache-size`，[0001]:32932-32950）+ 不存在文件负缓存 4096（:32909-32940） |
 | 损坏容错 | 读侧宽容：palette 接受 IntArray/ByteArray/LongArray/List 多形态、legacy Status 字符串映射、坐标错位报错（`chunk/format/mod.rs:73-119,370-384,194-199`） | region 头损坏时**重算 header** 而非搬文件（feature 0019）；序列化抛异常则不写盘保住旧版本（feature 0017） |
 | fsync | 无显式 fsync 控制 | 构造时 dsync 可选 + `chunks.flush-regions-on-save` 每写即 flush 元数据（feature 0022） |
@@ -108,7 +108,7 @@ graph TB
 |---|---|---|
 | 写盘失败 | `save_chunks` 返回 Err → `error!` 日志，**无重试**（`level.rs:858-863`）；脏标志已在序列化前清除（`file_manager.rs:365`）→ 该批改动需等下次变更重新标脏才会再存 | 写失败时任务**保留在 chunkTasks map 防数据丢失**，新数据到来会重新走压缩/写盘（[0001]:2515-2522, 2478-2505）；序列化异常不写盘保旧版（feature 0017） |
 | 快照-清脏窗口 | 与 Papo 相同的"先清脏"模式，但失败后无兜底 | 同左，但有 map 兜底 |
-| 玩家 .dat 写入 | **直接 `File::create` 覆盖写** gzip NBT，非原子（`pumpkin-world/src/data/player_data.rs:140-144`）——写到一半崩溃=档案损坏 | tmp 文件 + `Util.safeReplaceFile(.dat, tmp, .dat_old)` 三文件原子替换 + 备份（`PlayerDataStorage.java.patch:15-33`） |
+| 玩家 .dat 写入 | **直接 `File::create` 覆盖写** gzip NBT，非原子（`papokin-world/src/data/player_data.rs:140-144`）——写到一半崩溃=档案损坏 | tmp 文件 + `Util.safeReplaceFile(.dat, tmp, .dat_old)` 三文件原子替换 + 备份（`PlayerDataStorage.java.patch:15-33`） |
 | level.dat 写入 | tmp + rename 原子替换（`world_info/anvil.rs:441-447`），有 `level.dat_old` 常量（:33） | 深拷贝快照 → IO 池 tmp + safeReplace（批 80，`LevelStorageSource.java.patch:79-102`） |
 
 ## 7. 关停与崩溃
@@ -153,9 +153,9 @@ graph TB
 
 ## 10. 配置面对照
 
-| 配置 | Pumpkin（pumpkin.toml） | Papo（paper/bukkit/spigot yml） |
+| 配置 | Pumpkin（papokin.toml） | Papo（paper/bukkit/spigot yml） |
 |---|---|---|
-| autosave 间隔 | `[world] autosave_ticks`（默认 6000，`pumpkin-config/src/world.rs:21`） | bukkit `ticks-per.autosave: 6000` + paper `chunks.auto-save-interval`（回落前者） |
+| autosave 间隔 | `[world] autosave_ticks`（默认 6000，`papokin-config/src/world.rs:21`） | bukkit `ticks-per.autosave: 6000` + paper `chunks.auto-save-interval`（回落前者） |
 | 每 tick 保存量 | **无**（一次全量） | `chunks.max-auto-save-chunks-per-tick: 24` |
 | 区块格式 | `[chunk] anvil{compression,write_in_place} / linear / pump` | 无格式选择（仅 anvil） |
 | 压缩 | anvil.compression: GZip/ZLib/LZ4/Custom | `unsupported-settings.compression-format`（GZIP/ZLIB/LZ4/NONE）+ `compression-level`（默认 6） |
@@ -198,6 +198,6 @@ graph TB
 
 ## 12. 证据索引（关键文件）
 
-**Pumpkin**：`crates/pumpkin-world/src/level.rs`（Level/shutdown/entity chunks）、`chunk/io/file_manager.rs`（ChunkFileManager 全部保存逻辑）、`chunk/io/mod.rs`（FileIO/ChunkSerializer trait）、`chunk/format/mod.rs`（区块/实体 NBT 编解码）、`chunk/format/anvil.rs`（anvil 读写/压缩/WriteAction）、`chunk_system/schedule.rs`（should_save/should_unload 消费、save_all_chunk）、`chunk_system/worker_logic.rs`（io_write_work）、`crates/pumpkin/src/world/mod.rs:575,7069`（World::save/shutdown、autosave 触发）、`crates/pumpkin/src/server/mod.rs:585,747`（save_all/shutdown）、`crates/pumpkin/src/data/player_server.rs`、`crates/pumpkin-world/src/data/player_data.rs`、`crates/pumpkin-world/src/poi/mod.rs`、`crates/pumpkin-world/src/world_info/anvil.rs`、`crates/pumpkin/src/command/commands/saveall.rs|saveoff.rs|saveon.rs`、`crates/pumpkin-config/src/{world,chunk,player_data}.rs`。
+**Pumpkin**：`crates/papokin-world/src/level.rs`（Level/shutdown/entity chunks）、`chunk/io/file_manager.rs`（ChunkFileManager 全部保存逻辑）、`chunk/io/mod.rs`（FileIO/ChunkSerializer trait）、`chunk/format/mod.rs`（区块/实体 NBT 编解码）、`chunk/format/anvil.rs`（anvil 读写/压缩/WriteAction）、`chunk_system/schedule.rs`（should_save/should_unload 消费、save_all_chunk）、`chunk_system/worker_logic.rs`（io_write_work）、`crates/papokin/src/world/mod.rs:575,7069`（World::save/shutdown、autosave 触发）、`crates/papokin/src/server/mod.rs:585,747`（save_all/shutdown）、`crates/papokin/src/data/player_server.rs`、`crates/papokin-world/src/data/player_data.rs`、`crates/papokin-world/src/poi/mod.rs`、`crates/papokin-world/src/world_info/anvil.rs`、`crates/papokin/src/command/commands/saveall.rs|saveoff.rs|saveon.rs`、`crates/papokin-config/src/{world,chunk,player_data}.rs`。
 
 **Papo**：`REF/Papo-Java-0.80.0-src/paper-server/patches/features/0001-Moonrise-optimisation-patches.patch`（Moonrise 全部）、`patches/sources/net/minecraft/world/level/chunk/storage/*.patch`（RegionFile/RegionFileStorage/RegionFileVersion/SerializableChunkData/SimpleRegionStorage）、`patches/sources/net/minecraft/world/level/storage/{PlayerDataStorage,LevelStorageSource}.java.patch`、`patches/sources/net/minecraft/server/MinecraftServer.java.patch`、`src/main/java/io/papermc/paper/util/{PapoOrderedFileWrites,PapoParallelism}.java`、`src/main/java/ca/spottedleaf/moonrise/common/util/MoonriseCommon.java`、`src/main/java/io/papermc/paper/configuration/{WorldConfiguration,GlobalConfiguration}.java`、features 0004/0009/0017/0018/0019/0020/0022/0066/0129/0209/0249、`note/optimizations.md`（批次决策日志，含实体下放否决记录 :2135）。

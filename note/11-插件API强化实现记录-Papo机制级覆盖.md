@@ -22,7 +22,7 @@
 | ⑪ | 事件挂点补缺（Papo 280 事件深度挂点） | WIT 273 事件中 **60 个无 fire 点** → 本轮接线 **47 个**（3 并行子代理 35 + 主线 12）；其余见 §四 | ✅ 编译 + 抽样 e2e |
 | ⑫ | EntityScheduler（Bukkit 实体生命周期绑定任务） | WIT `scheduler.wit` 增 `schedule-entity-delayed-task` / `schedule-entity-repeating-task`（`handler-id` + `entity-id` 约定）；`ScheduledTask.entity_id: Option<i32>`，`tick()` 触发时跨 `server.worlds` 解析 `get_entity_by_id`，实体不存在即静默跳过（repeating 永久停）；SDK 增 `EntitySchedulerExt`（`Entity::schedule_entity_{delayed,repeating}_task`） | ✅ 编译；e2e 见 §四说明 |
 
-## 二、WIT / SDK 变更（`crates/pumpkin-plugin-wit/v0.1`、`crates/pumpkin-plugin-api/src`）
+## 二、WIT / SDK 变更（`crates/papokin-plugin-wit/v0.1`、`crates/papokin-plugin-api/src`）
 
 - 新增接口：`services.wit`、`messaging.wit`、`config.wit`。
 - 扩展：`context.wit`（register-event +`ignore-cancelled`）、`scheduler.wit`（异步任务族 + 实体绑定任务族，见 ⑫）、`metadata.wit`（load-after/load-before/provides/load-order）、`plugin.wit`（export on-enable/on-disable/handle-plugin-message）。
@@ -56,7 +56,7 @@
 
 ## 四、端到端验证（用户选定的验证标准）
 
-测试插件：`examples/e2e-plugin/`（**非 workspace** crate，path 依赖 `pumpkin-plugin-api`，`wasm32-wasip2` 直接产出组件 0x1000d）。
+测试插件：`examples/e2e-plugin/`（**非 workspace** crate，path 依赖 `papokin-plugin-api`，`wasm32-wasip2` 直接产出组件 0x1000d）。
 
 ```
 cargo build --target wasm32-wasip2   # 在 examples/e2e-plugin 下
