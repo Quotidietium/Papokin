@@ -5316,10 +5316,11 @@ impl World {
         let block_pos = block_entity.get_position();
         let chunk_pos = block_pos.chunk_position();
         let block_entity_nbt = block_entity.chunk_data_nbt();
-        let entity_id = block_entity.resource_location().to_string();
 
-        if let Some(nbt) = &block_entity_nbt {
-            let bytes = papokin_nbt::Nbt::from(nbt.clone()).write_unnamed();
+        // 广播与持久化各需一次序列化（客户端视图与存档形态不同，
+        // 无法合并）；此处避免额外的中间深拷贝。
+        if let Some(nbt) = block_entity_nbt {
+            let bytes = papokin_nbt::Nbt::from(nbt).write_unnamed();
             self.broadcast_to_chunk(
                 chunk_pos,
                 &CBlockEntityData::new(
@@ -5330,19 +5331,17 @@ impl World {
             );
         }
 
+        // 持久化用存档形态（write_internal）而非客户端视图
+        // chunk_data_nbt——后者可能省略字段（如延迟战利品表）。
+        let mut full_nbt = NbtCompound::new();
+        block_entity.write_internal(&mut full_nbt);
+
         self.block_entities
             .entry(chunk_pos)
             .or_default()
             .insert(block_pos, block_entity);
 
-        if let Some(nbt) = block_entity_nbt {
-            let mut full_nbt = nbt;
-            full_nbt.put_string("id", entity_id);
-            full_nbt.put_int("x", block_pos.0.x);
-            full_nbt.put_int("y", block_pos.0.y);
-            full_nbt.put_int("z", block_pos.0.z);
-            self.add_block_entity_nbt(block_pos, &full_nbt);
-        }
+        self.add_block_entity_nbt(block_pos, &full_nbt);
 
         self.level.read_chunk_sync(&chunk_pos, |chunk| {
             chunk.mark_dirty(true);
@@ -5430,8 +5429,8 @@ impl World {
         let chunk_pos = block_pos.chunk_position();
         let block_entity_nbt = block_entity.chunk_data_nbt();
 
-        if let Some(nbt) = &block_entity_nbt {
-            let bytes = papokin_nbt::Nbt::from(nbt.clone()).write_unnamed();
+        if let Some(nbt) = block_entity_nbt {
+            let bytes = papokin_nbt::Nbt::from(nbt).write_unnamed();
             self.broadcast_to_chunk(
                 chunk_pos,
                 &CBlockEntityData::new(
@@ -5440,14 +5439,23 @@ impl World {
                     bytes.as_ref().into(),
                 ),
             );
-            let mut full_nbt = nbt.clone();
-            full_nbt.put_string("id", block_entity.resource_location().to_string());
-            let pos = block_entity.get_position();
-            full_nbt.put_int("x", pos.0.x);
-            full_nbt.put_int("y", pos.0.y);
-            full_nbt.put_int("z", pos.0.z);
-            self.add_block_entity_nbt(block_pos, &full_nbt);
         }
+
+        // 持久化必须用存档形态（write_internal）：`chunk_data_nbt` 是
+        // 客户端视图，箱类/考古方块在有延迟战利品表时会整体省略
+        // `LootTable`/`LootTableSeed`——经本函数整体替换 pending 后，
+        // 活动期自动保存即把丢字段写上磁盘，窗口内崩溃 = 战利品
+        // 永久丢失。区块激活迁移路径（migrate_pending_block_entities）
+        // 也经此函数回写，此前会对每个战利品箱触发一次该损坏。
+        let mut full_nbt = NbtCompound::new();
+        block_entity.write_internal(&mut full_nbt);
+        if let Some(custom_data) = self.custom_block_entity_data.get(&block_pos)
+            && !custom_data.is_empty()
+        {
+            full_nbt.put_compound("PumpkinCustomData", custom_data.clone());
+        }
+        self.add_block_entity_nbt(block_pos, &full_nbt);
+
         self.level.read_chunk_sync(&chunk_pos, |chunk| {
             chunk.mark_dirty(true);
         });
