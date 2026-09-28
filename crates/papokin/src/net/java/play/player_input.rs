@@ -8,6 +8,10 @@ impl JavaClient {
         input: &SPlayerInput,
         server: &Arc<Server>,
     ) {
+        // 与其余动作处理器一致：加载完成（且未死亡）前不接受输入包
+        if !player.has_client_loaded() {
+            return;
+        }
         let mut input_event =
             crate::plugin::api::events::player::player_input::PlayerInputEvent::new(
                 player.clone(),
