@@ -51,8 +51,7 @@ impl JavaClient {
             match current_val {
                 GameRuleValue::Int(_) => {
                     if let Ok(val) = entry.value.parse::<i64>() {
-                        player.world().set_game_rule(rule, GameRuleValue::Int(val));
-                        // 与 /gamerule 命令路径一致：通知插件规则已更改
+                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）
                         if let Some(server) = &server_arc {
                             let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
                                 world.clone(),
@@ -60,7 +59,11 @@ impl JavaClient {
                                 val.to_string(),
                             );
                             server.plugin_manager.fire_blocking(server, &mut event);
+                            if event.cancelled {
+                                continue;
+                            }
                         }
+                        player.world().set_game_rule(rule, GameRuleValue::Int(val));
                         info!(
                             "玩家 {} 将游戏规则 {} 设置为 {}",
                             player.gameprofile.name, key, val
@@ -74,7 +77,7 @@ impl JavaClient {
                 }
                 GameRuleValue::Bool(_) => {
                     if let Ok(val) = entry.value.parse::<bool>() {
-                        player.world().set_game_rule(rule, GameRuleValue::Bool(val));
+                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）
                         if let Some(server) = &server_arc {
                             let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
                                 world.clone(),
@@ -82,7 +85,11 @@ impl JavaClient {
                                 val.to_string(),
                             );
                             server.plugin_manager.fire_blocking(server, &mut event);
+                            if event.cancelled {
+                                continue;
+                            }
                         }
+                        player.world().set_game_rule(rule, GameRuleValue::Bool(val));
                         info!(
                             "玩家 {} 将游戏规则 {} 设置为 {}",
                             player.gameprofile.name, key, val

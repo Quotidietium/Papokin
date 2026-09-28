@@ -16,13 +16,14 @@ use crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChan
 const DESCRIPTION: &str = "设置或查询一条游戏规则的值。";
 const PERMISSION: &str = "minecraft:command.gamerule";
 
-/// 通知插件游戏规则值已更改。纯通知：
-/// 写入在此运行时已经生效。
-fn fire_game_rule_change(context: &CommandContext, rule: &GameRule, value: String) {
+/// 通知插件游戏规则即将更改；返回 `true` 表示被插件取消，
+/// 调用方不得写入。
+fn fire_game_rule_change(context: &CommandContext, rule: &GameRule, value: String) -> bool {
     let server = context.source.server().clone();
     let world = context.source.world().clone();
     let mut event = WorldGameRuleChangeEvent::new(world, rule.to_string(), value);
     server.plugin_manager.fire_blocking(&server, &mut event);
+    event.cancelled
 }
 
 struct QueryExecutor(GameRule);
@@ -58,13 +59,16 @@ impl CommandExecutor for SetIntExecutor {
         let current_info = context.server().level_info.load();
         let mut new_info = (**current_info).clone();
 
+        // 先发事件并尊重取消：此前写入已生效后才通知，取消被无视
+        if fire_game_rule_change(context, &self.0, arg_value.to_string()) {
+            return Ok(arg_value.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+        }
+
         if let GameRuleValue::Int(raw_value) = new_info.game_rules.get_mut(&self.0) {
             *raw_value = arg_value;
         }
 
         context.server().level_info.store(Arc::new(new_info));
-
-        fire_game_rule_change(context, &self.0, arg_value.to_string());
 
         let value_component = TextComponent::text(arg_value.to_string());
         context.source.send_feedback(
@@ -86,13 +90,16 @@ impl CommandExecutor for SetBoolExecutor {
         let current_info = context.server().level_info.load();
         let mut new_info = (**current_info).clone();
 
+        // 先发事件并尊重取消：此前写入已生效后才通知，取消被无视
+        if fire_game_rule_change(context, &self.0, arg_value.to_string()) {
+            return Ok(arg_value as i32);
+        }
+
         if let GameRuleValue::Bool(raw_value) = new_info.game_rules.get_mut(&self.0) {
             *raw_value = arg_value;
         }
 
         context.server().level_info.store(Arc::new(new_info));
-
-        fire_game_rule_change(context, &self.0, arg_value.to_string());
 
         if self.0 == GameRule::SpectatorsGenerateChunks {
             let server = context.server();
