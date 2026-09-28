@@ -234,6 +234,28 @@ pub fn player_from_resource(
         .map(|resource| resource.provider.clone())
 }
 
+/// 权限附件写入的命名空间校验：与命令/权限注册侧同规则——
+/// 裸名称补本插件命名空间前缀；其他命名空间的节点拒绝。
+/// 否则任何插件都能给玩家直接授予 `minecraft:command.*` 等
+/// 内置节点（等价于提权到对应命令集）。
+fn normalize_own_permission(state: &PluginHostState, node: String) -> wasmtime::Result<String> {
+    let Some(name) = state.name.as_deref() else {
+        return Err(wasmtime::Error::msg("插件身份不可用"));
+    };
+    if !node.contains(':') {
+        return Ok(format!("{name}:{node}"));
+    }
+    if node.starts_with(&format!("{name}:")) {
+        return Ok(node);
+    }
+    tracing::error!(
+        plugin = %name,
+        %node,
+        "插件试图写入外部命名空间的权限节点；已拒绝",
+    );
+    Err(wasmtime::Error::msg("权限节点超出插件命名空间"))
+}
+
 pub(crate) fn text_component_from_resource(
     state: &PluginHostState,
     text: &Resource<papokin::plugin::text::TextComponent>,
@@ -646,6 +668,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
             .server
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
+        let node = normalize_own_permission(self, node)?;
 
         server
             .permission_manager
@@ -664,6 +687,7 @@ impl papokin::plugin::player::HostPlayer for PluginHostState {
             .server
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
+        let node = normalize_own_permission(self, node)?;
 
         server
             .permission_manager
