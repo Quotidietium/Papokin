@@ -81,8 +81,12 @@ fn fetch_all_contributors_cached() -> Vec<Contributor> {
 }
 
 async fn fetch_all_contributors() -> Vec<Contributor> {
+    // 此命令任何玩家可执行（等级 0）：远端挂起时无超时的请求会
+    // 经 block_in_place 长期占住一个 tokio worker，必须显式限时。
     let client = crate::http_client::client_builder()
         .user_agent("Papokin")
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default();
 
@@ -196,8 +200,12 @@ fn tier_color(tier_slug: &str, tier_name: &str) -> NamedColor {
 
 async fn fetch_donators_hover() -> TextComponent {
     let url = "https://market.pumpkinmc.org/api/v1/rest/donators";
+    // 同 fetch_all_contributors：等级 0 命令，必须显式限时。
+    // 响应体也按块限界读取，防止被攻陷的远端灌入超大 JSON。
     let client = crate::http_client::client_builder()
         .user_agent("Papokin")
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_default();
     let response = client.get(url).send().await;
