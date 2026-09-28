@@ -36,6 +36,10 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 const AUTH_FAILURE_LIMIT: u32 = 5;
 /// 冷却封锁时长：期间新连接直接断开，不给爆破者任何响应反馈。
 const AUTH_BLOCK_DURATION: Duration = Duration::from_secs(300);
+/// 未认证连接的读超时：认证完成后不再限制（管理员长连接正常）。
+/// 没有它，攻击者可建立 `max_connections` 个不发数据的连接把管理员
+/// 锁在 RCON 之外（占坑 `DoS`）。
+const UNAUTHENTICATED_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 struct AuthFailState {
@@ -314,7 +318,21 @@ impl RCONClient {
 
     async fn read_bytes(&mut self) -> std::io::Result<bool> {
         let mut buf = [0; 1460];
-        let n = self.connection.read(&mut buf).await?;
+        let n = if self.logged_in {
+            self.connection.read(&mut buf).await?
+        } else {
+            // 未认证连接必须限时：占满连接数不发数据是针对 RCON
+            // 自身的拒绝服务。超时取消读是安全的（TcpStream 可取消）。
+            let read_result =
+                tokio::time::timeout(UNAUTHENTICATED_READ_TIMEOUT, self.connection.read(&mut buf))
+                    .await;
+            if let Ok(res) = read_result {
+                res?
+            } else {
+                debug!("RCON ({})：未认证连接超时，已断开", self.address);
+                return Ok(true);
+            }
+        };
         if n == 0 {
             return Ok(true);
         }
