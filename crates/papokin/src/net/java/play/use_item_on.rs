@@ -75,6 +75,9 @@ impl JavaClient {
         let off_hand_item_empty = off_hand_item.is_empty();
 
         let mut item = inventory.get_stack_in_hand(hand);
+        // 槽位读取时的原始快照：最终写回按“数量变化量”在写锁内
+        // 与槽位当前内容合并（见下方 merge_held_delta）
+        let original_item = item.clone();
         let item_id = item.item.id;
         player.increment_stat(StatisticCategory::Used, item_id as i32, 1);
 
@@ -191,8 +194,13 @@ impl JavaClient {
         }
 
         if !after.are_equal(&before) {
-            player.sync_hand_slot(slot_index, after.clone());
-            inventory.set_stack_in_hand(hand, after);
+            // 条件写回：本地修改以数量增量在写锁内合并进槽位当前
+            // 内容。读取快照到这里的窗口很长（放置 + 插件事件），
+            // 期间 RCON/插件并入该槽位的物品不能被陈旧快照整体覆盖；
+            // 槽位已被换成其他物品时放弃写回。
+            if let Some(merged) = inventory.merge_held_delta(hand, &original_item, &after) {
+                player.sync_hand_slot(slot_index, merged);
+            }
         }
 
         Ok(())

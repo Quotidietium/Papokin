@@ -131,7 +131,12 @@ impl JavaClient {
                                     );
                                 }
                             }
-                            player.inventory().set_held_item(stack);
+                            // 条件写回：实体交互（含插件事件）窗口很长，
+                            // 本地修改按数量增量在写锁内合并，避免覆盖
+                            // 期间并发并入该槽位的物品
+                            player
+                                .inventory()
+                                .merge_held_delta(Hand::Right, &before, &stack);
                         }
                     }
                 }

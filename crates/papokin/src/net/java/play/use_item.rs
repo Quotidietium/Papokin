@@ -86,6 +86,8 @@ impl JavaClient {
 
     fn prepare_hand_item_for_use(player: &Arc<Player>, hand: Hand, held: &mut ItemStack) {
         let inventory = player.inventory();
+        // 进入函数时的槽位快照：装备分支最终写回按数量增量合并
+        let before = held.clone();
 
         if let Some(cooldown) = held.get_use_cooldown() {
             let group = cooldown
@@ -120,32 +122,39 @@ impl JavaClient {
             .filter(|equippable| equippable.swappable)
             .map(|equippable| equippable.slot.clone());
         if let Some(slot) = equipment_slot {
-            // 必须先释放装备锁，才能再次触碰手部：
-            // 副手也存放在同一个映射中，在这里持锁会导致死锁。
-            let current_equipped = inventory
-                .entity_equipment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(&slot);
-            if current_equipped.are_items_and_components_equal(held) {
-                return;
-            }
-
-            player.enqueue_equipment_change(&slot, held);
-
-            let equipped = if current_equipped.is_empty() {
-                let equipped = held.clone();
-                held.decrement_unless_creative(player.gamemode.load(), 1);
-                equipped
-            } else {
-                std::mem::replace(held, current_equipped)
+            // 整个“读-改-写”在单次持锁内完成：原先分两次加锁，
+            // 间隙中并发的装备写入（如发射器装备）会换掉槽位，
+            // 造成丢一件或覆盖一件。
+            // enqueue_equipment_change 与 set_stack_in_hand 必须在
+            // 锁外调用：前者会触发盔甲变更插件事件（阻塞），后者
+            // 在副手场景会重入同一映射（自死锁）。
+            let equipped_opt = {
+                let mut equipment = inventory
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let current_equipped = equipment.get(&slot);
+                if current_equipped.are_items_and_components_equal(held) {
+                    None
+                } else {
+                    let equipped = if current_equipped.is_empty() {
+                        let equipped = held.clone();
+                        held.decrement_unless_creative(player.gamemode.load(), 1);
+                        equipped
+                    } else {
+                        std::mem::replace(held, current_equipped)
+                    };
+                    equipment.put(&slot, equipped.clone());
+                    Some(equipped)
+                }
             };
-            inventory
-                .entity_equipment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .put(&slot, equipped);
-            inventory.set_stack_in_hand(hand, held.clone());
+            if let Some(equipped) = equipped_opt {
+                player.enqueue_equipment_change(&slot, &equipped);
+                // 条件写回：本地修改按数量增量在写锁内合并进槽位当前
+                // 内容，装备事件等待期间并发并入该槽位的物品不会被
+                // 陈旧快照覆盖
+                inventory.merge_held_delta(hand, &before, held);
+            }
         }
     }
 
