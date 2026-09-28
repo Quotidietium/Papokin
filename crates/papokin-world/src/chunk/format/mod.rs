@@ -543,11 +543,37 @@ impl ChunkData {
             .load(std::sync::atomic::Ordering::Relaxed);
 
         let block_entities_nbt = {
+            // 写侧体积预算：物品组件（`CustomData` 单件可近 8 MiB）经
+            // 容器聚合后单个方块实体可达数百 MiB，会拖垮保存线程并使
+            // 存档无限膨胀。超预算的方块实体不落盘并大声告警——宁可
+            // 丢弃单个被灌大的容器，也不让整区块保存停摆。正常方块
+            // 实体远低于该上限。
+            const MAX_BLOCK_ENTITY_NBT_BYTES: usize = 1024 * 1024;
+            const MAX_CHUNK_BE_TOTAL_BYTES: usize = 32 * 1024 * 1024;
             let entities_guard = self
                 .pending_block_entities
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            entities_guard.values().cloned().collect::<Vec<_>>()
+            let mut total = 0usize;
+            let mut entities_nbt = Vec::with_capacity(entities_guard.len());
+            for (pos, entity_comp) in entities_guard.iter() {
+                let size = entity_comp.estimated_serialized_size();
+                if size > MAX_BLOCK_ENTITY_NBT_BYTES {
+                    tracing::error!(
+                        "方块实体 NBT 体积 {size} 字节超出单实体上限 {MAX_BLOCK_ENTITY_NBT_BYTES}，已跳过落盘：{pos:?}"
+                    );
+                    continue;
+                }
+                total += size;
+                if total > MAX_CHUNK_BE_TOTAL_BYTES {
+                    tracing::error!(
+                        "区块方块实体 NBT 总量超出 {MAX_CHUNK_BE_TOTAL_BYTES} 字节上限，其余方块实体本轮不落盘"
+                    );
+                    break;
+                }
+                entities_nbt.push(entity_comp.clone());
+            }
+            entities_nbt
         };
 
         let light_lock = self
