@@ -5,6 +5,7 @@ use std::sync::{
 };
 
 use papokin_data::entity::EntityType;
+use papokin_nbt::compound::NbtCompound;
 use papokin_util::math::vector3::Vector3;
 
 use crate::{server::Server, world::World};
@@ -13,7 +14,8 @@ use super::{Entity, EntityBase, living::LivingEntity, player::Player};
 
 pub struct ExperienceOrbEntity {
     entity: Entity,
-    amount: u32,
+    /// 经验值。原子存取以支持 `read_custom_nbt`（&self）重载。
+    amount: AtomicU32,
     orb_age: AtomicU32,
 }
 
@@ -22,7 +24,7 @@ impl ExperienceOrbEntity {
         entity.yaw.store(rand::random::<f32>() * 360.0);
         Self {
             entity,
-            amount,
+            amount: AtomicU32::new(amount),
             orb_age: AtomicU32::new(0),
         }
     }
@@ -102,6 +104,32 @@ impl EntityBase for ExperienceOrbEntity {
         &self.entity
     }
 
+    fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
+        // 年龄饱和：>=6000 的球下一刻即自清，无需也不应写入更大值
+        nbt.put_short(
+            "Age",
+            self.orb_age.load(Ordering::Relaxed).min(i16::MAX as u32) as i16,
+        );
+        // round_to_orb_size 上限 2477，理论上不会超 short；饱和纯防御
+        nbt.put_short(
+            "Value",
+            self.amount.load(Ordering::Relaxed).min(i16::MAX as u32) as i16,
+        );
+    }
+
+    fn read_custom_nbt(&self, nbt: &NbtCompound) {
+        // 负值（损坏存档）归零；年龄 >=6000 由 tick 正常自清
+        self.orb_age.store(
+            nbt.get_short("Age").unwrap_or(0).max(0) as u32,
+            Ordering::Relaxed,
+        );
+        // 零值经验球是退化数据（拾取不给经验却占实体槽位），钳到 1
+        self.amount.store(
+            nbt.get_short("Value").unwrap_or(1).max(1) as u32,
+            Ordering::Relaxed,
+        );
+    }
+
     fn on_player_collision(&self, player: &Arc<Player>) {
         if player.living_entity.health.load() > 0.0 {
             let can_pickup = if let Ok(mut delay) = player.experience_pick_up_delay.try_lock()
@@ -131,7 +159,7 @@ impl EntityBase for ExperienceOrbEntity {
                 // 拾取钩子：取消会让经验球留在世界中；
                 // 数值可被处理器调整。
                 let orb_id = self.entity.entity_id;
-                let amount = self.amount as i32;
+                let amount = self.amount.load(Ordering::Relaxed) as i32;
                 let mut pickup_event = crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent::new(
                     player.clone(),
                     orb_id,
