@@ -23,7 +23,7 @@
 - 格式说明符：`{:.2}`、`{:x}` 等
 - E2E 标记：`examples/e2e-plugin/` **整个目录不动**；任何 `"E2E ..."` 字符串不动
 - 生成代码：`crates/papokin-data/src/generated/`、`crates/papokin-plugin-api/src/generated/`
-- 注释（那是另一阶段的事，本阶段**不改注释**）
+- 注释（按下方「阶段 C 增补」规则翻译；「本阶段不改注释」是原分批管线的防重复处理限制，全仓汉化完成后新增/修改代码时字符串与注释一并汉化）
 - 测试断言：若断言的字符串被你翻译了，**同步更新断言**；无法确定就保留英文并在汇报中列出
 
 ## 术语表（强制一致）
@@ -63,7 +63,7 @@ SNBT、UUID、HTTP(S)、TCP、UDP、WebSocket、TLS、DNS、IP、API、CLI、TUI
 - 标点用中文全角（，。：；），但占位符/标识符紧邻处可用半角
 
 ## 验证
-- 完成本批后运行 `cargo check -p <crate>`（需要 `export PATH="$HOME/.cargo/bin:$PATH"`），必须 0 错误
+- 完成修改后运行 `cargo check -p <crate>`（需要 `export PATH="$HOME/.cargo/bin:$PATH"`），必须 0 错误
 - 用 `git diff --stat` 自查只改了该改的文件
 - 汇报：改动文件数、翻译字符串数、保留英文的字符串及原因、check 结果
 
@@ -90,25 +90,3 @@ SNBT、UUID、HTTP(S)、TCP、UDP、WebSocket、TLS、DNS、IP、API、CLI、TUI
 - 不逐词硬译；英文长句可拆为多个中文短句
 - 保持注释的缩进与 `//`/`///` 前缀不变
 
----
-
-# 阶段 C 增补：Rust 注释/rustdoc 翻译规则
-
-## 对象
-`//` 行注释、`///` rustdoc 注释、`//!` 模块文档、`/* */` 块注释。
-
-## 严禁触碰（在阶段 B 禁碰清单基础上追加）
-- **字符串字面量一个字都不动**（阶段 B 已处理，重复改会引发冲突）
-- rustdoc 代码块（``` 围栏）内的**代码**不动；代码内的英文注释可译
-- rustdoc 链接结构保持：`[文本](url)`、`[`Ident`]`、链接目标与标识符不译，显示文本可译
-- `# Examples`、`# Panics`、`# Errors`、`# Safety` 等 rustdoc 章节标题**保留英文**（rustdoc 惯例可检索）
-- `SAFETY:`、`TODO`、`FIXME`、`XXX`、`HACK`、`NOTE` 前缀词保留英文，后续内容译（如 `SAFETY: 调用者保证……`、`TODO: 接入战利品表`）
-- 文档测试里的断言字符串不动
-- `#[doc = "..."]` 属性按 rustdoc 处理
-- 注释中反引号包裹的代码标识符、类型名、函数名保持原样
-- 行号引用、文件路径引用（如 `world.rs:952`）保持原样
-
-## 风格
-- 技术中文，简洁准确；长段设计说明逐句意译，保留原意与技术细节
-- 不逐词硬译；英文长句可拆为多个中文短句
-- 保持注释的缩进与 `//`/`///` 前缀不变
