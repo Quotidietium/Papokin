@@ -3734,43 +3734,39 @@ impl EntityBase for LivingEntity {
                     // 1）选中的快捷栏（held_item）
                     // 2）副手
                     // 3）若上述均未匹配，则回退到 active_hand
-                    let mut handled = false;
-
-                    // 检查主手（快捷栏选中项）
-                    let mut held = player.inventory.held_item();
-                    if held.are_items_and_components_equal(item) {
-                        if is_potion {
-                            if player.gamemode.load() != GameMode::Creative {
-                                held.decrement(1);
-                                if held.is_empty() {
-                                    held = ItemStack::new(1, &Item::GLASS_BOTTLE);
-                                }
-                            }
-                        } else {
-                            held.decrement_unless_creative(player.gamemode.load(), 1);
-                        }
-                        player.inventory.set_held_item(held);
-                        handled = true;
-                    }
-
-                    if !handled {
-                        // 检查副手
-                        let mut off_hand = player.inventory.off_hand_item();
-                        if off_hand.are_items_and_components_equal(item) {
+                    // 各分支的读取-匹配-扣减/换瓶-写回在写锁内原子完成，
+                    // 进食/饮药窗口内并发并入该槽位的物品不会被覆盖
+                    let gamemode = player.gamemode.load();
+                    let consume_stack = |mut s: ItemStack| -> (ItemStack, bool) {
+                        let apply = |s: &mut ItemStack| {
                             if is_potion {
-                                if player.gamemode.load() != GameMode::Creative {
-                                    off_hand.decrement(1);
-                                    if off_hand.is_empty() {
-                                        off_hand = ItemStack::new(1, &Item::GLASS_BOTTLE);
+                                if gamemode != GameMode::Creative {
+                                    s.decrement(1);
+                                    if s.is_empty() {
+                                        *s = ItemStack::new(1, &Item::GLASS_BOTTLE);
                                     }
                                 }
                             } else {
-                                off_hand.decrement_unless_creative(player.gamemode.load(), 1);
+                                s.decrement_unless_creative(gamemode, 1);
                             }
-                            player.inventory.set_stack_in_hand(Hand::Left, off_hand);
-                            handled = true;
+                        };
+                        if s.are_items_and_components_equal(item) {
+                            apply(&mut s);
+                            (s, true)
+                        } else {
+                            (s, false)
                         }
-                    }
+                    };
+
+                    // 检查主手（快捷栏选中项）
+                    let handled = player.inventory.update_held(Hand::Right, consume_stack);
+
+                    let handled = if handled {
+                        true
+                    } else {
+                        // 检查副手
+                        player.inventory.update_held(Hand::Left, consume_stack)
+                    };
 
                     if !handled {
                         // 使用已存储的 active_hand（作为回退）
@@ -3779,21 +3775,20 @@ impl EntityBase for LivingEntity {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                         let hand_to_modify = active_hand.unwrap_or(Hand::Right);
-                        let mut item_stack = self.get_stack_in_hand(caller, hand_to_modify);
 
-                        if is_potion {
-                            if player.gamemode.load() != GameMode::Creative {
-                                item_stack.decrement(1);
-                                if item_stack.is_empty() {
-                                    item_stack = ItemStack::new(1, &Item::GLASS_BOTTLE);
+                        player.inventory.update_held(hand_to_modify, |mut s| {
+                            if is_potion {
+                                if gamemode != GameMode::Creative {
+                                    s.decrement(1);
+                                    if s.is_empty() {
+                                        s = ItemStack::new(1, &Item::GLASS_BOTTLE);
+                                    }
                                 }
+                            } else {
+                                s.decrement_unless_creative(gamemode, 1);
                             }
-                        } else {
-                            item_stack.decrement_unless_creative(player.gamemode.load(), 1);
-                        }
-                        player
-                            .inventory
-                            .set_stack_in_hand(hand_to_modify, item_stack);
+                            (s, ())
+                        });
                     }
 
                     if let Some(cooldown) = item.get_use_cooldown() {
