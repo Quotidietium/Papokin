@@ -1,12 +1,13 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicI32, Ordering},
 };
 
 use crossbeam::atomic::AtomicCell;
 use papokin_data::{entity::EntityType, world::WorldEvent};
 use papokin_nbt::compound::NbtCompound;
-use papokin_util::math::{position::BlockPos, vector3::Vector3};
+use papokin_nbt::tag::NbtTag;
+use papokin_util::math::{boundingbox::BoundingBox, position::BlockPos, vector3::Vector3};
 
 use crate::{block::entities::BlockEntity, entity::EntityBase, world::World};
 
@@ -19,7 +20,13 @@ pub struct MobSpawnerBlockEntity {
     pub spawn_range: i32,
     pub max_nearby_entities: i32,
     pub required_player_range: i32,
-    pub entity_type: AtomicCell<Option<&'static EntityType>>,
+    entity_type: AtomicCell<Option<&'static EntityType>>,
+    /// 从存档原样保留的生成负载：`SpawnData` 完整 NBT（可含位置、
+    /// 装备等实体字段）与 `SpawnPotentials` 加权候选列表。写侧原样
+    /// 写回——此前只重写裸 `entity{id}`，多候选/带装备的刷怪笼在
+    /// 首次保存后即永久退化为单一裸实体。
+    preserved_spawn_data: Mutex<Option<NbtCompound>>,
+    preserved_potentials: Mutex<Option<Vec<NbtTag>>>,
 }
 
 impl MobSpawnerBlockEntity {
@@ -44,6 +51,8 @@ impl MobSpawnerBlockEntity {
             max_nearby_entities: Self::DEFAULT_MAX_NEARBY_ENTITIES,
             required_player_range: Self::DEFAULT_REQUIRED_PLAYER_RANGE,
             entity_type: AtomicCell::new(entity_type),
+            preserved_spawn_data: Mutex::new(None),
+            preserved_potentials: Mutex::new(None),
         }
     }
 
@@ -56,7 +65,16 @@ impl MobSpawnerBlockEntity {
         nbt.put_short("MaxNearbyEntities", self.max_nearby_entities as i16);
         nbt.put_short("RequiredPlayerRange", self.required_player_range as i16);
 
-        if let Some(entity_type) = self.entity_type.load() {
+        // 原样写回保留的生成负载；仅在结构体没有保留副本时（如
+        // 刷怪蛋刚设置的新类型）才重写最小 SpawnData。
+        let preserved_data = self
+            .preserved_spawn_data
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(spawn_data) = preserved_data {
+            nbt.put_compound("SpawnData", spawn_data);
+        } else if let Some(entity_type) = self.entity_type.load() {
             let mut spawn_entry = NbtCompound::new();
 
             let mut entity_nbt = NbtCompound::new();
@@ -65,6 +83,17 @@ impl MobSpawnerBlockEntity {
             spawn_entry.put_compound("entity", entity_nbt);
 
             nbt.put_compound("SpawnData", spawn_entry);
+        }
+
+        let preserved_potentials = self
+            .preserved_potentials
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(potentials) = preserved_potentials
+            && !potentials.is_empty()
+        {
+            nbt.put_list("SpawnPotentials", potentials);
         }
     }
 }
@@ -87,6 +116,14 @@ impl MobSpawnerBlockEntity {
 
     pub fn set_entity_type(&self, entity_type: &'static EntityType) {
         self.entity_type.store(Some(entity_type));
+        // 保留副本描述的是旧类型；不清除会在下次保存时把旧
+        // SpawnData/SpawnPotentials 写回（重载后类型回退）。
+        if let Ok(mut preserved) = self.preserved_spawn_data.lock() {
+            *preserved = None;
+        }
+        if let Ok(mut preserved) = self.preserved_potentials.lock() {
+            *preserved = None;
+        }
     }
 }
 
@@ -297,6 +334,12 @@ impl BlockEntity for MobSpawnerBlockEntity {
             max_nearby_entities,
             required_player_range,
             entity_type: AtomicCell::new(entity_type),
+            // 保留原始生成负载：多候选（SpawnPotentials）与带完整
+            // 实体字段的 SpawnData 在写侧原样回写，避免保存即退化。
+            preserved_spawn_data: Mutex::new(nbt.get_compound("SpawnData").cloned()),
+            preserved_potentials: Mutex::new(
+                nbt.get_list("SpawnPotentials").map(<[NbtTag]>::to_vec),
+            ),
         }
     }
 
@@ -355,5 +398,80 @@ mod tests {
         assert_eq!(spawner.max_delay, i16::MAX as i32);
         assert_eq!(spawner.spawn_count, 255);
         assert_eq!(spawner.spawn_range, 64);
+    }
+
+    /// 多候选刷怪笼（`SpawnPotentials`）与带完整实体字段的 `SpawnData`
+    /// 必须在保存时原样写回——此前写侧只写裸 `entity{id}`，外部
+    /// 工具/数据包生成的刷怪笼在首次保存后即退化为单一裸实体。
+    #[test]
+    fn spawn_potentials_and_rich_spawn_data_survive_roundtrip() {
+        let mut spawn_data = NbtCompound::new();
+        let mut entity = NbtCompound::new();
+        entity.put_string("id", "minecraft:zombie".to_string());
+        entity.put_float("Health", 40.0);
+        spawn_data.put_compound("entity", entity);
+
+        let mut p1_data = NbtCompound::new();
+        let mut p1_entity = NbtCompound::new();
+        p1_entity.put_string("id", "minecraft:skeleton".to_string());
+        p1_data.put_int("weight", 1);
+        p1_data.put_compound("entity", p1_entity);
+
+        let mut p2_data = NbtCompound::new();
+        let mut p2_entity = NbtCompound::new();
+        p2_entity.put_string("id", "minecraft:creeper".to_string());
+        p2_data.put_int("weight", 3);
+        p2_data.put_compound("entity", p2_entity);
+
+        let mut nbt = NbtCompound::new();
+        nbt.put_compound("SpawnData", spawn_data);
+        nbt.put_list(
+            "SpawnPotentials",
+            vec![NbtTag::Compound(p1_data), NbtTag::Compound(p2_data)],
+        );
+
+        let spawner = MobSpawnerBlockEntity::from_nbt(&nbt, BlockPos::new(0, 0, 0));
+
+        let mut out = NbtCompound::new();
+        spawner.write_spawner_nbt(&mut out);
+
+        let roundtrip_data = out.get_compound("SpawnData").expect("SpawnData 应写回");
+        let health = roundtrip_data
+            .get_compound("entity")
+            .and_then(|e| e.get_float("Health"));
+        assert_eq!(health, Some(40.0), "SpawnData 的完整实体字段不得丢失");
+
+        let potentials = out
+            .get_list("SpawnPotentials")
+            .expect("SpawnPotentials 应写回");
+        assert_eq!(potentials.len(), 2, "候选列表不得丢失");
+    }
+
+    /// 刷怪蛋设置新类型后，旧的保留负载必须清除，否则重载后
+    /// 类型会回退到旧 `SpawnData` 描述的实体。
+    #[test]
+    fn set_entity_type_clears_preserved_payload() {
+        let mut spawn_data = NbtCompound::new();
+        let mut entity = NbtCompound::new();
+        entity.put_string("id", "minecraft:zombie".to_string());
+        spawn_data.put_compound("entity", entity);
+
+        let mut nbt = NbtCompound::new();
+        nbt.put_compound("SpawnData", spawn_data);
+
+        let spawner = MobSpawnerBlockEntity::from_nbt(&nbt, BlockPos::new(0, 0, 0));
+        let skeleton = EntityType::from_name("minecraft:skeleton").expect("类型应存在");
+        spawner.set_entity_type(skeleton);
+
+        let mut out = NbtCompound::new();
+        spawner.write_spawner_nbt(&mut out);
+
+        let id = out
+            .get_compound("SpawnData")
+            .and_then(|d| d.get_compound("entity"))
+            .and_then(|e| e.get_string("id"))
+            .expect("应写入新类型的最小 SpawnData");
+        assert_eq!(id, "minecraft:skeleton");
+        assert!(out.get_list("SpawnPotentials").is_none());
     }
 }
