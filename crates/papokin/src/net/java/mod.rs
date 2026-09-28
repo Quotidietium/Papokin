@@ -3,8 +3,8 @@ use papokin_protocol::java::client::play::{
 };
 use papokin_world::level::SyncChunk;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicUsize, Ordering};
+use std::time::Instant;
 use std::{collections::VecDeque, io::Write, sync::Arc};
 
 use bytes::Bytes;
@@ -288,6 +288,7 @@ impl JavaClient {
             wait_for_keep_alive: AtomicBool::new(false),
             received_movement_this_tick: AtomicBool::new(false),
             movement_packets_this_tick: AtomicU32::new(0),
+            next_keep_alive_id: AtomicI64::new(uuid::Uuid::new_v4().to_u128_le() as i64),
             keep_alive_id: AtomicCell::new(0),
             last_keep_alive_time: AtomicCell::new(Instant::now()),
             last_packet_time: AtomicCell::new(Instant::now()),
@@ -342,12 +343,11 @@ impl JavaClient {
                         break;
                     }
 
-                    let keep_alive_id = i64::from(
-                        SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as i32,
-                    );
+                    // 单调递增且起点随机：以 Unix 毫秒为 id 可被本地时钟
+                    // 完全预测，挂机客户端无需读取任何服务器下行包即可
+                    // "预答"维持连接并污染 ping 统计。
+                    let keep_alive_id =
+                        self.next_keep_alive_id.fetch_add(1, Ordering::Relaxed);
 
                     self.keep_alive_id.store(keep_alive_id);
                     self.wait_for_keep_alive.store(true, Ordering::Relaxed);
