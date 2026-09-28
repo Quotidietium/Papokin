@@ -8,6 +8,7 @@ use crate::{
 };
 use papokin_data::entity::EntityStatus;
 use papokin_data::item_stack::ItemStack;
+use papokin_nbt::compound::NbtCompound;
 use papokin_protocol::java::client::play::CWorldEvent;
 use papokin_util::math::position::BlockPos;
 use papokin_util::math::vector2::{Vector2, to_chunk_pos};
@@ -87,6 +88,37 @@ impl EntityBase for LingeringPotionEntity {
 
     fn get_entity(&self) -> &Entity {
         self.thrown.get_entity()
+    }
+
+    fn write_custom_nbt(&self, nbt: &mut NbtCompound) {
+        // 药水物品堆承载 PotionContents：不落盘则飞行中的滞留药水
+        // 在重载后退化为无效果的白水
+        let stack = self
+            .item_stack
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut item_compound = NbtCompound::new();
+        stack.write_item_stack(&mut item_compound);
+        nbt.put_compound("Item", item_compound);
+    }
+
+    fn read_custom_nbt(&self, nbt: &NbtCompound) {
+        if let Some(item_compound) = nbt.get_compound("Item")
+            && let Some(stack) = ItemStack::read_item_stack(item_compound)
+            && !stack.is_empty()
+        {
+            self.set_item_stack(stack);
+            // 结构生成路径 spawn 早于读档：兜底重新同步展示物品
+            let display = self
+                .item_stack
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            self.get_entity().set_synced_data(
+                papokin_data::tracked_data::lingering_potion::ITEM_STACK,
+                papokin_protocol::codec::item_stack_seralizer::ItemStackSerializer::from(display),
+            );
+        }
     }
 
     fn get_living_entity(&self) -> Option<&crate::entity::living::LivingEntity> {
