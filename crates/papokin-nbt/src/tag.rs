@@ -50,6 +50,31 @@ impl NbtTag {
         unsafe { *std::ptr::from_ref::<Self>(self).cast::<u8>() }
     }
 
+    /// 估算该标签负载序列化后的字节数（不含外层类型 ID 与键名，
+    /// 那些由 [`super::compound::NbtCompound::estimated_serialized_size`]
+    /// 统一计入）。深度已由解析层保证 ≤ [`super::MAX_NBT_DEPTH`]。
+    #[must_use]
+    pub fn estimated_serialized_size(&self) -> usize {
+        match self {
+            Self::End => 0,
+            Self::Byte(_) => 1,
+            Self::Short(_) => 2,
+            Self::Int(_) | Self::Float(_) => 4,
+            Self::Long(_) | Self::Double(_) => 8,
+            Self::ByteArray(arr) => 4 + arr.len(), // 长度前缀 + 数据
+            Self::String(s) => 2 + s.len(),        // 长度前缀 + UTF-8
+            Self::List(list) => {
+                5 + list
+                    .iter()
+                    .map(Self::estimated_serialized_size)
+                    .sum::<usize>() // 元素类型 + 长度 + 数据
+            }
+            Self::Compound(compound) => compound.estimated_serialized_size(),
+            Self::IntArray(arr) => 4 + arr.len() * 4,
+            Self::LongArray(arr) => 4 + arr.len() * 8,
+        }
+    }
+
     /// 序列化标签的类型 ID，随后是其负载。
     pub fn serialize<W: NbtWriteHelper>(self, w: &mut W) -> serializer::Result<()> {
         w.write_u8(self.get_type_id())?;

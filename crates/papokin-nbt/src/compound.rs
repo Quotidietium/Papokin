@@ -49,6 +49,22 @@ impl NbtCompound {
         }
     }
 
+    /// 估算该复合标签序列化后的字节数（含键名与各层载荷）。
+    ///
+    /// 用途：对来源不可信的网络数据（如物品 `custom_data` 组件）施加
+    /// 字节总量上限——NBT 深度与单数组长度限制并不能约束"百万个
+    /// 小键"或大量小数组撑出的巨大总体积。树深度已由解析层保证
+    /// ≤ [`crate::MAX_NBT_DEPTH`]，递归可安全终止。
+    #[must_use]
+    pub fn estimated_serialized_size(&self) -> usize {
+        let mut total = 1usize; // 结尾 END 标记
+        for (key, tag) in &self.child_tags {
+            total += 1 + 2 + key.len(); // 类型 id + 键名长度前缀 + 键名
+            total += tag.estimated_serialized_size();
+        }
+        total
+    }
+
     /// 使读取器跳过复合标签的有效载荷，而不分配其标签。
     pub fn skip_content<'a, R: NbtReadHelper<'a>>(reader: &mut R) -> Result<(), Error> {
         Self::skip_content_depth(reader, 0)
