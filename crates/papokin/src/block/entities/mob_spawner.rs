@@ -99,6 +99,40 @@ impl MobSpawnerBlockEntity {
 }
 
 impl MobSpawnerBlockEntity {
+    /// 统计感应范围内同类型实体数（MaxNearbyEntities 判定）。
+    ///
+    /// 走按区块分桶的索引：此前对全服实体做全表线性扫描，
+    /// 多刷怪笼场景每刻放大。
+    fn count_nearby_entities(&self, world: &World, type_id: u16, center: Vector3<f64>) -> usize {
+        let radius_horiz = (self.spawn_range * 2) as f64;
+        let radius_vert = 4.0;
+        let search_box = BoundingBox::new(
+            Vector3::new(
+                center.x - radius_horiz,
+                center.y - radius_vert,
+                center.z - radius_horiz,
+            ),
+            Vector3::new(
+                center.x + radius_horiz,
+                center.y + radius_vert,
+                center.z + radius_horiz,
+            ),
+        );
+        world
+            .get_entities_at_box(&search_box)
+            .iter()
+            .filter(|e| {
+                let ent = e.get_entity();
+                if ent.entity_type.id != type_id {
+                    return false;
+                }
+                let pos = ent.pos.load();
+                (pos.x - center.x).abs() <= radius_horiz
+                    && (pos.z - center.z).abs() <= radius_horiz
+                    && (pos.y - center.y).abs() <= radius_vert
+            })
+            .count()
+    }
     fn update_spawns(&self, world: &Arc<World>) {
         let min_delay = self.min_delay;
         let max_delay = self.max_delay;
@@ -157,23 +191,7 @@ impl BlockEntity for MobSpawnerBlockEntity {
                 return;
             }
 
-            let search_radius_horiz = (self.spawn_range * 2) as f64;
-            let search_radius_vert = 4.0;
-            let nearby_count = world
-                .entities
-                .load()
-                .iter()
-                .filter(|e| {
-                    let ent = e.get_entity();
-                    if ent.entity_type.id != entity_type.id {
-                        return false;
-                    }
-                    let pos = ent.pos.load();
-                    (pos.x - center.x).abs() <= search_radius_horiz
-                        && (pos.z - center.z).abs() <= search_radius_horiz
-                        && (pos.y - center.y).abs() <= search_radius_vert
-                })
-                .count();
+            let nearby_count = self.count_nearby_entities(world, entity_type.id, center);
 
             if nearby_count as i32 >= self.max_nearby_entities {
                 self.update_spawns(world);
@@ -181,8 +199,6 @@ impl BlockEntity for MobSpawnerBlockEntity {
             }
 
             let spawn_range = self.spawn_range;
-            let mut spawned_any = false;
-            let mut cancelled_any = false;
 
             // 在任何生成尝试之前触发的早期过滤钩子
             let mut pre_event =
@@ -237,20 +253,19 @@ impl BlockEntity for MobSpawnerBlockEntity {
                     server.plugin_manager.fire_blocking(&server, &mut event);
                 }
                 if event.cancelled {
-                    // 将被取消的生成计为一次已完成的尝试，以便
-                    // 生成器进入正常冷却而不是重试
-                    // 只要插件持续取消，就会每刻触发一次。
-                    cancelled_any = true;
+                    // 将被取消的生成计为一次已完成的尝试：冷却在
+                    // 循环外统一进入
                     continue;
                 }
 
                 world.spawn_entity(entity);
                 world.sync_world_event(WorldEvent::ParticlesMobblockSpawn, self.position, 0);
-                spawned_any = true;
             }
-            if spawned_any || cancelled_any {
-                self.update_spawns(world);
-            }
+            // 无论是否生成（含全部位置因空间不足失败、插件取消）：
+            // 都进入冷却。全部失败时若不冷却，被封死的刷怪笼会在
+            // 玩家于感应范围内时每刻重试 spawn_count 次空间检查并
+            // 每刻触发一次 PreSpawnerSpawnEvent。
+            self.update_spawns(world);
         }
     }
 
