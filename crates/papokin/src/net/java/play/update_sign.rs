@@ -27,6 +27,18 @@ impl JavaClient {
             return;
         }
 
+        // 会话有效仍需在场：玩家开完编辑器后可能走远或被传送，
+        // 远程提交同样会改写告示牌（原版以 blockInteractionRange
+        // 约 4.5+1 格校验）。取 8 格平方距离，覆盖伸手可及范围。
+        let player_pos = player.get_entity().pos.load();
+        let sign_pos = sign_data.location.0;
+        let dx = player_pos.x - f64::from(sign_pos.x) - 0.5;
+        let dy = player_pos.y - f64::from(sign_pos.y) - 0.5;
+        let dz = player_pos.z - f64::from(sign_pos.z) - 0.5;
+        if dx.mul_add(dx, dy * dy + dz * dz) > 64.0 {
+            return;
+        }
+
         let lines = vec![
             sign_data.line_1.to_string(),
             sign_data.line_2.to_string(),
