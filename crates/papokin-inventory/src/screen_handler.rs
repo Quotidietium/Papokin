@@ -526,7 +526,9 @@ pub trait ScreenHandler: Send + Sync {
     /// 更新被跟踪的属性值。
     fn update_tracked_properties(&mut self, idx: i32, value: i32) {
         let behaviour = self.get_behaviour_mut();
-        if idx <= behaviour.tracked_property_values.len() as i32 {
+        // 完备边界检查：负数与 idx == len（原 `<=` 的 off-by-one）都会
+        // 在索引时 panic。当前调用点 idx 均来自 enumerate，此处为防御。
+        if idx >= 0 && (idx as usize) < behaviour.tracked_property_values.len() {
             behaviour.tracked_property_values[idx as usize] = value;
             for listener in &behaviour.listeners {
                 listener.on_property_update(behaviour, idx as u8, value);
