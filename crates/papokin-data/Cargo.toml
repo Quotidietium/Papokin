@@ -140,6 +140,7 @@ papokin-nbt.workspace = true
 serde = {workspace = true, features = ["rc"]}
 crc-fast.workspace = true
 rand.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

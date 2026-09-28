@@ -848,12 +848,31 @@ impl ItemStack {
         if let Some(tag) = compound.get_compound("components") {
             for (name, data) in &tag.child_tags {
                 if let Some(name) = name.strip_prefix("!") {
-                    item_stack
-                        .patch
-                        .push((DataComponent::try_from_name(name)?, None));
+                    // 未知/损坏的组件只丢弃该组件，绝不丢弃整件
+                    // 物品：此前的 `?` 会让任何升级后不再认识的组件
+                    // 名把整件物品（含数量）静默清零，把版本升级变成
+                    // 批量删物品的放大器。
+                    match DataComponent::try_from_name(name) {
+                        Some(id) => item_stack.patch.push((id, None)),
+                        None => {
+                            tracing::warn!(
+                                "忽略未知的移除型数据组件 \"!{name}\"（物品 {registry_key}）"
+                            )
+                        }
+                    }
                 } else {
-                    let id = DataComponent::try_from_name(name)?;
-                    item_stack.patch.push((id, Some(read_data(id, data)?)));
+                    let Some(id) = DataComponent::try_from_name(name) else {
+                        tracing::warn!("忽略未知的数据组件 \"{name}\"（物品 {registry_key}）");
+                        continue;
+                    };
+                    match read_data(id, data) {
+                        Some(value) => item_stack.patch.push((id, Some(value))),
+                        None => {
+                            tracing::warn!(
+                                "数据组件 \"{name}\" 内容损坏，已跳过（物品 {registry_key}）"
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1101,6 +1120,40 @@ mod tests {
                 .name,
             "filled_map.mansion"
         );
+    }
+
+    #[test]
+    fn unknown_component_name_does_not_discard_whole_item() {
+        let mut compound = NbtCompound::new();
+        compound.put_string("id", "minecraft:diamond_sword".to_string());
+        compound.put_int("count", 2);
+        let mut components = NbtCompound::new();
+        // 升级后不再认识 / 外部编辑注入的组件名：
+        // 只能丢弃该组件，不能让整件物品消失
+        components.put_int("minecraft:future_component", 1);
+        components.put_bool("minecraft:unbreakable", true);
+        compound.put_compound("components", components);
+
+        let decoded = ItemStack::read_item_stack(&compound).expect("物品不因未知组件被丢弃");
+        assert_eq!(decoded.item_count, 2);
+        assert_eq!(decoded.item.registry_key, Item::DIAMOND_SWORD.registry_key);
+        // 已知组件正常保留
+        assert!(decoded.get_data_component::<UnbreakableImpl>().is_some());
+    }
+
+    #[test]
+    fn malformed_component_data_skips_component_but_keeps_item() {
+        let mut compound = NbtCompound::new();
+        compound.put_string("id", "minecraft:diamond_sword".to_string());
+        compound.put_int("count", 5);
+        let mut components = NbtCompound::new();
+        // max_damage 只接受整数：给字符串应跳过该组件而非整件
+        components.put_string("minecraft:max_damage", "不是数字".to_string());
+        compound.put_compound("components", components);
+
+        let decoded = ItemStack::read_item_stack(&compound).expect("物品不因坏组件被丢弃");
+        assert_eq!(decoded.item_count, 5);
+        assert!(decoded.patch.is_empty());
     }
 
     // ── damage_item ───────────────────────────────────────────────

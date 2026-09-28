@@ -2409,6 +2409,7 @@ dependencies = [
  "phf",
  "rand",
  "serde",
+ "tracing",
 ]
 
 [[package]]
