@@ -308,7 +308,12 @@ impl TagManager {
             if tag_overlay.is_some_and(|ov| ov.is_removed(name)) {
                 continue;
             }
-            ids.push(remap_tag_entry_id(key, *id, version));
+            let mapped = remap_tag_entry_id(key, *id, version);
+            // 目标版本不存在的条目映射为 0（=air/占位），原版客户端
+            // 标签不含它们；恒等 0 本体保留。
+            if *id == 0 || mapped != 0 {
+                ids.push(mapped);
+            }
         }
         if let Some(ov) = tag_overlay {
             for entry in &ov.added {
@@ -338,8 +343,9 @@ impl TagManager {
 
     /// 为 `version` 解析 `entry`，并将其最终的网络传输 id 压入
     /// `ids`，对内置注册表的 id 应用版本重映射，并将
-    /// 自定义注册表 id 透传。未知条目会被跳过并
-    /// 警告，这样单个有问题的插件条目就不会破坏整个标签数据包。
+    /// 自定义注册表 id 透传。未知条目与目标版本不存在的条目
+    /// 会被跳过并警告，这样单个有问题的插件条目就不会破坏整个
+    /// 标签数据包。
     fn push_resolved(
         &self,
         ids: &mut Vec<u16>,
@@ -348,11 +354,19 @@ impl TagManager {
         version: JavaMinecraftVersion,
     ) {
         if let Some((id, needs_remap)) = self.resolve_entry(key, entry, version) {
-            ids.push(if needs_remap {
+            let mapped = if needs_remap {
                 remap_tag_entry_id(key, id, version)
             } else {
                 id
-            });
+            };
+            if id == 0 || mapped != 0 {
+                ids.push(mapped);
+            } else {
+                tracing::warn!(
+                    "标签叠加：{} 条目 '{entry}' 在版本 {version:?} 中不存在；已跳过",
+                    key.identifier_string(),
+                );
+            }
         } else {
             tracing::warn!(
                 "标签叠加：未知的 {} 条目 '{entry}'；已跳过",
@@ -421,11 +435,12 @@ fn vanilla_entry_id(key: RegistryKey, path: &str) -> Option<u16> {
 }
 
 /// 应用于内置注册表 id 的版本重映射，与
-/// 标签包内的静态路径重映射：物品与实体类型 id 会
+/// 标签包内的静态路径重映射：物品、方块与实体类型 id 会
 /// 跨版本重映射，其余所有注册表的 id 原样透传。
 fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) -> u16 {
     match key {
         RegistryKey::Item => papokin_data::item_id_remap::remap_item_id_for_version(id, version),
+        RegistryKey::Block => papokin_data::block_id_remap::remap_block_id_for_version(id, version),
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
@@ -625,6 +640,39 @@ mod tests {
         let anvil_1_20_2 =
             papokin_data::item_id_remap::remap_item_id_for_version(anvil_native, version);
         assert!(ids.contains(&anvil_1_20_2));
+    }
+
+    #[test]
+    fn snapshot_applies_block_id_remapping_for_old_versions() {
+        let (_registries, tags) = manager();
+        tags.add_to_tag(
+            RegistryKey::Block,
+            "minecraft:mineable/axe",
+            "minecraft:oak_log",
+        )
+        .unwrap();
+
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let snapshot = tags.snapshot(version).unwrap();
+        let entries = snapshot.get(RegistryKey::Block).unwrap();
+        let (_, ids) = entries
+            .iter()
+            .find(|(name, _)| name == "minecraft:mineable/axe")
+            .unwrap();
+
+        let oak_native = papokin_data::Block::from_registry_key("oak_log")
+            .unwrap()
+            .id
+            .as_u16();
+        let oak_1_21_11 =
+            papokin_data::block_id_remap::remap_block_id_for_version(oak_native, version);
+        // 数据集 51 → 1.21.11 客户端 49；不得透传数据集 id。
+        // 注意 51 本身是 1.21.11 的 birch_log 合法 id，不能用
+        // “不含 51”作泄漏判据，改查缺席条目不得映射为 0 泄漏。
+        assert_eq!(oak_native, 51);
+        assert_eq!(oak_1_21_11, 49);
+        assert!(ids.contains(&49));
+        assert!(!ids.contains(&0));
     }
 
     #[test]
