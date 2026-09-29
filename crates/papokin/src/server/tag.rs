@@ -233,9 +233,10 @@ impl TagManager {
             .iter()
             .copied()
             .filter(|&key| {
-                get_registry_key_tags(version, key).is_some_and(|map| !map.is_empty())
-                    || (key.is_valid_for_version(version)
-                        && overlay.get(&key).is_some_and(|tags| !tags.is_empty()))
+                papokin_data::tag_sync::tag_registry_sendable_for_version(key, version)
+                    && (get_registry_key_tags(version, key).is_some_and(|map| !map.is_empty())
+                        || (key.is_valid_for_version(version)
+                            && overlay.get(&key).is_some_and(|tags| !tags.is_empty())))
             })
             .collect()
     }
@@ -263,7 +264,9 @@ impl TagManager {
 
         let mut maps = HashMap::new();
         for (&key, key_overlay) in overlay.iter() {
-            if !key.is_valid_for_version(version) {
+            if !key.is_valid_for_version(version)
+                || !papokin_data::tag_sync::tag_registry_sendable_for_version(key, version)
+            {
                 continue;
             }
             let static_map = get_registry_key_tags(version, key);
@@ -775,8 +778,17 @@ mod tests {
         let baseline: Vec<RegistryKey> = RegistryKey::NETWORK_KEYS
             .iter()
             .copied()
-            .filter(|&key| get_registry_key_tags(version, key).is_some_and(|map| !map.is_empty()))
+            .filter(|&key| {
+                papokin_data::tag_sync::tag_registry_sendable_for_version(key, version)
+                    && get_registry_key_tags(version, key).is_some_and(|map| !map.is_empty())
+            })
             .collect();
+        // game_event 标签 id 跨版本漂移且无逐版本映射数据，
+        // 1.21 客户端整体省略（客户端保留内建标签）。
+        assert!(
+            !baseline.contains(&RegistryKey::GameEvent),
+            "game_event 对 1.21 客户端应整体省略"
+        );
         // 没有覆盖层时，辅助函数会复现覆盖前的键集合。
         assert_eq!(tags.network_tag_keys(version), baseline);
 
@@ -784,10 +796,11 @@ mod tests {
         // 表（例如 1.21 的药水）在覆盖层就绪后仍会被发送
         // 触碰它。对该版本无效的键必须保持不发送，因此
         // 把搜索限制在有效的那些上。
-        let absent = RegistryKey::NETWORK_KEYS
-            .iter()
-            .copied()
-            .find(|key| !baseline.contains(key) && key.is_valid_for_version(version));
+        let absent = RegistryKey::NETWORK_KEYS.iter().copied().find(|key| {
+            !baseline.contains(key)
+                && key.is_valid_for_version(version)
+                && papokin_data::tag_sync::tag_registry_sendable_for_version(*key, version)
+        });
         if let Some(key) = absent {
             tags.add_to_tag(key, "myplugin:things", "minecraft:stone")
                 .unwrap();
@@ -799,6 +812,16 @@ mod tests {
                 .unwrap();
             assert_eq!(tags.network_tag_keys(version), baseline);
         }
+
+        // 覆盖层触碰 game_event 也不会为旧版本客户端恢复该键。
+        tags.add_to_tag(RegistryKey::GameEvent, "myplugin:events", "minecraft:step")
+            .unwrap();
+        assert!(
+            !tags
+                .network_tag_keys(version)
+                .contains(&RegistryKey::GameEvent),
+            "旧版本客户端不下发 game_event 标签（含覆盖层）"
+        );
     }
 
     #[test]
