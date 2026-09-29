@@ -173,6 +173,29 @@ use papokin_data::potion::Effect;
 const MAX_CACHED_SIGNATURES: u8 = 128; // 原版：128
 const MAX_PREVIOUS_MESSAGES: u8 = 20; // 原版：20
 
+/// 挖掘速度的环境修正尾段（原版 `Player#getDigSpeed`）：眼睛入水且
+/// 无潮涌能量与水下速掘附魔时 /5；离地且无漂浮效果时 /5。飞行
+/// 不豁免离地减速（原版如此，仅漂浮豁免）。
+///
+/// 布尔标志与原版两个独立判定的输入一一对应，保留平铺参数。
+#[allow(clippy::fn_params_excessive_bools)]
+fn apply_mining_conditions(
+    mut speed: f32,
+    on_ground: bool,
+    has_levitation: bool,
+    eye_in_water: bool,
+    has_conduit_power: bool,
+    has_aqua_affinity: bool,
+) -> f32 {
+    if eye_in_water && !has_conduit_power && !has_aqua_affinity {
+        speed /= 5.0;
+    }
+    if !on_ground && !has_levitation {
+        speed /= 5.0;
+    }
+    speed
+}
+
 fn write_root_vehicle(nbt: &mut NbtCompound, uuid: Uuid) {
     let value = uuid.as_u128();
     let mut root_vehicle = NbtCompound::new();
@@ -4815,12 +4838,30 @@ impl Player {
             };
             speed *= fatigue_speed;
         }
-        // TODO: 处理在水中的情况
-        // 原版对离地减速豁免飞行状态（创造/旁观飞行不减速）
-        if !self.living_entity.entity.on_ground.load(Ordering::Relaxed) && !self.is_flying() {
-            speed /= 5.0;
-        }
-        speed
+        // 环境修正（原版 Player#getDigSpeed 尾段）：水下与离地
+        apply_mining_conditions(
+            speed,
+            self.living_entity.entity.on_ground.load(Ordering::Relaxed),
+            self.living_entity.has_effect(&StatusEffect::LEVITATION),
+            self.living_entity.entity.is_submerged_in_water(),
+            self.living_entity.has_effect(&StatusEffect::CONDUIT_POWER),
+            self.has_aqua_affinity(),
+        )
+    }
+
+    /// 头盔是否带有水下速掘附魔（豁免水下挖掘减速）。
+    fn has_aqua_affinity(&self) -> bool {
+        self.inventory
+            .equipment_slots
+            .iter()
+            .any(|(slot_index, slot)| {
+                slot == &EquipmentSlot::HEAD
+                    && self
+                        .inventory
+                        .get_slot(*slot_index)
+                        .get_enchantment_level(&Enchantment::AQUA_AFFINITY)
+                        > 0
+            })
     }
 
     fn get_haste_amplifier(&self) -> u32 {
@@ -7918,5 +7959,28 @@ mod tests {
             });
         }
         assert_eq!(counter.load(Ordering::SeqCst), 0);
+    }
+
+    /// 原版 `Player#getDigSpeed` 尾段语义：水下 /5（潮涌能量与
+    /// 头盔水下速掘豁免）、离地 /5（漂浮豁免，飞行不豁免）、
+    /// 两者叠加 /25。
+    #[test]
+    fn mining_conditions_match_vanilla_tail() {
+        use super::apply_mining_conditions as f;
+
+        // 基准：站地上、干燥
+        assert!((f(10.0, true, false, false, false, false) - 10.0).abs() < f32::EPSILON);
+        // 眼睛入水：/5
+        assert!((f(10.0, true, false, true, false, false) - 2.0).abs() < f32::EPSILON);
+        // 潮涌能量豁免水下减速
+        assert!((f(10.0, true, false, true, true, false) - 10.0).abs() < f32::EPSILON);
+        // 头盔水下速掘豁免水下减速
+        assert!((f(10.0, true, false, true, false, true) - 10.0).abs() < f32::EPSILON);
+        // 离地：/5（飞行不豁免——函数无飞行参数，仅漂浮豁免）
+        assert!((f(10.0, false, false, false, false, false) - 2.0).abs() < f32::EPSILON);
+        // 漂浮豁免离地减速
+        assert!((f(10.0, false, true, false, false, false) - 10.0).abs() < f32::EPSILON);
+        // 水下 + 离地叠加：/25
+        assert!((f(10.0, false, false, true, false, false) - 0.4).abs() < f32::EPSILON);
     }
 }
