@@ -274,6 +274,18 @@ pub mod block_properties;
 #[path = "generated/block_state_remap.rs"]
 pub mod block_state_remap;
 
+/// 方块注册表 id 的跨版本重映射：把内置数据集（26.3）的方块 id
+/// 翻译为各客户端版本冻结方块注册表中的 id。由方块状态重映射表
+/// 依“状态按方块注册序连续分配”不变式推导生成，供标签同步
+/// （update-tags 数据包）等按方块 id 引用注册表的发送路径使用。
+#[cfg(feature = "block")]
+#[rustfmt::skip]
+#[path = "generated/block_id_remap.rs"]
+pub mod block_id_remap;
+
+#[cfg(all(test, feature = "block"))]
+mod block_id_remap_tests;
+
 /// 重新映射*同步*（动态）注册表——生物群系、伤害类型等——的 ID
 /// 从内置数据集的 id 空间映射到每个客户端版本
 /// 在配置阶段实际收到的内容。与硬编码注册表不同，

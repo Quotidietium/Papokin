@@ -170,7 +170,7 @@ fn load_datapack_registry_ids(dir: &std::path::Path) -> BTreeMap<String, u16> {
     id_map
 }
 
-fn load_datapack_tags(
+pub(crate) fn load_datapack_tags(
     data_dir: &std::path::Path,
 ) -> BTreeMap<String, BTreeMap<String, Vec<String>>> {
     let mut raw_categories: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();

@@ -6,6 +6,7 @@ use crate::version::JavaMinecraftVersion;
 mod argument_type;
 mod attribute;
 mod block_entity_type;
+mod block_id;
 mod block_state;
 mod custom_stat;
 mod data_component_type;
@@ -27,6 +28,7 @@ pub fn build() -> Vec<(fn() -> TokenStream, &'static str)> {
         (argument_type::build, "argument_type_id_remap.rs"),
         (attribute::build, "attribute_id_remap.rs"),
         (block_entity_type::build, "block_entity_type_id_remap.rs"),
+        (block_id::build, "block_id_remap.rs"),
         (block_state::build, "block_state_remap.rs"),
         (custom_stat::build, "custom_stat_id_remap.rs"),
         (
