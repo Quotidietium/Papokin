@@ -4816,7 +4816,8 @@ impl Player {
             speed *= fatigue_speed;
         }
         // TODO: 处理在水中的情况
-        if !self.living_entity.entity.on_ground.load(Ordering::Relaxed) {
+        // 原版对离地减速豁免飞行状态（创造/旁观飞行不减速）
+        if !self.living_entity.entity.on_ground.load(Ordering::Relaxed) && !self.is_flying() {
             speed /= 5.0;
         }
         speed
