@@ -35,6 +35,7 @@ impl<'a> CUpdateTags<'a> {
 fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) -> u16 {
     match key {
         RegistryKey::Item => papokin_data::item_id_remap::remap_item_id_for_version(id, version),
+        RegistryKey::Block => papokin_data::block_id_remap::remap_block_id_for_version(id, version),
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
@@ -97,7 +98,12 @@ impl ClientPacket for CUpdateTags<'_> {
                 let remapped_ids: Vec<u16> = values
                     .1
                     .iter()
-                    .map(|&id| remap_tag_entry_id(registry_key, id, *version))
+                    .filter_map(|&id| {
+                        let mapped = remap_tag_entry_id(registry_key, id, *version);
+                        // 目标版本不存在的条目映射为 0（=air/占位），原版
+                        // 客户端的标签里不会出现它们；保留恒等的 0 本体。
+                        (id == 0 || mapped != 0).then_some(mapped)
+                    })
                     .collect();
                 p.write_list(&remapped_ids, |p, id| p.write_var_int(&VarInt::from(*id)))?;
             }
@@ -166,5 +172,79 @@ mod tests {
         // 物品回退到静态路径：静态物品标签名得以保留。
         let needle = b"minecraft:anvil";
         assert!(bytes.windows(needle.len()).any(|window| window == needle));
+    }
+
+    // ── 方块标签 id 的跨版本重映射 ──────────────────────────────
+
+    fn read_varint(bytes: &[u8], pos: &mut usize) -> i32 {
+        let mut value: i32 = 0;
+        for i in 0..5 {
+            let b = bytes[*pos];
+            *pos += 1;
+            value |= i32::from(b & 0x7F) << (7 * i);
+            if b & 0x80 == 0 {
+                return value;
+            }
+        }
+        panic!("VarInt 超过 5 字节");
+    }
+
+    fn read_string(bytes: &[u8], pos: &mut usize) -> String {
+        let len = usize::try_from(read_varint(bytes, pos)).unwrap();
+        let s = String::from_utf8(bytes[*pos..*pos + len].to_vec()).unwrap();
+        *pos += len;
+        s
+    }
+
+    /// 线格式解包：标签名 → id 列表（首个注册表 minecraft:block）。
+    fn parse_block_tags(bytes: &[u8]) -> HashMap<String, Vec<u16>> {
+        let mut pos = 0;
+        let registry_count = read_varint(bytes, &mut pos);
+        let mut result = HashMap::new();
+        for _ in 0..registry_count {
+            let _registry_name = read_string(bytes, &mut pos);
+            let tag_count = read_varint(bytes, &mut pos);
+            for _ in 0..tag_count {
+                let name = read_string(bytes, &mut pos);
+                let id_count = read_varint(bytes, &mut pos);
+                let ids: Vec<u16> = (0..id_count)
+                    .map(|_| u16::try_from(read_varint(bytes, &mut pos)).unwrap())
+                    .collect();
+                result.insert(name, ids);
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn block_tag_ids_are_rewritten_to_client_version_ids() {
+        // 1.21.11 客户端冻结注册表：oak_log=49（数据集 26.3 中为 51）、
+        // stone=1。序列化输出的方块标签 id 必须是客户端版本的 id，
+        // 否则客户端会把 mineable/* 与 incorrect_for_* 标签整体错读
+        // （表现为工具对应错乱，如“橡木显示木镐可挖”）。
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let tags = [RegistryKey::Block];
+        let bytes = serialize(&CUpdateTags::new(&tags), version);
+        let block_tags = parse_block_tags(&bytes);
+
+        let axe = &block_tags["minecraft:mineable/axe"];
+        assert!(axe.contains(&49), "mineable/axe 应含 oak_log(49)：{axe:?}");
+        // 位移证据：数据集 oak_door(265) 在 1.21.11 为 219
+        assert!(
+            axe.contains(&219),
+            "mineable/axe 应含 oak_door(219)：{axe:?}"
+        );
+
+        let pickaxe = &block_tags["minecraft:mineable/pickaxe"];
+        assert!(pickaxe.contains(&1), "mineable/pickaxe 应含 stone(1)");
+        assert!(
+            !pickaxe.contains(&49),
+            "mineable/pickaxe 不得含 oak_log(49)：{pickaxe:?}"
+        );
+        // 26.x 独有方块（如 sulfur_bricks）映射为 0，不得泄漏进标签
+        assert!(
+            !pickaxe.contains(&0) && !axe.contains(&0),
+            "标签不得含 0（目标版本缺席条目应被过滤）"
+        );
     }
 }

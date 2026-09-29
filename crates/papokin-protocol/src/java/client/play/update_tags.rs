@@ -72,6 +72,7 @@ impl<'a> CUpdateTagsPlay<'a> {
 fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) -> u16 {
     match key {
         RegistryKey::Item => papokin_data::item_id_remap::remap_item_id_for_version(id, version),
+        RegistryKey::Block => papokin_data::block_id_remap::remap_block_id_for_version(id, version),
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
@@ -136,7 +137,12 @@ impl ClientPacket for CUpdateTagsPlay<'_> {
                     let remapped_ids: Vec<u16> = tag_val
                         .1
                         .iter()
-                        .map(|&id| remap_tag_entry_id(key, id, *version))
+                        .filter_map(|&id| {
+                            let mapped = remap_tag_entry_id(key, id, *version);
+                            // 目标版本不存在的条目映射为 0（=air/占位），
+                            // 原版客户端标签不含它们；恒等 0 本体保留。
+                            (id == 0 || mapped != 0).then_some(mapped)
+                        })
                         .collect();
                     write.write_list(&remapped_ids, |p, id| p.write_var_int(&VarInt::from(*id)))?;
                 }
@@ -176,7 +182,11 @@ impl ClientPacket for CUpdateTagsPlay<'_> {
                 let remapped_ids: Vec<u16> = values
                     .1
                     .iter()
-                    .map(|&id| remap_tag_entry_id(registry_key, id, *version))
+                    .filter_map(|&id| {
+                        let mapped = remap_tag_entry_id(registry_key, id, *version);
+                        // 同上：过滤目标版本不存在的条目（映射为 0）。
+                        (id == 0 || mapped != 0).then_some(mapped)
+                    })
                     .collect();
                 p.write_list(&remapped_ids, |p, id| p.write_var_int(&VarInt::from(*id)))?;
             }
