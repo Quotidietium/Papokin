@@ -173,8 +173,12 @@ impl JavaClient {
                     // 原版行为：服务端只承认进度达标的挖掘完成。改过的
                     // 客户端可以不等待挖掘时间直接连发 Started/Finished
                     // 瞬时破坏任意方块（黑曜石甚至基岩），因此此处必须
-                    // 校验该方块确实被持续挖掘至进度 >= 1.0。创造模式除外
+                    // 校验该方块确实被持续挖掘至接近完成。创造模式除外
                     //（Started 即破坏，与原版一致）。
+                    // 完成阈值取 0.8 而非 1.0：服务端进度按 tick 累积，
+                    // 相对客户端存在约一两个 tick 的网络滞后，正常客户端
+                    // 报告完成时服务端进度常在 0.83~0.89；0.8 以下才视为
+                    // 未达标驳回。
                     if player.gamemode.load() != GameMode::Creative {
                         let (mining, mining_pos) = {
                             let pos = player
@@ -193,7 +197,7 @@ impl JavaClient {
                             player.current_block_breaking_speed.load(Ordering::Relaxed),
                         );
                         let progress = speed * (elapsed + 1) as f32;
-                        if !mining || mining_pos != location || progress < 1.0 {
+                        if !mining || mining_pos != location || progress < 0.8 {
                             warn!(
                                 "玩家 {} 声称完成挖掘 {}，但进度未达标（挖掘中：{}，进度 {:.2}），已驳回",
                                 player.gameprofile.name,
