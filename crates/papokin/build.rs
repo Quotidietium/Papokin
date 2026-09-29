@@ -23,8 +23,10 @@ fn main() {
         _ => "unknown".to_string(),
     };
 
-    println!("cargo::rerun-if-changed=../.git/HEAD");
-    println!("cargo::rerun-if-changed=../.git/refs/heads/");
+    // crate 根为 crates/papokin，仓库 .git 在上两级；
+    // 路径不存在时 cargo 会视为永远有变化，导致构建脚本每轮重跑。
+    println!("cargo::rerun-if-changed=../../.git/HEAD");
+    println!("cargo::rerun-if-changed=../../.git/refs/heads/");
     println!("cargo::rustc-env=GIT_HASH={git_hash_short}");
     println!("cargo::rustc-env=GIT_HASH_FULL={git_hash_full}");
 }
