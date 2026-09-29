@@ -748,28 +748,20 @@ impl ItemStack {
     }
 
     /// 根据工具规则确定方块的开采速度。
-    /// 直接匹配立即返回，带标签的方块单独检查。
-    /// 若未找到匹配项，则返回工具的默认挖掘速度或 `1.0`。
+    /// 原版语义：首条匹配的规则生效；该规则未显式给出速度时
+    /// 回退到工具的默认挖掘速度。无匹配规则或无工具组件时返回
+    /// 默认挖掘速度 / `1.0`。
     #[must_use]
     pub fn get_speed(&self, block: &'static Block) -> f32 {
         // 无工具？使用默认速度
         if let Some(tool) = self.get_data_component::<ToolImpl>() {
             for rule in tool.rules.iter() {
-                // 若速度未设置则跳过
-                let Some(speed) = rule.speed else {
-                    continue;
+                let matched = match &rule.blocks {
+                    IDSet::Tag(tag) => block.is_tagged_with(tag).unwrap_or(false),
+                    IDSet::IDs(blocks) => blocks.contains(&block),
                 };
-                match &rule.blocks {
-                    IDSet::Tag(tag) => {
-                        if block.is_tagged_with(tag).unwrap_or(false) {
-                            return speed;
-                        }
-                    }
-                    IDSet::IDs(blocks) => {
-                        if blocks.contains(&block) {
-                            return speed;
-                        }
-                    }
+                if matched {
+                    return rule.speed.unwrap_or(tool.default_mining_speed);
                 }
             }
             tool.default_mining_speed
@@ -779,26 +771,18 @@ impl ItemStack {
     }
 
     /// 根据工具规则判断工具是否对方块掉落有效。
-    /// 直接匹配立即返回，而带标签的方块则单独检查。
+    /// 原版语义：首条匹配的规则生效；该规则未显式给出判定时视为
+    /// `true`。无匹配规则或无工具组件时返回 `false`。
     #[must_use]
     pub fn is_correct_for_drops(&self, block: &'static Block) -> bool {
         if let Some(tool) = self.get_data_component::<ToolImpl>() {
             for rule in tool.rules.iter() {
-                // 若速度未设置则跳过
-                let Some(correct) = rule.correct_for_drops else {
-                    continue;
+                let matched = match &rule.blocks {
+                    IDSet::Tag(tag) => block.is_tagged_with(tag).unwrap_or(false),
+                    IDSet::IDs(blocks) => blocks.contains(&block),
                 };
-                match &rule.blocks {
-                    IDSet::Tag(tag) => {
-                        if block.is_tagged_with(tag).unwrap_or(false) {
-                            return correct;
-                        }
-                    }
-                    IDSet::IDs(blocks) => {
-                        if blocks.contains(&block) {
-                            return correct;
-                        }
-                    }
+                if matched {
+                    return rule.correct_for_drops.unwrap_or(true);
                 }
             }
         }
@@ -1586,5 +1570,55 @@ mod tests {
                 "damage should clamp to 0 for set_damage({amount})"
             );
         }
+    }
+
+    // ── get_speed / is_correct_for_drops（原版首条匹配语义） ─────────
+
+    #[test]
+    fn tool_first_matching_rule_wins_over_later_overlap() {
+        // 木镐的组件规则：[#incorrect_for_wooden_tool（speed 缺省、掉落
+        // false）、#mineable/pickaxe（speed 2.0、掉落 true）]。铁矿同时
+        // 命中两条规则，原版语义下首条生效：默认速度 1.0 且无掉落，
+        // 不得落到第二条的 2.0 全速。
+        let pickaxe = ItemStack::new(1, &Item::WOODEN_PICKAXE);
+        assert_eq!(pickaxe.get_speed(&Block::IRON_ORE), 1.0);
+        assert!(!pickaxe.is_correct_for_drops(&Block::IRON_ORE));
+        // 石头只命中第二条规则：2.0 且有掉落。
+        assert_eq!(pickaxe.get_speed(&Block::STONE), 2.0);
+        assert!(pickaxe.is_correct_for_drops(&Block::STONE));
+        // 无规则命中的方块：默认挖掘速度、无掉落。
+        assert_eq!(pickaxe.get_speed(&Block::DIRT), 1.0);
+        assert!(!pickaxe.is_correct_for_drops(&Block::DIRT));
+        // 无 Tool 组件的物品：恒 1.0 且无掉落。
+        let bare = ItemStack::new(1, &Item::STICK);
+        assert_eq!(bare.get_speed(&Block::STONE), 1.0);
+        assert!(!bare.is_correct_for_drops(&Block::STONE));
+    }
+
+    #[test]
+    fn tool_rule_with_absent_fields_falls_back_to_component_defaults() {
+        // 自定义组件：首条规则匹配石头但两个字段均缺省——速度回退
+        // 组件的 default_mining_speed，掉落判定回退 true。
+        use crate::data_component_impl::ToolRule;
+
+        let mut stack = ItemStack::new(1, &Item::STONE_PICKAXE);
+        stack.patch.push((
+            DataComponent::Tool,
+            Some(
+                ToolImpl {
+                    rules: Cow::Owned(vec![ToolRule {
+                        blocks: IDSet::IDs(Cow::Owned(vec![&Block::STONE])),
+                        speed: None,
+                        correct_for_drops: None,
+                    }]),
+                    default_mining_speed: 4.0,
+                    damage_per_block: 1,
+                    can_destroy_blocks_in_creative: true,
+                }
+                .to_dyn(),
+            ),
+        ));
+        assert_eq!(stack.get_speed(&Block::STONE), 4.0);
+        assert!(stack.is_correct_for_drops(&Block::STONE));
     }
 }
