@@ -374,6 +374,9 @@ pub mod slot_display_id_remap;
 #[path = "generated/tag.rs"]
 pub mod tag;
 
+#[cfg(feature = "tag")]
+pub mod tag_sync;
+
 #[cfg(feature = "noise_router")]
 #[rustfmt::skip]
 #[path = "generated/noise_router.rs"]
