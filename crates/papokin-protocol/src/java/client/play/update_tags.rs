@@ -76,6 +76,7 @@ fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) 
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
+        RegistryKey::Fluid => papokin_data::tag_sync::remap_fluid_tag_id_for_version(id, version),
         _ => id,
     }
 }
@@ -154,7 +155,10 @@ impl ClientPacket for CUpdateTagsPlay<'_> {
             .tags
             .iter()
             .copied()
-            .filter(|key| key.is_valid_for_version(*version))
+            .filter(|key| {
+                key.is_valid_for_version(*version)
+                    && papokin_data::tag_sync::tag_registry_sendable_for_version(*key, *version)
+            })
             .collect();
 
         write.write_list(&valid_keys, |p, &registry_key| {

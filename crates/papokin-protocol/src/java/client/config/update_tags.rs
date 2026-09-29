@@ -39,6 +39,7 @@ fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) 
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
+        RegistryKey::Fluid => papokin_data::tag_sync::remap_fluid_tag_id_for_version(id, version),
         _ => id,
     }
 }
@@ -70,7 +71,10 @@ impl ClientPacket for CUpdateTags<'_> {
             .tags
             .iter()
             .copied()
-            .filter(|key| key.is_valid_for_version(*version))
+            .filter(|key| {
+                key.is_valid_for_version(*version)
+                    && papokin_data::tag_sync::tag_registry_sendable_for_version(*key, *version)
+            })
             .collect();
 
         write.write_list(&valid_keys, |p, &registry_key| {
@@ -245,6 +249,77 @@ mod tests {
         assert!(
             !pickaxe.contains(&0) && !axe.contains(&0),
             "标签不得含 0（目标版本缺席条目应被过滤）"
+        );
+    }
+
+    /// 线格式解包：注册表名 →（标签名 → id 列表）。
+    fn parse_all_registries(bytes: &[u8]) -> HashMap<String, HashMap<String, Vec<u16>>> {
+        let mut pos = 0;
+        let registry_count = read_varint(bytes, &mut pos);
+        let mut result = HashMap::new();
+        for _ in 0..registry_count {
+            let registry_name = read_string(bytes, &mut pos);
+            let tag_count = read_varint(bytes, &mut pos);
+            let mut tags = HashMap::new();
+            for _ in 0..tag_count {
+                let name = read_string(bytes, &mut pos);
+                let id_count = read_varint(bytes, &mut pos);
+                let ids: Vec<u16> = (0..id_count)
+                    .map(|_| u16::try_from(read_varint(bytes, &mut pos)).unwrap())
+                    .collect();
+                tags.insert(name, ids);
+            }
+            result.insert(registry_name, tags);
+        }
+        result
+    }
+
+    /// `game_event` 标签对 1.21.11 客户端整体省略（id 跨版本漂移且无
+    /// 逐版本映射数据，省略时客户端保留内建原版标签）；fluid 标签
+    /// 的 `water`/`flowing_lava` id 换回原版注册序；26.3 原生客户端两者
+    /// 均按数据集原样下发。
+    #[test]
+    fn game_event_omitted_and_fluid_ids_swapped_for_old_clients() {
+        let keys = [
+            RegistryKey::Block,
+            RegistryKey::Item,
+            RegistryKey::Fluid,
+            RegistryKey::EntityType,
+            RegistryKey::GameEvent,
+        ];
+
+        let old = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_21_11,
+        ));
+        assert!(
+            !old.contains_key("minecraft:game_event"),
+            "1.21.11 客户端不应收到 game_event 标签：{:?}",
+            old.keys().collect::<Vec<_>>()
+        );
+        let water = &old["minecraft:fluid"]["minecraft:water"];
+        // 数据集 water=2/flowing_lava=3 → 原版 water=3/flowing_lava=2
+        assert!(
+            water.contains(&3),
+            "fluid:water 应含原版 water(3)：{water:?}"
+        );
+        assert!(
+            !water.contains(&2),
+            "fluid:water 不得含原版 flowing_lava(2)：{water:?}"
+        );
+
+        let native = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_26_3,
+        ));
+        assert!(
+            native.contains_key("minecraft:game_event"),
+            "26.3 原生客户端应收到 game_event 标签"
+        );
+        let native_water = &native["minecraft:fluid"]["minecraft:water"];
+        assert!(
+            native_water.contains(&2) && !native_water.contains(&3),
+            "26.3 客户端 fluid 标签应保持数据集 id：{native_water:?}"
         );
     }
 }
