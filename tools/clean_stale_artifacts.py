@@ -13,15 +13,25 @@
 1. 一切 ``incremental/`` 目录——纯增量重建缓存（规范强制清理项）。
 2. 旧命名遗留产物（crate 改名后永不再被产出的名字，如 ``pumpkin*``）。
 3. 孤儿指纹产物：``deps/``、``build/`` 里的 ``<crate>-<hash>`` 条目若
-   ``.fingerprint/<crate>-<hash>`` 已不存在，且其 mtime 早于该 profile
-   最新指纹目录 10 分钟以上。cargo 只复用指纹在册的产物，指纹缺失即
-   陈旧；个别指纹目录会被并发/残留构建意外修剪，mtime 防护把这类条目
-   保留下来，最坏代价也只是多付一次重编，绝无正确性风险。
+   ``.fingerprint/<pkg>-<hash>`` 已不存在，且其 mtime 早于该 profile
+   最新指纹目录 10 分钟以上（键名比较统一为归一化形式：产物文件名用
+   crate 名下划线，指纹目录用包名连字符，``-``/``_`` 视为等价）。cargo
+   只复用指纹在册的产物，指纹缺失即陈旧；个别指纹目录会被并发/残留构建
+   意外修剪，mtime 防护把这类条目保留下来，最坏代价也只是多付一次重编，
+   绝无正确性风险。
 
 2026-09-30 首次实跑：释放 24.08 GB（孤儿 16.97 GB ∪ pumpkin 旧命名，
 含 examples/e2e-plugin 三个 profile）。教训：不带 mtime 防护的孤儿规则
 曾把一个刚构建完、指纹目录被残留进程修剪掉的 rlib 误判为陈旧，代价是
 一次 2 分钟重编——防护规则由此而来。
+
+2026-09-30 第二轮勘误：入库版脚本经实测存在两个恰好互相抵消的
+bug——① ``find_targets`` 只检查子目录的 ``target``，仓库根自己的
+``target/`` 从未被扫描（干跑恒为 0）；② 孤儿判定的键名比较忽略了
+产物文件名用下划线（``papokin_data-<hash>``）而指纹目录用包名连字符
+（``papokin-data-<hash>``）的差异，多词 crate 永远匹配不上，一旦修好
+①就会把在册产物误判成孤儿大规模误删。本轮修复两处并把键名比较统一
+为归一化形式。
 """
 
 from __future__ import annotations
@@ -55,6 +65,11 @@ def path_size(path: str) -> int:
     return total
 
 
+def norm_key(name: str) -> str:
+    """归一化 crate/包名键：产物用下划线、指纹目录用连字符，统一后比较。"""
+    return name.replace("-", "_")
+
+
 def newest_fingerprint_mtime(fp_dir: str) -> float:
     if not os.path.isdir(fp_dir):
         return 0.0
@@ -68,7 +83,7 @@ def scan_profile(profile_dir: str) -> list[str]:
     """返回该 profile（如 target/debug）下确认不会复用的条目路径。"""
     stale: list[str] = []
     fp_dir = os.path.join(profile_dir, ".fingerprint")
-    keys = set(os.listdir(fp_dir)) if os.path.isdir(fp_dir) else set()
+    keys = {norm_key(k) for k in os.listdir(fp_dir)} if os.path.isdir(fp_dir) else set()
     fp_newest = newest_fingerprint_mtime(fp_dir)
 
     deps = os.path.join(profile_dir, "deps")
@@ -83,7 +98,7 @@ def scan_profile(profile_dir: str) -> list[str]:
             m = HASH_RE.match(stem)
             if not m:
                 continue
-            if f"{m.group(1)}-{m.group(2)}" in keys:
+            if norm_key(f"{m.group(1)}-{m.group(2)}") in keys:
                 continue  # 指纹在册：可复用，保留
             if fp_newest - os.path.getmtime(path) < FRESH_MARGIN_SECONDS:
                 continue  # 可能是刚构建、指纹被并发修剪的条目，保留
@@ -96,7 +111,7 @@ def scan_profile(profile_dir: str) -> list[str]:
             if not os.path.isdir(path):
                 continue
             m = HASH_RE.match(name)
-            if not m or name in keys:
+            if not m or norm_key(name) in keys:
                 continue
             if fp_newest - os.path.getmtime(path) < FRESH_MARGIN_SECONDS:
                 continue
@@ -105,13 +120,13 @@ def scan_profile(profile_dir: str) -> list[str]:
 
 
 def find_targets(root: str) -> list[str]:
-    """仓库内全部构建 target 目录（跳过 REF/ 参考库与 .git）。"""
+    """仓库内全部构建 target 目录（跳过 REF/ 参考库与 .git）。
+
+    每一层目录（含仓库根本身）的子目录里出现 ``target`` 即收集。
+    """
     targets: list[str] = []
     for dirpath, dirnames, _files in os.walk(root):
-        rel = os.path.relpath(dirpath, root)
-        if rel == ".":
-            dirnames[:] = [d for d in dirnames if d not in ("REF", ".git")]
-            continue
+        dirnames[:] = [d for d in dirnames if d not in ("REF", ".git")]
         if "target" in dirnames:
             targets.append(os.path.join(dirpath, "target"))
             dirnames.remove("target")  # 不嵌套下钻
