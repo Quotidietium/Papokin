@@ -4,7 +4,8 @@
 
 ## 入门
 
-最简单的入门方式是在 [我们的 Discord 服务器](https://discord.gg/wT8XjrjKkf) 中提问。
+最简单的入门方式是在上游 Pumpkin 的 [Discord 服务器](https://discord.gg/wT8XjrjKkf) 中提问
+（Papokin 为个人维护的分支，无独立社区频道；议题请开在本仓库）。
 
 ### 贡献方式
 
@@ -70,10 +71,10 @@
 - **代码风格：** 在所有贡献中保持一致的代码风格。
 - **文档：** 如果你的变更引入了新功能，请考虑更新相关文档。
 - **Tokio 与 Rayon 协作：**
-  处理 CPU 密集型任务时，建议使用 Rayon 线程池（`rayon::spawn`）、并行迭代器等机制，而不是 Tokio 运行时。但至关重要的是：不要在 Rayon 调用上阻塞 Tokio 运行时，应使用 `tokio::sync::mpsc` 等异步方法在两个运行时之间传递数据。可参考 `papokin_world::level::Level::fetch_chunks` 的写法。
+  处理 CPU 密集型任务时，建议使用 Rayon 线程池（`rayon::spawn`）、并行迭代器等机制，而不是 Tokio 运行时。但至关重要的是：不要在 Rayon 调用上阻塞 Tokio 运行时，应使用 `tokio::sync::mpsc` 等异步方法在两个运行时之间传递数据。可参考 `papokin-world` 中 `Level` 经 `chunk::io` 的 `fetch_chunks`（以 `tokio::sync::mpsc` 回传区块）的写法。
 
 ### 其他信息
 
 我们鼓励你在现有议题和 pull request 下留言，分享想法与反馈。
 如有疑问，欢迎在问题跟踪器中提问，或直接联系项目维护者寻求帮助。
-提交大型贡献前，建议先开议题、讨论，或到我们的 Discord 上与我们探讨方案。
+提交大型贡献前，建议先开议题、讨论，或到上游 Pumpkin 的 Discord 社区探讨方案。
