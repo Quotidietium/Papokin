@@ -332,4 +332,31 @@ mod tests {
             "26.3 客户端 fluid 标签应保持数据集 id：{native_water:?}"
         );
     }
+
+    /// 同步类注册表的标签 id 必须落在目标客户端「登录同步表」的 id
+    /// 空间（各版本数据包文件夹字母序），而不是数据集（26.3）空间：
+    /// 26.3 新增群系按字母序插在中段，两个空间的同名群系 id 大面积
+    /// 不同（1.21.11 的 65 个共享群系中 57 个错位——2026-10-01 勘误，
+    /// 此前生成器只按 26.3 文件夹解析全部版本的标签 id）。
+    #[test]
+    fn synced_registry_tag_ids_match_per_version_space() {
+        let biome_keys = [RegistryKey::WorldgenBiome];
+        let parse =
+            |version| parse_all_registries(&serialize(&CUpdateTags::new(&biome_keys), version));
+
+        let old = parse(JavaMinecraftVersion::V_1_21_11);
+        // 1_21_11 文件夹字母序下的 is_ocean（deep_* 经 #is_deep_ocean 展开）
+        assert_eq!(
+            old["minecraft:worldgen/biome"]["minecraft:is_ocean"],
+            &[11, 9, 13, 12, 22, 35, 6, 29, 58],
+            "1.21.11 群系标签 id 必须落在该版本同步表空间"
+        );
+
+        let native = parse(JavaMinecraftVersion::V_26_3);
+        assert_eq!(
+            native["minecraft:worldgen/biome"]["minecraft:is_ocean"],
+            &[12, 10, 14, 13, 23, 36, 6, 30, 60],
+            "26.3 原生客户端保持数据集（26_3 文件夹）id 空间"
+        );
+    }
 }

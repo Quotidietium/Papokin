@@ -472,6 +472,8 @@ pub(crate) fn build() -> TokenStream {
         poi_id_map.insert(format!("minecraft:{name}"), i as u16);
     }
 
+    // 26_3 注册表 id 的回退缓存：仅当目标版本自身缺少该注册表的
+    // 数据包文件夹（冻结内建注册表）时使用。
     let mut datapack_id_maps: BTreeMap<String, BTreeMap<String, u16>> = BTreeMap::new();
     let mut all_registry_keys = HashSet::new();
     all_registry_keys.insert("dimension_type".to_string());
@@ -509,13 +511,31 @@ pub(crate) fn build() -> TokenStream {
             let mut tag_entries = Vec::new();
             let mut tag_map_entries = Vec::new();
 
-            if !datapack_id_maps.contains_key(&key) {
-                let dir =
-                    std::path::Path::new("../../assets/datapacks/26_3/data/minecraft").join(&key);
-                if dir.is_dir() {
-                    datapack_id_maps.insert(key.clone(), load_datapack_registry_ids(&dir));
+            // 标签条目 id 必须落在目标版本客户端的注册表 id 空间：同步类
+            // 注册表优先取该版本数据包文件夹自身的字母序（与登录同步表
+            // registry.rs 同源同排序，客户端以同步表为准）；该版本文件夹
+            // 缺失（注册表在彼版本仍为冻结内建）时回退 26_3 表，此类组合
+            // 由 tag_sync 的门控整体省略，不依赖回退表的正确性。
+            let ver_id_map: BTreeMap<String, u16> = {
+                let own = datapack_base.join(&key);
+                if own.is_dir() {
+                    load_datapack_registry_ids(&own)
+                } else {
+                    datapack_id_maps
+                        .entry(key.clone())
+                        .or_insert_with(|| {
+                            let dir =
+                                std::path::Path::new("../../assets/datapacks/26_3/data/minecraft")
+                                    .join(&key);
+                            if dir.is_dir() {
+                                load_datapack_registry_ids(&dir)
+                            } else {
+                                BTreeMap::new()
+                            }
+                        })
+                        .clone()
                 }
-            }
+            };
 
             for (tag_name, values) in tag_map {
                 let ids: Vec<u16> = values
@@ -528,7 +548,7 @@ pub(crate) fn build() -> TokenStream {
                         "game_event" => game_event_id_map.get(v).copied(),
                         "potion" => potion_id_map.get(v).copied(),
                         "point_of_interest_type" => poi_id_map.get(v).copied(),
-                        _ => datapack_id_maps.get(&key).and_then(|m| m.get(v).copied()),
+                        _ => ver_id_map.get(v).copied(),
                     })
                     .collect();
 
