@@ -150,6 +150,19 @@ pub trait BlockBehaviour: Send + Sync {
         Vec::new()
     }
 
+    /// 区块生成期的静态伴随方块（如双层植物的上半）：与
+    /// [`Self::extra_placed_blocks`] 同源，但不依赖 `World` 实例——
+    /// 生成路径的 `set_block_state` 不经过 [`Self::placed`] 钩子，
+    /// 由地物放置侧（`SimpleBlockFeature`）显式查询并补齐。
+    fn extra_generation_blocks(
+        &self,
+        _block: &Block,
+        _position: &BlockPos,
+        _state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        Vec::new()
+    }
+
     fn player_placed(&self, _args: PlayerPlacedArgs<'_>) {}
 
     fn on_landed_upon(&self, args: OnLandedUponArgs<'_>) {

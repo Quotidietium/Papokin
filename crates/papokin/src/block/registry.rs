@@ -1163,6 +1163,20 @@ impl BlockRegistry {
             })
     }
 
+    /// 区块生成期的静态伴随方块（如双层植物上半），见
+    /// [`crate::block::BlockBehaviour::extra_generation_blocks`]。
+    pub fn extra_generation_blocks(
+        &self,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        self.get_pumpkin_block(block.id)
+            .map_or_else(Vec::new, |pumpkin_block| {
+                pumpkin_block.extra_generation_blocks(block, position, state_id)
+            })
+    }
+
     pub fn player_placed(
         &self,
         world: &Arc<World>,

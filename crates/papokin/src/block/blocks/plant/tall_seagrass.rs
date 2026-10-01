@@ -1,3 +1,4 @@
+use papokin_data::block_properties::{DoubleBlockHalf, TallSeagrassLikeProperties};
 use papokin_data::{Block, BlockStateId};
 use papokin_macros::pumpkin_block;
 use papokin_util::math::position::BlockPos;
@@ -12,6 +13,23 @@ pub struct TallSeaGrassBlock;
 impl BlockBehaviour for TallSeaGrassBlock {
     fn can_place_at(&self, args: CanPlaceAtArgs<'_>) -> bool {
         <Self as PlantBlockBase>::can_place_at(self, args.block_accessor, args.position)
+    }
+
+    /// 生成期伴随方块：与陆地双层植物同构的上半（原版 `placeAt`
+    /// 语义）。`seagrass_tall` 地物经 `simple_block` 只落 `half=lower`
+    /// 的海草，缺失此伴随方块时海底只见半株高海草。
+    fn extra_generation_blocks(
+        &self,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        let mut props = TallSeagrassLikeProperties::from_state_id(state_id);
+        if props.half != DoubleBlockHalf::Lower {
+            return Vec::new();
+        }
+        props.half = DoubleBlockHalf::Upper;
+        vec![(position.up(), props.to_state_id(block))]
     }
 
     fn get_state_for_neighbor_update(

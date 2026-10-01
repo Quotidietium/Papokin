@@ -95,13 +95,20 @@ impl BlockBehaviour for TallPlantBlock {
         position: &BlockPos,
         state_id: BlockStateId,
     ) -> Vec<(BlockPos, BlockStateId)> {
-        let mut tall_plant_props = TallSeagrassLikeProperties::from_state_id(state_id);
-        tall_plant_props.half = DoubleBlockHalf::Upper;
+        Self::upper_pair(block, position, state_id)
+            .into_iter()
+            .collect()
+    }
 
-        vec![(
-            position.offset(BlockDirection::Up.to_offset()),
-            tall_plant_props.to_state_id(block),
-        )]
+    fn extra_generation_blocks(
+        &self,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        Self::upper_pair(block, position, state_id)
+            .into_iter()
+            .collect()
     }
 
     fn broken(&self, args: BrokenArgs<'_>) {
@@ -134,4 +141,103 @@ impl BlockBehaviour for TallPlantBlock {
     }
 }
 
+impl TallPlantBlock {
+    /// 上半伴随方块：同方块、`half` 翻转为 Upper（原版 `placeAt`
+    /// 语义的静态半边）；仅对下半态返回，防止对上半态再翻一次。
+    fn upper_pair(
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Option<(BlockPos, BlockStateId)> {
+        let mut tall_plant_props = TallSeagrassLikeProperties::from_state_id(state_id);
+        if tall_plant_props.half != DoubleBlockHalf::Lower {
+            return None;
+        }
+        tall_plant_props.half = DoubleBlockHalf::Upper;
+        Some((
+            position.offset(BlockDirection::Up.to_offset()),
+            tall_plant_props.to_state_id(block),
+        ))
+    }
+}
+
 impl PlantBlockBase for TallPlantBlock {}
+
+#[cfg(test)]
+mod tests {
+    use papokin_data::block_properties::DoubleBlockHalf;
+    use papokin_data::{Block, BlockId};
+
+    use super::TallPlantBlock;
+    use crate::block::{BlockBehaviour, BlockMetadata};
+    use papokin_util::math::position::BlockPos;
+
+    /// 全部双层植物（向日葵/高草/丁香/玫瑰丛/牡丹/瓶子草/大蕨）的
+    /// 生成期伴随方块：恰好一格上方、同方块、`half=Upper`。世界生成的
+    /// `simple_block` 地物只落下半态，缺失此伴随方块时客户端只看到
+    /// 半株植物（2026-10-02 向日葵只有下半方块的根因）。
+    #[test]
+    fn every_tall_plant_yields_exactly_one_upper_companion() {
+        let pos = BlockPos::new(3, 64, 5);
+        for block in [
+            Block::SUNFLOWER,
+            Block::TALL_GRASS,
+            Block::LARGE_FERN,
+            Block::LILAC,
+            Block::PEONY,
+            Block::ROSE_BUSH,
+            Block::PITCHER_PLANT,
+        ] {
+            let lower = block.default_state;
+            assert_eq!(
+                super::TallSeagrassLikeProperties::from_state_id(lower.id).half,
+                DoubleBlockHalf::Lower,
+                "{} 的默认态应为下半",
+                block.name
+            );
+            let extras = TallPlantBlock.extra_generation_blocks(&block, &pos, lower.id);
+            assert_eq!(extras.len(), 1, "{} 应恰好有一个上半伴随方块", block.name);
+            let (extra_pos, extra_state) = extras[0];
+            assert_eq!(extra_pos, pos.up(), "{} 伴随方块应在其上方", block.name);
+            assert_eq!(
+                super::TallSeagrassLikeProperties::from_state_id(extra_state).half,
+                DoubleBlockHalf::Upper,
+                "{} 伴随方块应为上半态",
+                block.name
+            );
+            assert_eq!(
+                Block::from_state_id(extra_state).id,
+                block.id,
+                "{} 伴随方块应为同一方块",
+                block.name
+            );
+            // 上半态不应再产出伴随（防递归翻转）。
+            assert!(
+                TallPlantBlock
+                    .extra_generation_blocks(&block, &extra_pos, extra_state)
+                    .is_empty(),
+                "{} 上半态不得再产出伴随方块",
+                block.name
+            );
+        }
+    }
+
+    /// 行为类覆盖的方块集合与数据集方块 id 的一致性锚点（新增双层
+    /// 植物时两边都要同步）。
+    #[test]
+    fn tall_plant_ids_cover_expected_set() {
+        let ids: Vec<BlockId> = TallPlantBlock::ids().into();
+        for expected in [
+            BlockId::TALL_GRASS,
+            BlockId::LARGE_FERN,
+            BlockId::PITCHER_PLANT,
+            BlockId::SUNFLOWER,
+            BlockId::LILAC,
+            BlockId::PEONY,
+            BlockId::ROSE_BUSH,
+        ] {
+            assert!(ids.contains(&expected), "缺少双层植物 {expected:?}");
+        }
+        assert_eq!(ids.len(), 7);
+    }
+}
