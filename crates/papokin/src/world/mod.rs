@@ -6364,6 +6364,17 @@ impl WorldPortalExt for WorldPortal {
         self.0.block_registry.rotate(block, state_id, rotation)
     }
 
+    fn extra_generation_blocks(
+        &self,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        self.0
+            .block_registry
+            .extra_generation_blocks(block, position, state_id)
+    }
+
     fn spawn_mobs_for_chunk_generation(
         &self,
         cache: &mut dyn GenerationCache,

@@ -28,6 +28,17 @@ impl SimpleBlockFeature {
         }
 
         chunk.set_block_state(&pos.0, state);
+        // 双层植物（向日葵/高草/高大海草等）的 simple_block 地物只落
+        // 下半态，且生成路径不经过 placed 行为钩子——上半伴随方块须在
+        // 此显式补齐（原版 placeAt 语义；can_place_at 已保证上方可占据）。
+        for (extra_pos, extra_state_id) in
+            block_registry.extra_generation_blocks(block, &pos, state.id)
+        {
+            chunk.set_block_state(
+                &extra_pos.0,
+                papokin_data::BlockState::from_id(extra_state_id),
+            );
+        }
         true
     }
 }

@@ -530,6 +530,22 @@ mod tests {
             true
         }
 
+        // 与真实注册表同构：双层植物下半态产出上方上半伴随方块。
+        fn extra_generation_blocks(
+            &self,
+            block: &Block,
+            position: &BlockPos,
+            state_id: BlockStateId,
+        ) -> Vec<(BlockPos, BlockStateId)> {
+            let mut props =
+                papokin_data::block_properties::TallSeagrassLikeProperties::from_state_id(state_id);
+            if props.half != papokin_data::block_properties::DoubleBlockHalf::Lower {
+                return Vec::new();
+            }
+            props.half = papokin_data::block_properties::DoubleBlockHalf::Upper;
+            vec![(position.up(), props.to_state_id(block))]
+        }
+
         fn mirror(
             &self,
             block: &Block,
@@ -568,6 +584,59 @@ mod tests {
         chunk.stage = StagedChunkEnum::StructureReferences;
         chunk.step_to_noise(generator);
         chunk
+    }
+
+    /// 回归测试：`simple_block` 地物放置双层植物（数据集里
+    /// `minecraft:sunflower` 等特性只落 `half=lower` 的下半态）时，
+    /// 必须同时落上半伴随方块——2026-10-02 修复前，世界生成的
+    /// 向日葵只有下半方块。
+    #[test]
+    fn simple_block_places_both_halves_of_tall_plants() {
+        use papokin_data::block_properties::{DoubleBlockHalf, TallSeagrassLikeProperties};
+
+        let world_gen = get_world_gen(
+            Seed(42),
+            Dimension::OVERWORLD,
+            false,
+            Vec::new(),
+            String::new(),
+        );
+        let WorldGenerator::Noise(generator) = &*world_gen else {
+            unreachable!()
+        };
+        let mut chunk = step_noise_stage(&world_gen, generator);
+
+        let Some(ConfiguredFeature::SimpleBlock(feature)) =
+            CONFIGURED_FEATURES.get(&FeatureId::Sunflower)
+        else {
+            panic!("数据集缺少 minecraft:sunflower 特性");
+        };
+        let pos = BlockPos::new(8, 100, 8);
+        chunk.set_block_state(pos.0.x, pos.0.y, pos.0.z, Block::AIR.default_state);
+        chunk.set_block_state(pos.0.x, pos.0.y + 1, pos.0.z, Block::AIR.default_state);
+
+        let registry = Registry;
+        let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(0));
+        assert!(feature.generate(&registry, &mut chunk, &mut random, pos));
+
+        let lower_id = chunk.get_block_state(&pos.0);
+        assert_eq!(
+            lower_id,
+            Block::SUNFLOWER.default_state.id,
+            "目标位应为向日葵下半"
+        );
+        assert_eq!(
+            TallSeagrassLikeProperties::from_state_id(lower_id).half,
+            DoubleBlockHalf::Lower
+        );
+        let mut expected_upper = TallSeagrassLikeProperties::from_state_id(lower_id);
+        expected_upper.half = DoubleBlockHalf::Upper;
+        let upper_id = chunk.get_block_state(&pos.up().0);
+        assert_eq!(
+            upper_id,
+            expected_upper.to_state_id(&Block::SUNFLOWER),
+            "上半缺失——世界生成向日葵只剩下半方块"
+        );
     }
 
     #[test]

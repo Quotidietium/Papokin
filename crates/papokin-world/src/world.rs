@@ -70,6 +70,18 @@ pub trait WorldPortalExt: Send + Sync {
         rotation: Rotation,
     ) -> &'static BlockState;
 
+    /// 区块生成期的静态伴随方块（如双层植物的上半）：生成路径的
+    /// `set_block_state` 不经过行为钩子，由地物放置侧（`SimpleBlockFeature`）
+    /// 查询本方法并补齐。默认实现无伴随方块。
+    fn extra_generation_blocks(
+        &self,
+        _block: &Block,
+        _position: &BlockPos,
+        _state_id: BlockStateId,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        Vec::new()
+    }
+
     fn spawn_mobs_for_chunk_generation(
         &self,
         cache: &mut dyn GenerationCache,
