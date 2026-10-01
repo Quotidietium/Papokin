@@ -35,15 +35,21 @@
 
 ## 每次更新后构建 dist（2026-09-27 起为强制项）
 
-每轮代码改动通过门禁后，必须做一次**细粒度**的编译打包并刷新本地 `dist/`（只重编有改动的 crate，不 `cargo clean`）：
+每轮代码改动通过门禁后，必须做一次**细粒度**的编译打包并刷新本地 `dist/`（只重编有改动的 crate，不 `cargo clean`）。
+
+**版本号递增与压缩归档（2026-10-02 起为强制项）**：每次构建 dist 前先把 `Cargo.toml` 的 `[workspace.package]` 版本号 **patch 段 +1**（如 `0.3.1+1.21.11 → 0.3.2+1.21.11`；MC 版本段不动）；产物文件名一律带该版本号；zip 按版本保留为归档记录，**不得覆盖或删除旧版本 zip**（`checksums.sha256` 即归档清单）：
 
 ```sh
+# 1. 先递增版本号并过门禁，再构建（版本在 workspace.package 下，递增会触发全量重编，属预期成本）
 cargo build --release
-cp target/release/papokin.exe dist/papokin-X64-Windows.exe
-# 重新打包带版本号的 zip 并重算校验和（版本取 Cargo.toml 的 MC 版本段）
-powershell Compress-Archive -Force dist/papokin-X64-Windows.exe dist/papokin-<版本>-X64-Windows.zip
+# 2. exe 复制为带版本号的当前产物（无版本号的裸文件名自 2026-10-02 起弃用）
+cp target/release/papokin.exe dist/papokin-<版本>-X64-Windows.exe
+# 3. 打同名 zip 作为该版本的压缩归档记录（版本取 Cargo.toml 的包版本段，如 0.3.1，不含 +MC 段）
+powershell Compress-Archive -Force dist/papokin-<版本>-X64-Windows.exe dist/papokin-<版本>-X64-Windows.zip
+# 4. 校验和覆盖 dist 下全部 papokin-* 归档
 cd dist && sha256sum papokin-* > checksums.sha256
 ```
 
+- 新版本产物落位后，删除已被取代的**无版本号裸 exe**（旧 exe 字节已封存在对应 zip 内，不丢失）；带版本号的旧 zip 全部留存。
 - `plugin-devkit` 仅在其内容来源（WIT/SDK/文档）变化时重建，普通服务端改动不必动它。
 - GitHub 推送/发布非本规范强制项：推送失败（代理不稳定等）可暂时放弃，本地 dist 产物为准。
