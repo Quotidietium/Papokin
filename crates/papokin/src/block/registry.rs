@@ -1170,10 +1170,11 @@ impl BlockRegistry {
         block: &Block,
         position: &BlockPos,
         state_id: BlockStateId,
+        block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         self.get_pumpkin_block(block.id)
             .map_or_else(Vec::new, |pumpkin_block| {
-                pumpkin_block.extra_generation_blocks(block, position, state_id)
+                pumpkin_block.extra_generation_blocks(block, position, state_id, block_accessor)
             })
     }
 

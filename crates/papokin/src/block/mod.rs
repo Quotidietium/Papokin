@@ -154,11 +154,14 @@ pub trait BlockBehaviour: Send + Sync {
     /// [`Self::extra_placed_blocks`] 同源，但不依赖 `World` 实例——
     /// 生成路径的 `set_block_state` 不经过 [`Self::placed`] 钩子，
     /// 由地物放置侧（`SimpleBlockFeature`）显式查询并补齐。
+    /// `block_accessor` 供需要读取周边方块状态的实现使用
+    /// （如小垂滴叶上半的 waterlogged 取决于上半位当前是否为水）。
     fn extra_generation_blocks(
         &self,
         _block: &Block,
         _position: &BlockPos,
         _state_id: BlockStateId,
+        _block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         Vec::new()
     }

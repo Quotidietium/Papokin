@@ -5,7 +5,7 @@ use papokin_data::BlockId;
 use papokin_data::BlockStateId;
 use papokin_data::block_properties::{DoubleBlockHalf, TallSeagrassLikeProperties};
 use papokin_util::math::position::BlockPos;
-use papokin_world::world::BlockFlags;
+use papokin_world::world::{BlockAccessor, BlockFlags};
 
 use crate::block::{
     BlockBehaviour, BlockMetadata, CanPlaceAtArgs, GetStateForNeighborUpdateArgs,
@@ -105,6 +105,7 @@ impl BlockBehaviour for TallPlantBlock {
         block: &Block,
         position: &BlockPos,
         state_id: BlockStateId,
+        _block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         Self::upper_pair(block, position, state_id)
             .into_iter()
@@ -171,6 +172,37 @@ mod tests {
     use super::TallPlantBlock;
     use crate::block::{BlockBehaviour, BlockMetadata};
     use papokin_util::math::position::BlockPos;
+    use papokin_world::world::BlockAccessor;
+
+    /// 测试桩：所有位置均为空气。
+    struct AirAccessor;
+
+    impl BlockAccessor for AirAccessor {
+        fn get_block(&self, _position: &BlockPos) -> &'static papokin_data::Block {
+            &papokin_data::Block::AIR
+        }
+
+        fn get_block_state(&self, _position: &BlockPos) -> &'static papokin_data::BlockState {
+            papokin_data::Block::AIR.default_state
+        }
+
+        fn get_block_state_id(&self, _position: &BlockPos) -> papokin_data::BlockStateId {
+            papokin_data::Block::AIR.default_state.id
+        }
+
+        fn get_block_and_state(
+            &self,
+            _position: &BlockPos,
+        ) -> (
+            &'static papokin_data::Block,
+            &'static papokin_data::BlockState,
+        ) {
+            (
+                &papokin_data::Block::AIR,
+                papokin_data::Block::AIR.default_state,
+            )
+        }
+    }
 
     /// 全部双层植物（向日葵/高草/丁香/玫瑰丛/牡丹/瓶子草/大蕨）的
     /// 生成期伴随方块：恰好一格上方、同方块、`half=Upper`。世界生成的
@@ -195,7 +227,8 @@ mod tests {
                 "{} 的默认态应为下半",
                 block.name
             );
-            let extras = TallPlantBlock.extra_generation_blocks(&block, &pos, lower.id);
+            let extras =
+                TallPlantBlock.extra_generation_blocks(&block, &pos, lower.id, &AirAccessor);
             assert_eq!(extras.len(), 1, "{} 应恰好有一个上半伴随方块", block.name);
             let (extra_pos, extra_state) = extras[0];
             assert_eq!(extra_pos, pos.up(), "{} 伴随方块应在其上方", block.name);
@@ -214,7 +247,7 @@ mod tests {
             // 上半态不应再产出伴随（防递归翻转）。
             assert!(
                 TallPlantBlock
-                    .extra_generation_blocks(&block, &extra_pos, extra_state)
+                    .extra_generation_blocks(&block, &extra_pos, extra_state, &AirAccessor)
                     .is_empty(),
                 "{} 上半态不得再产出伴随方块",
                 block.name

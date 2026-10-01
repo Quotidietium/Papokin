@@ -536,6 +536,7 @@ mod tests {
             block: &Block,
             position: &BlockPos,
             state_id: BlockStateId,
+            _block_accessor: &dyn crate::world::BlockAccessor,
         ) -> Vec<(BlockPos, BlockStateId)> {
             let mut props =
                 papokin_data::block_properties::TallSeagrassLikeProperties::from_state_id(state_id);

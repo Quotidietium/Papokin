@@ -72,12 +72,14 @@ pub trait WorldPortalExt: Send + Sync {
 
     /// 区块生成期的静态伴随方块（如双层植物的上半）：生成路径的
     /// `set_block_state` 不经过行为钩子，由地物放置侧（`SimpleBlockFeature`）
-    /// 查询本方法并补齐。默认实现无伴随方块。
+    /// 查询本方法并补齐。`block_accessor` 供需要读取周边方块状态的
+    /// 实现使用（如小垂滴叶上半的 waterlogged）。默认实现无伴随方块。
     fn extra_generation_blocks(
         &self,
         _block: &Block,
         _position: &BlockPos,
         _state_id: BlockStateId,
+        _block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         Vec::new()
     }

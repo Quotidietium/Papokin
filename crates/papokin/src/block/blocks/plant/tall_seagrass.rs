@@ -23,6 +23,7 @@ impl BlockBehaviour for TallSeaGrassBlock {
         block: &Block,
         position: &BlockPos,
         state_id: BlockStateId,
+        _block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         let mut props = TallSeagrassLikeProperties::from_state_id(state_id);
         if props.half != DoubleBlockHalf::Lower {

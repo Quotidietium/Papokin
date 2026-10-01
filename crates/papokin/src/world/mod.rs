@@ -6369,10 +6369,11 @@ impl WorldPortalExt for WorldPortal {
         block: &Block,
         position: &BlockPos,
         state_id: BlockStateId,
+        block_accessor: &dyn BlockAccessor,
     ) -> Vec<(BlockPos, BlockStateId)> {
         self.0
             .block_registry
-            .extra_generation_blocks(block, position, state_id)
+            .extra_generation_blocks(block, position, state_id, block_accessor)
     }
 
     fn spawn_mobs_for_chunk_generation(
