@@ -387,4 +387,66 @@ mod tests {
             "1.19.3 客户端不应收到 damage_type 标签"
         );
     }
+
+    /// 冻结注册表时代的组合整体省略（客户端保留内建标签），同步
+    /// 时代起才下发；`game_event` 在 26.x 家族内部亦有漂移：26.2 的
+    /// bounce 插在 26.3 序第 9 位，26.1 客户端整体错位，须一并省略。
+    #[test]
+    fn frozen_era_registries_are_omitted_until_synced() {
+        let keys = [
+            RegistryKey::BannerPattern,
+            RegistryKey::PaintingVariant,
+            RegistryKey::Instrument,
+            RegistryKey::PointOfInterestType,
+            RegistryKey::CatVariant,
+            RegistryKey::GameEvent,
+        ];
+
+        let v1_19_4 = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_19_4,
+        ));
+        assert!(!v1_19_4.contains_key("minecraft:banner_pattern"));
+        assert!(!v1_19_4.contains_key("minecraft:painting_variant"));
+        assert!(!v1_19_4.contains_key("minecraft:instrument"));
+        assert!(!v1_19_4.contains_key("minecraft:point_of_interest_type"));
+        assert!(!v1_19_4.contains_key("minecraft:game_event"));
+
+        let v1_20_5 = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_20_5,
+        ));
+        assert!(v1_20_5.contains_key("minecraft:banner_pattern"));
+        assert!(v1_20_5.contains_key("minecraft:painting_variant"));
+        assert!(!v1_20_5.contains_key("minecraft:instrument"));
+
+        let v1_21_2 = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_21_2,
+        ));
+        assert!(v1_21_2.contains_key("minecraft:instrument"));
+        // 兴趣点与猫变种：任何版本都无逐版本真值，全部省略。
+        for regs in [&v1_19_4, &v1_20_5, &v1_21_2] {
+            assert!(!regs.contains_key("minecraft:point_of_interest_type"));
+            assert!(!regs.contains_key("minecraft:cat_variant"));
+        }
+
+        // game_event：26.1 省略（bounce 插入位导致整体偏移）、26.2 起下发。
+        let v26_1 = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_26_1,
+        ));
+        assert!(
+            !v26_1.contains_key("minecraft:game_event"),
+            "26.1 客户端不应收到 game_event 标签"
+        );
+        let v26_2 = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_26_2,
+        ));
+        assert!(
+            v26_2.contains_key("minecraft:game_event"),
+            "26.2 与 26.3 事件集合一致，应正常下发"
+        );
+    }
 }
