@@ -121,6 +121,9 @@ nethernet-key.der
 
 .vscode/settings.json
 
+# ZCode 本地会话目录
+.zcode/
+
 # Documentation
 docs/.vitepress/dist
 docs/.vitepress/cache
