@@ -102,7 +102,7 @@ impl RegistryKey {
             | Self::PointOfInterestType => {
                 (version as u32) >= (JavaMinecraftVersion::V_1_19 as u32)
             }
-            Self::DamageType => (version as u32) >= (JavaMinecraftVersion::V_1_20 as u32),
+            Self::DamageType => (version as u32) >= (JavaMinecraftVersion::V_1_19_4 as u32),
             Self::Enchantment | Self::Potion => {
                 (version as u32) >= (JavaMinecraftVersion::V_1_20_5 as u32)
             }

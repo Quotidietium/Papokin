@@ -359,4 +359,32 @@ mod tests {
             "26.3 原生客户端保持数据集（26_3 文件夹）id 空间"
         );
     }
+
+    /// `damage_type` 自 1.19.4 起由本服同步注册表，1.19.4 客户端必须
+    /// 收到配套标签，否则其内建标签会相对同步后的注册表错位失效；
+    /// 1.19.3 及更早客户端不省略（彼版本无此注册表，有效性门控拦截）。
+    #[test]
+    fn damage_type_tags_start_at_1_19_4_in_own_id_space() {
+        let keys = [RegistryKey::DamageType];
+
+        let modern = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_19_4,
+        ));
+        // 1_20 数据包文件夹字母序下 arrow=0、wind_charge=45 等
+        assert_eq!(
+            modern["minecraft:damage_type"]["minecraft:is_projectile"],
+            &[0, 38, 26, 39, 12, 41, 37],
+            "1.19.4 的 damage_type 标签 id 必须落在 1_20 文件夹空间"
+        );
+
+        let ancient = parse_all_registries(&serialize(
+            &CUpdateTags::new(&keys),
+            JavaMinecraftVersion::V_1_19_3,
+        ));
+        assert!(
+            !ancient.contains_key("minecraft:damage_type"),
+            "1.19.3 客户端不应收到 damage_type 标签"
+        );
+    }
 }
