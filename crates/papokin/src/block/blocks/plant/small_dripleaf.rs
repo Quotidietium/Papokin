@@ -67,6 +67,29 @@ impl BlockBehaviour for SmallDripleafBlock {
             );
         }
     }
+
+    /// 生成期伴随方块：与 [`Self::placed`] 同构的上半（facing 沿袭下半、
+    /// `waterlogged` 取上半位当前是否为水）。`dripleaf` 地物经
+    /// `simple_block` 只落 `half=lower`，缺失此伴随方块时繁茂洞窟里
+    /// 的小垂滴叶只剩下半。
+    fn extra_generation_blocks(
+        &self,
+        block: &Block,
+        position: &BlockPos,
+        state_id: BlockStateId,
+        block_accessor: &dyn BlockAccessor,
+    ) -> Vec<(BlockPos, BlockStateId)> {
+        let lower_props = SmallDripleafLikeProperties::from_state_id(state_id);
+        if lower_props.half != DoubleBlockHalf::Lower {
+            return Vec::new();
+        }
+
+        let mut upper_props = SmallDripleafLikeProperties::default(block);
+        upper_props.facing = lower_props.facing;
+        upper_props.waterlogged = block_accessor.get_block(&position.up()) == &Block::WATER;
+        upper_props.half = DoubleBlockHalf::Upper;
+        vec![(position.up(), upper_props.to_state_id(block))]
+    }
 }
 fn is_small_dripleaf_waterlogged(state_id: BlockStateId) -> bool {
     let dripleaf_props = SmallDripleafLikeProperties::from_state_id(state_id);
@@ -124,4 +147,114 @@ fn supports_small_dripleaf(support_block: &Block, underwater: bool) -> bool {
         return true;
     }
     underwater && support_block.has_tag(&tag::Block::MINECRAFT_SUPPORTS_BIG_DRIPLEAF)
+}
+
+#[cfg(test)]
+mod tests {
+    use papokin_data::block_properties::DoubleBlockHalf;
+    use papokin_data::{Block, BlockState, BlockStateId};
+    use papokin_util::math::position::BlockPos;
+    use papokin_world::world::BlockAccessor;
+
+    use super::SmallDripleafBlock;
+    use crate::block::BlockBehaviour;
+
+    /// 指定一格为水、其余为空气的测试桩。
+    struct WaterAtAccessor {
+        water: BlockPos,
+    }
+
+    impl BlockAccessor for WaterAtAccessor {
+        fn get_block(&self, position: &BlockPos) -> &'static Block {
+            if *position == self.water {
+                &Block::WATER
+            } else {
+                &Block::AIR
+            }
+        }
+
+        fn get_block_state(&self, position: &BlockPos) -> &'static BlockState {
+            if *position == self.water {
+                Block::WATER.default_state
+            } else {
+                Block::AIR.default_state
+            }
+        }
+
+        fn get_block_state_id(&self, position: &BlockPos) -> BlockStateId {
+            self.get_block_state(position).id
+        }
+
+        fn get_block_and_state(
+            &self,
+            position: &BlockPos,
+        ) -> (&'static Block, &'static BlockState) {
+            if *position == self.water {
+                (&Block::WATER, Block::WATER.default_state)
+            } else {
+                (&Block::AIR, Block::AIR.default_state)
+            }
+        }
+    }
+
+    /// 生成期伴随方块：facing 沿袭下半、上半位为水时 `waterlogged=true`、
+    /// `half` 翻转 Upper——`dripleaf` 地物经 `simple_block` 只落下半态，
+    /// 缺失此伴随方块时繁茂洞窟里的小垂滴叶只剩下半。
+    #[test]
+    fn generation_companion_copies_facing_and_resolves_waterlogging() {
+        let pos = BlockPos::new(5, 30, 7);
+        let lower = Block::SMALL_DRIPLEAF.default_state;
+        assert_eq!(
+            super::SmallDripleafLikeProperties::from_state_id(lower.id).half,
+            DoubleBlockHalf::Lower,
+            "小垂滴叶默认态应为下半"
+        );
+
+        let extras = SmallDripleafBlock.extra_generation_blocks(
+            &Block::SMALL_DRIPLEAF,
+            &pos,
+            lower.id,
+            &WaterAtAccessor { water: pos.up() },
+        );
+        assert_eq!(extras.len(), 1, "下半态应恰有一个上半伴随方块");
+        let (extra_pos, upper_id) = extras[0];
+        assert_eq!(extra_pos, pos.up());
+
+        let lower_props = super::SmallDripleafLikeProperties::from_state_id(lower.id);
+        let upper_props = super::SmallDripleafLikeProperties::from_state_id(upper_id);
+        assert_eq!(upper_props.half, DoubleBlockHalf::Upper);
+        assert_eq!(
+            upper_props.facing, lower_props.facing,
+            "上半 facing 应沿袭下半"
+        );
+        assert!(
+            upper_props.waterlogged,
+            "上半位为水时 waterlogged 应为 true"
+        );
+
+        let (_, dry_upper_id) = SmallDripleafBlock.extra_generation_blocks(
+            &Block::SMALL_DRIPLEAF,
+            &pos,
+            lower.id,
+            &WaterAtAccessor {
+                water: BlockPos::new(1000, 1000, 1000),
+            },
+        )[0];
+        assert!(
+            !super::SmallDripleafLikeProperties::from_state_id(dry_upper_id).waterlogged,
+            "上半位为空气时 waterlogged 应为 false"
+        );
+
+        // 上半态不得再产出伴随（防递归）。
+        assert!(
+            SmallDripleafBlock
+                .extra_generation_blocks(
+                    &Block::SMALL_DRIPLEAF,
+                    &pos.up(),
+                    upper_id,
+                    &WaterAtAccessor { water: pos.up() }
+                )
+                .is_empty()
+        );
+    }
 }
