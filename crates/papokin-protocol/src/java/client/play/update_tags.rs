@@ -76,7 +76,9 @@ fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) 
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
-        RegistryKey::Fluid => papokin_data::tag_sync::remap_fluid_tag_id_for_version(id, version),
+        // 流体注册序 1.13–26.x 与数据集同序，id 原样下发（勘误见
+        // papokin-data::tag_sync 模块文档：此前的 2↔3 换序会把水装进
+        // lava 标签，令客户端浸水时渲染岩浆红屏）。
         _ => id,
     }
 }

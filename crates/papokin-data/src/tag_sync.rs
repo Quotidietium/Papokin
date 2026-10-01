@@ -8,10 +8,13 @@
 //!   dialog、timeline 等）在生成期即取各版本自身的 id；
 //! - potion 与 point_of_interest_type 无版本数据，但注册序自 1.13
 //!   起稳定（药水为经典序；兴趣点按原版追加式注册，共享前缀一致）；
-//! - **fluid**：数据集注册序 `empty/flowing_water/water/flowing_lava/
-//!   lava` 与 1.13–1.21.11 原版序在 water 与 flowing_lava 上互换，
-//!   由 [`remap_fluid_tag_id_for_version`] 在发送时换回（1.13–1.16.5
-//!   的标签包为定长位置格式，fluid 段无法省略，只能换 id）；
+//! - **fluid**：流体注册序自 1.13 起稳定为 `empty/flowing_water/water/
+//!   flowing_lava/lava`，数据集（26.x）与 1.13–1.21.11 原版**完全同序**，
+//!   标签 id 原样下发即可，无需换序。2026-10-01 勘误：上一轮「water
+//!   与 flowing_lava 两版互换」的结论有误（原版 `Fluids.java` 注册序与
+//!   数据集一致），据此加入的 2↔3 换序反而把 water 装进了
+//!   `minecraft:lava` 标签——客户端的眼睛入液判定走 FluidTags，导致
+//!   旧客户端浸水时渲染岩浆红屏且不掉血（见 note/15 热修章节勘误）；
 //! - **game_event**：26.3 有 61 个事件而 1.21.11 仅 55 个，id 跨版本
 //!   漂移且本地无逐版本映射数据。与其下发错乱 id，不如整体不下发
 //!   （1.17+ 为按名寻址的变长格式，可安全省略）——客户端保留自身
@@ -36,30 +39,11 @@ pub fn tag_registry_sendable_for_version(key: RegistryKey, version: JavaMinecraf
     }
 }
 
-/// 流体标签 id 换回目标客户端的注册序。
-///
-/// 数据集（26.x）：`empty=0, flowing_water=1, water=2, flowing_lava=3,
-/// lava=4`；1.13–1.21.11 原版：`flowing_lava=2, water=3`，两者互换。
-#[must_use]
-#[allow(clippy::match_same_arms)]
-pub fn remap_fluid_tag_id_for_version(id: u16, version: JavaMinecraftVersion) -> u16 {
-    if version >= JavaMinecraftVersion::V_26_1 {
-        return id;
-    }
-    match id {
-        2 => 3,
-        3 => 2,
-        other => other,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use papokin_util::version::JavaMinecraftVersion as V;
 
-    use super::{
-        remap_fluid_tag_id_for_version as fluid, tag_registry_sendable_for_version as sendable,
-    };
+    use super::tag_registry_sendable_for_version as sendable;
     use crate::tag::RegistryKey;
 
     /// game_event 标签仅对 26.x 家族客户端下发；其余注册表始终可发。
@@ -71,18 +55,5 @@ mod tests {
         assert!(sendable(RegistryKey::GameEvent, V::V_26_3));
         assert!(sendable(RegistryKey::Block, V::V_1_13));
         assert!(sendable(RegistryKey::Fluid, V::V_1_13));
-    }
-
-    /// 数据集 fluid 序 water=2/flowing_lava=3 与 1.13–1.21.11 原版序
-    /// 互换；26.x 家族恒等。
-    #[test]
-    fn fluid_tag_ids_swap_water_and_flowing_lava_for_old_clients() {
-        assert_eq!(fluid(2, V::V_1_21_11), 3); // water -> 原版 3
-        assert_eq!(fluid(3, V::V_1_21_11), 2); // flowing_lava -> 原版 2
-        assert_eq!(fluid(0, V::V_1_13), 0);
-        assert_eq!(fluid(1, V::V_1_16), 1);
-        assert_eq!(fluid(4, V::V_1_21_11), 4);
-        assert_eq!(fluid(2, V::V_26_1), 2);
-        assert_eq!(fluid(3, V::V_26_3), 3);
     }
 }

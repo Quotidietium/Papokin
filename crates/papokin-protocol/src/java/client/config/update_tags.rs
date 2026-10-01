@@ -39,7 +39,9 @@ fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) 
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
         }
-        RegistryKey::Fluid => papokin_data::tag_sync::remap_fluid_tag_id_for_version(id, version),
+        // 流体注册序 1.13–26.x 与数据集同序，id 原样下发（勘误见
+        // papokin-data::tag_sync 模块文档：此前的 2↔3 换序会把水装进
+        // lava 标签，令客户端浸水时渲染岩浆红屏）。
         _ => id,
     }
 }
@@ -275,11 +277,12 @@ mod tests {
     }
 
     /// `game_event` 标签对 1.21.11 客户端整体省略（id 跨版本漂移且无
-    /// 逐版本映射数据，省略时客户端保留内建原版标签）；fluid 标签
-    /// 的 `water`/`flowing_lava` id 换回原版注册序；26.3 原生客户端两者
-    /// 均按数据集原样下发。
+    /// 逐版本映射数据，省略时客户端保留内建原版标签）；fluid 注册序
+    /// 1.13–26.x 与数据集同序，标签 id 必须原样下发——客户端的眼睛
+    /// 入液判定走 FluidTags，lava 标签一旦含水、water 标签不含水，
+    /// 浸水就会渲染岩浆红屏且没有水下效果（2026-10-01 勘误回归锚点）。
     #[test]
-    fn game_event_omitted_and_fluid_ids_swapped_for_old_clients() {
+    fn game_event_omitted_and_fluid_ids_unchanged_for_old_clients() {
         let keys = [
             RegistryKey::Block,
             RegistryKey::Item,
@@ -297,15 +300,22 @@ mod tests {
             "1.21.11 客户端不应收到 game_event 标签：{:?}",
             old.keys().collect::<Vec<_>>()
         );
+        // 原版流体注册序：empty=0, flowing_water=1, water=2,
+        // flowing_lava=3, lava=4（与数据集一致，无任何换序）。
         let water = &old["minecraft:fluid"]["minecraft:water"];
-        // 数据集 water=2/flowing_lava=3 → 原版 water=3/flowing_lava=2
+        assert!(water.contains(&2), "fluid:water 应含 water(2)：{water:?}");
         assert!(
-            water.contains(&3),
-            "fluid:water 应含原版 water(3)：{water:?}"
+            !water.contains(&3),
+            "fluid:water 不得含 flowing_lava(3)：{water:?}"
+        );
+        let lava = &old["minecraft:fluid"]["minecraft:lava"];
+        assert!(
+            lava.contains(&3) && lava.contains(&4),
+            "fluid:lava 应含 flowing_lava(3) 与 lava(4)：{lava:?}"
         );
         assert!(
-            !water.contains(&2),
-            "fluid:water 不得含原版 flowing_lava(2)：{water:?}"
+            !lava.contains(&2),
+            "fluid:lava 不得含 water(2)——含水会让客户端在水下渲染岩浆红屏：{lava:?}"
         );
 
         let native = parse_all_registries(&serialize(
