@@ -712,7 +712,7 @@ impl PluginManager {
         loader_data: Box<dyn Any + Send + Sync>,
         loader: Arc<dyn PluginLoader>,
         path: PathBuf,
-    ) -> Result<tokio::task::JoinHandle<()>, ManagerError> {
+    ) -> Result<tokio::task::JoinHandle<Result<(), String>>, ManagerError> {
         // 将插件标记为加载中
         self.plugin_states
             .write()
@@ -795,6 +795,8 @@ impl PluginManager {
                                     metadata.name, metadata.permissions
                                 );
                             }
+
+                            Ok(())
                         }
                         Err(enable_error) => {
                             let error_msg = format!("启用失败：{enable_error}");
@@ -836,6 +838,8 @@ impl PluginManager {
                             state_notify.notify_waiters();
 
                             error!("启用插件 {plugin_name} 失败：{error_msg}");
+
+                            Err(error_msg)
                         }
                     }
                 }
@@ -880,6 +884,8 @@ impl PluginManager {
                     state_notify.notify_waiters();
 
                     error!("初始化插件 {plugin_name} 失败：{error_msg}",);
+
+                    Err(error_msg)
                 }
             }
         };
@@ -1302,7 +1308,7 @@ impl PluginManager {
         self: &Arc<Self>,
         server: &Arc<Server>,
         path: &Path,
-    ) -> Result<tokio::task::JoinHandle<()>, ManagerError> {
+    ) -> Result<tokio::task::JoinHandle<Result<(), String>>, ManagerError> {
         if !server.advanced_config.plugins.enabled {
             return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
                 "插件系统已在配置中禁用".to_string(),
@@ -1402,14 +1408,20 @@ impl PluginManager {
         server: &Arc<Server>,
         path: &Path,
     ) -> Result<(), ManagerError> {
-        self.start_loading_plugin(server, path)
+        let outcome = self
+            .start_loading_plugin(server, path)
             .await?
             .await
             .map_err(|e| {
                 ManagerError::LoaderError(LoaderError::InitializationFailed(format!(
                     "任务 join 错误：{e}"
                 )))
-            })
+            })?;
+        // guest 钩子失败（on-load/on-enable 返回错误）由初始化任务
+        // 以 Err 带回；此处一并上报，避免把失败的加载误报为成功。
+        //（失败原因已在任务内写入状态表并记录日志。）
+        outcome.map_err(LoaderError::InitializationFailed)?;
+        Ok(())
     }
 
     /// 等待某个插件完成加载
