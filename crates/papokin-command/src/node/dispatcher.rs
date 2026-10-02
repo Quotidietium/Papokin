@@ -300,9 +300,10 @@ impl<S: CommandSource> CommandDispatcher<S> {
                 let description = main_node.meta.description.clone();
                 let mut alias =
                     crate::argument_builder::CommandArgumentBuilder::new(single_slash, description);
+                // 同 register_with_aliases：权限要求无条件复制。
+                alias = alias.overwrite_requirements(main_node.owned.requirements.clone());
                 if let Some(executor) = &main_node.owned.command {
                     alias = alias.executes_arc(executor.clone());
-                    alias = alias.overwrite_requirements(main_node.owned.requirements.clone());
                 }
                 alias = alias.redirect(crate::node::Redirection::Local(main_node_id.into()));
                 self.tree.add_child_to_root(alias.build());
@@ -314,9 +315,10 @@ impl<S: CommandSource> CommandDispatcher<S> {
                 let description = main_node.meta.description.clone();
                 let mut alias =
                     crate::argument_builder::CommandArgumentBuilder::new(double_slash, description);
+                // 同 register_with_aliases：权限要求无条件复制。
+                alias = alias.overwrite_requirements(main_node.owned.requirements.clone());
                 if let Some(executor) = &main_node.owned.command {
                     alias = alias.executes_arc(executor.clone());
-                    alias = alias.overwrite_requirements(main_node.owned.requirements.clone());
                 }
                 alias = alias.redirect(crate::node::Redirection::Local(main_node_id.into()));
                 self.tree.add_child_to_root(alias.build());
@@ -354,19 +356,16 @@ impl<S: CommandSource> CommandDispatcher<S> {
             // 我们来看一下原始节点持有的数据。
             let reference = &main_node.owned;
 
+            // 权限要求必须无条件复制：跟随重定向时目标节点自身的
+            // requirement 不会被重新求值（can_use 只作用于被迭代
+            // 的子节点），漏拷会让别名成为无门入口——例如主指令根
+            // 节点无自带执行器时，任何玩家都能借别名执行受门控指令
+            // （/banip 封 IP、/tp 传送）。
+            alias = alias.overwrite_requirements(reference.requirements.clone());
+
             // 如果引用包含执行器，则将其克隆过来。
-            // 如果不是，则我们无需检查权限，因为它
-            // 将由目标节点完成。
             if let Some(executor) = &reference.command {
                 alias = alias.executes_arc(executor.clone());
-
-                // 我们还必须添加相应的需求。
-                // 这是因为如果我们只是简单地设置一个执行器，那么
-                // 任何玩家都无需任何条件（包括权限）即可执行它！
-                //
-                // 例如，（假设）为 `/stop` 添加了别名 `/s`，
-                // 任何玩家都可用 `/s` 关停服务器！
-                alias = alias.overwrite_requirements(reference.requirements.clone());
             }
 
             // 然后重定向到该节点。
@@ -1322,6 +1321,30 @@ mod tests {
         }
     }
 
+    /// `has_permission` 结果可控的测试来源。
+    #[derive(Clone)]
+    struct FlagSource {
+        allow: bool,
+    }
+
+    impl crate::source::CommandSource for FlagSource {
+        fn send_message(&self, _message: papokin_util::text::TextComponent) {}
+
+        fn has_permission(&self, _permission: &str) -> bool {
+            self.allow
+        }
+    }
+
+    /// 记录执行次数的测试执行器。
+    struct CountExecutor(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl CommandExecutor<FlagSource> for CountExecutor {
+        fn execute(&self, _context: &CommandContext<'_, FlagSource>) -> CommandExecutorResult {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(1)
+        }
+    }
+
     #[test]
     fn suggestions_exclude_nodes_failing_requirements() {
         let mut dispatcher = CommandDispatcher::new();
@@ -1351,6 +1374,79 @@ mod tests {
                 .into_iter()
                 .any(|s| s.suggestion == "secretcmd")
         );
+    }
+
+    /// 字符串形式的权限要求经 `source.has_permission` 求值：
+    /// 被否决的来源在解析阶段即被拦截，执行器根本不会运行
+    /// （与 brigadier 的 canUse 语义一致，防止绕过客户端隐藏
+    /// 直接发包执行管理指令）。
+    #[test]
+    fn execution_is_blocked_when_permission_requirement_fails() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut dispatcher = CommandDispatcher::<FlagSource>::new();
+        dispatcher.register(
+            CommandArgumentBuilder::new("gatedcmd", "受权限门控")
+                .requires("some.permission")
+                .executes(CountExecutor(counter.clone())),
+        );
+        dispatcher.register(
+            CommandArgumentBuilder::new("opencmd", "无门控")
+                .executes(CountExecutor(counter.clone())),
+        );
+
+        let denied = FlagSource { allow: false };
+        assert!(
+            dispatcher.execute_input("gatedcmd", &denied).is_err(),
+            "无权限来源不得解析通过受门控的指令"
+        );
+        assert!(
+            dispatcher.execute_input("opencmd", &denied).is_ok(),
+            "无门控指令不受权限谓词影响"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "受门控指令的执行器不得为无权限来源运行"
+        );
+    }
+
+    /// 回归：主指令根节点没有自带执行器时，别名曾漏拷权限要求
+    /// （旧实现仅在根节点有执行器时才复制），而跟随重定向时目标
+    /// 节点的 requirement 不会被重新求值——任何玩家都能借别名
+    /// 执行受门控指令（如 /banip、/tp 曾因此暴露）。
+    #[test]
+    fn alias_of_gated_command_keeps_permission_gate() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut dispatcher = CommandDispatcher::<FlagSource>::new();
+        let main = CommandArgumentBuilder::new("main-cmd", "根节点无自带执行器")
+            .requires("some.permission")
+            .then(
+                crate::argument_builder::literal::<FlagSource>("sub")
+                    .executes(CountExecutor(counter.clone())),
+            );
+        dispatcher.register_with_aliases(main, &["mainalias"]);
+
+        let denied = FlagSource { allow: false };
+        assert!(
+            dispatcher.execute_input("mainalias sub", &denied).is_err(),
+            "别名不得绕过主指令的权限门"
+        );
+        assert!(
+            dispatcher.execute_input("main-cmd sub", &denied).is_err(),
+            "主指令本身的权限门（对照）"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "执行器不得为无权限来源运行"
+        );
+
+        let allowed = FlagSource { allow: true };
+        assert!(
+            dispatcher.execute_input("mainalias sub", &allowed).is_ok(),
+            "有权限来源经别名正常执行（不得过度封禁）"
+        );
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     #[test]
