@@ -156,6 +156,7 @@ pub type OpManagerResource = WasmResource<Arc<Server>>;
 pub type BanManagerResource = WasmResource<Arc<Server>>;
 pub type WhitelistManagerResource = WasmResource<Arc<Server>>;
 pub type DatapackManagerResource = WasmResource<Arc<Server>>;
+pub type PluginManagerResource = WasmResource<Arc<Server>>;
 pub type DamageTypeManagerResource =
     WasmResource<Arc<crate::server::damage_type::DamageTypeManager>>;
 pub type TagManagerResource = WasmResource<Arc<crate::server::tag::TagManager>>;
@@ -583,6 +584,16 @@ impl PluginHostState {
         let resource = self
             .resource_table
             .push(DatapackManagerResource { provider })?;
+        Ok(wasmtime::component::Resource::new_own(resource.rep()))
+    }
+
+    pub fn add_plugin_manager<T>(
+        &mut self,
+        provider: Arc<Server>,
+    ) -> wasmtime::Result<wasmtime::component::Resource<T>> {
+        let resource = self
+            .resource_table
+            .push(PluginManagerResource { provider })?;
         Ok(wasmtime::component::Resource::new_own(resource.rep()))
     }
 

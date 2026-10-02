@@ -41,6 +41,7 @@ use crate::plugin::{
                 damage_types::DamageTypeManager as WitDamageTypeManager,
                 datapack::DatapackManager as WitDatapackManager,
                 player::{BanIpOptions, BanPlayerOptions, Player},
+                plugin_manager::PluginManager as WitPluginManager,
                 registry::RegistryManager as WitRegistryManager,
                 server::{
                     BanManager as WitBanManager, BannedIpEntry, BannedPlayerEntry, Difficulty,
@@ -631,6 +632,17 @@ impl papokin::plugin::server::HostServer for PluginHostState {
             .as_ref()
             .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
         self.add_datapack_manager(server.clone())
+    }
+
+    async fn get_plugin_manager(
+        &mut self,
+        _rep: Resource<Server>,
+    ) -> wasmtime::Result<Resource<WitPluginManager>> {
+        let server = self
+            .server
+            .as_ref()
+            .ok_or_else(|| wasmtime::Error::msg("服务器不可用"))?;
+        self.add_plugin_manager(server.clone())
     }
 
     async fn get_damage_type_manager(

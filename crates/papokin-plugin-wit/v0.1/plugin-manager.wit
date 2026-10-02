@@ -1,0 +1,67 @@
+package papokin:plugin@0.1.0;
+
+/// 插件生命周期的查看与管理（相当于 Paper 的 `PluginManager` 插件面）。
+///
+/// 向插件暴露完整的动态管理能力：列出/查询插件、动态加载、卸载、
+/// 启用与禁用。第三方插件可据此实现自有的插件管理器，替代内置的
+/// `plugman` 指令。
+interface plugin-manager {
+    /// 插件的生命周期状态（对应宿主的 `PluginState`）。
+    enum plugin-state {
+        /// 加载进行中（`on-load`/`on-enable` 尚未完成）。
+        loading,
+        /// 已加载且处于启用状态。
+        loaded,
+        /// 已加载但处于非活动状态（被禁用或启用失败）。
+        disabled,
+        /// 加载失败（实例已被移除，仅保留失败记录）。
+        failed,
+    }
+
+    /// 一个插件的描述信息与当前状态。
+    record plugin-info {
+        /// 插件声明的名称。
+        name: string,
+        /// 版本字符串（加载失败的插件为空串）。
+        version: string,
+        /// 描述文本（加载失败的插件为空串）。
+        description: string,
+        /// 作者列表（加载失败的插件为空表）。
+        authors: list<string>,
+        /// 当前是否处于启用状态。
+        is-active: bool,
+        /// 生命周期状态。
+        state: plugin-state,
+        /// `disabled`/`failed` 状态附带的原因。
+        state-detail: option<string>,
+    }
+
+    /// 服务器级插件管理器。
+    resource plugin-manager {
+        /// 列出管理器已知的全部插件：已加载（含已禁用）的实例，
+        /// 以及仅保留失败记录的加载失败项。
+        list-plugins: func() -> list<plugin-info>;
+
+        /// 按名称查询单个插件；从未尝试加载过时返回 `none`。
+        get-plugin: func(name: string) -> option<plugin-info>;
+
+        /// 从插件目录按裸文件名动态加载插件并等待加载完成。
+        /// 只接受插件目录内的裸文件名（拒绝绝对路径与 `..` 等
+        /// 目录穿越）；加载或启用失败以错误返回原因。
+        load-plugin: func(file-name: string) -> result<_, string>;
+
+        /// 按名称卸载插件：活动插件先优雅禁用（`on-disable`），
+        /// 随后注销其全部注册项并调用 `on-unload`。
+        /// 插件不能卸载自身（会自锁），此类调用返回错误。
+        unload-plugin: func(name: string) -> result<_, string>;
+
+        /// 启用此前被禁用（或启用失败）的插件：重新调用其
+        /// `on-enable`，由其按常规契约重新注册处理器与命令。
+        enable-plugin: func(name: string) -> result<_, string>;
+
+        /// 禁用但不卸载插件：注销其事件处理器与命令，并调用
+        /// `on-disable`；插件保持已加载状态可再次启用。
+        /// 插件不能禁用自身（会自锁），此类调用返回错误。
+        disable-plugin: func(name: string) -> result<_, string>;
+    }
+}

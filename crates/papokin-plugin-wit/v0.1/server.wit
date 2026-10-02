@@ -12,6 +12,7 @@ interface server {
     use damage-types.{damage-type-manager};
     use tag.{tag-manager};
     use registry.{registry-manager};
+    use plugin-manager.{plugin-manager};
 
     /// 表示 ops 配置中的一条管理员条目。
     record op-entry {
@@ -321,6 +322,10 @@ interface server {
 
         /// 返回用于查询和修改服务器白名单的全局白名单管理器。
         get-whitelist-manager: func() -> whitelist-manager;
+
+        /// 返回插件管理器：列出/查询插件，并动态加载、卸载、
+        /// 启用与禁用插件（第三方可据此替代内置 plugman）。
+        get-plugin-manager: func() -> plugin-manager;
 
         /// 按 ID 返回进度的详细信息（如 "minecraft:story/mine_stone"
         /// 或 "story/mine_stone"）。

@@ -98,6 +98,8 @@ world plugin {
     import dragon;
     /// 提供客户端 cookie 存储（相当于 Paper ClientCookie API）。
     import cookie;
+    /// 提供插件生命周期的查看与管理（动态加载/卸载/启用/禁用）。
+    import plugin-manager;
 
     // --- 插件提供的导出 ---
 

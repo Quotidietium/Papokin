@@ -69,6 +69,8 @@ pub mod permission;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod player;
 #[allow(clippy::unused_async_trait_impl)]
+pub mod plugin_manager;
+#[allow(clippy::unused_async_trait_impl)]
 pub mod recipe;
 #[allow(clippy::unused_async_trait_impl)]
 pub mod registry;

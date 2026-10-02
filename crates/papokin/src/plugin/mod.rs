@@ -33,7 +33,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// 每当公开插件 API 或任何事件布局发生使旧的二进制插件不兼容的变化时，
 /// 递增此版本号。
-pub const PLUGIN_API_VERSION: u32 = 6;
+pub const PLUGIN_API_VERSION: u32 = 7;
 
 pub(crate) const PLUGIN_DIR: &str = "./plugins";
 
