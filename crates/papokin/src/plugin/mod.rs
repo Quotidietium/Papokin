@@ -1466,7 +1466,7 @@ impl PluginManager {
 
         self.unregister_handlers(name);
         plugin.context.unregister_commands();
-        self.unregister_all_service_providers(name);
+        self.unregister_all_service_providers(name).await;
         self.unregister_all_incoming_channels(name);
         self.restore_plugin_chunk_generators(name);
 
@@ -1530,7 +1530,7 @@ impl PluginManager {
 
         self.unregister_handlers(name);
         context.unregister_commands();
-        self.unregister_all_service_providers(name);
+        self.unregister_all_service_providers(name).await;
         self.unregister_all_incoming_channels(name);
         self.restore_plugin_chunk_generators(name);
         instance.on_disable(context).await.ok();
@@ -1795,11 +1795,19 @@ impl PluginManager {
     }
 
     /// 移除 `plugin` 进行的所有服务注册。
-    pub fn unregister_all_service_providers(&self, plugin: &str) {
+    ///
+    /// 同时清扫类型化 `services` 表：该表持有插件服务对象的
+    /// 强引用，卸载/禁用时不清除会让对象永久滞留，且
+    /// `get_service` 仍会把已卸载插件的服务分发给其他插件。
+    pub async fn unregister_all_service_providers(&self, plugin: &str) {
         self.service_registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|r| r.plugin != plugin);
+        self.services
+            .write()
+            .await
+            .retain(|_, (owner, _)| owner != plugin);
     }
     ///返回 `service` 的所有活动提供者，按优先级降序排序
     /// 优先级排序（其次按注册顺序）。
