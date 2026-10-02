@@ -761,6 +761,11 @@ impl Server {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove_player(&player.gameprofile.id);
+        // 权限附件随断线清理：附件是纯运行期状态（不落盘），
+        // 不清理会让 attachments 表随历史玩家数无界增长，
+        // 且重连时上一会话的显式权限会残留生效。
+        self.permission_manager
+            .remove_attachment(&player.gameprofile.id);
         // TODO: 若想让在线人数下降就做成配置
         self.listing
             .lock()
