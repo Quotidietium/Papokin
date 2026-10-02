@@ -1477,6 +1477,16 @@ impl PluginManager {
         self.plugin_states.read().await.get(plugin_name).cloned()
     }
 
+    /// 全部状态记录的快照（含加载进行中与加载失败项）。
+    pub(crate) async fn plugin_states_snapshot(&self) -> Vec<(String, PluginState)> {
+        self.plugin_states
+            .read()
+            .await
+            .iter()
+            .map(|(name, state)| (name.clone(), state.clone()))
+            .collect()
+    }
+
     /// 还原 `start_loading_plugin` 占位 Loading 之前的状态记录
     /// （该函数在读取元数据后先占位 Loading 防并发重复加载；
     /// 占位前没有记录时删除占位即可）。

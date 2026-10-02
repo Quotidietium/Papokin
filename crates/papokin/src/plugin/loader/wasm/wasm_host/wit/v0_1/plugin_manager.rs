@@ -57,20 +57,23 @@ impl HostPluginManagerWithStore<PluginHostState> for HasSelf<PluginHostState> {
                     infos.push(build_info(manager, metadata, &active).await);
                 }
 
-                // 加载失败的插件已不在实例表中，仅保留失败记录；
-                // 以元数据为空的条目并入列表，供管理器展示失败原因。
-                for (name, reason) in manager.get_failed_plugins().await {
-                    if !infos.iter().any(|info| info.name == name) {
-                        infos.push(WitPluginInfo {
-                            name,
-                            version: String::new(),
-                            description: String::new(),
-                            authors: Vec::new(),
-                            is_active: false,
-                            state: WitPluginState::Failed,
-                            state_detail: Some(reason),
-                        });
+                // 不在实例表中的条目（加载进行中/加载失败）仅以状态
+                // 记录存在：以元数据为空的条目并入列表，供管理器
+                // 展示加载进度或失败原因。
+                for (name, state) in manager.plugin_states_snapshot().await {
+                    if infos.iter().any(|info| info.name == name) {
+                        continue;
                     }
+                    let (wit_state, detail) = map_state(state);
+                    infos.push(WitPluginInfo {
+                        name,
+                        version: String::new(),
+                        description: String::new(),
+                        authors: Vec::new(),
+                        is_active: false,
+                        state: wit_state,
+                        state_detail: detail,
+                    });
                 }
                 infos
             })
@@ -113,15 +116,10 @@ impl HostPluginManagerWithStore<PluginHostState> for HasSelf<PluginHostState> {
                     return Some(build_info(manager, metadata, &active).await);
                 }
 
-                // 不在实例表中：仅当状态表仍留有记录（加载失败）时
+                // 不在实例表中：仅当状态表仍留有记录（加载中/失败）时
                 // 返回元数据为空的条目，否则插件从未尝试加载。
                 manager.get_plugin_state(&name).await.map(|state| {
-                    let (wit_state, detail) = match state {
-                        PluginState::Loading => (WitPluginState::Loading, None),
-                        PluginState::Disabled(reason) => (WitPluginState::Disabled, Some(reason)),
-                        PluginState::Failed(reason) => (WitPluginState::Failed, Some(reason)),
-                        PluginState::Loaded => (WitPluginState::Loaded, None),
-                    };
+                    let (wit_state, detail) = map_state(state);
                     WitPluginInfo {
                         is_active: active.contains(&name),
                         name,
@@ -289,12 +287,10 @@ async fn build_info(
     metadata: PluginMetadata,
     active: &HashSet<String>,
 ) -> WitPluginInfo {
-    let (state, detail) = match manager.get_plugin_state(&metadata.name).await {
-        Some(PluginState::Loading) => (WitPluginState::Loading, None),
-        Some(PluginState::Disabled(reason)) => (WitPluginState::Disabled, Some(reason)),
-        Some(PluginState::Failed(reason)) => (WitPluginState::Failed, Some(reason)),
-        Some(PluginState::Loaded) | None => (WitPluginState::Loaded, None),
-    };
+    let (state, detail) = manager
+        .get_plugin_state(&metadata.name)
+        .await
+        .map_or((WitPluginState::Loaded, None), map_state);
     WitPluginInfo {
         is_active: active.contains(&metadata.name),
         name: metadata.name,
@@ -303,5 +299,15 @@ async fn build_info(
         authors: metadata.authors,
         state,
         state_detail: detail,
+    }
+}
+
+/// 宿主插件状态到 WIT 状态与原因文本的映射。
+fn map_state(state: PluginState) -> (WitPluginState, Option<String>) {
+    match state {
+        PluginState::Loading => (WitPluginState::Loading, None),
+        PluginState::Disabled(reason) => (WitPluginState::Disabled, Some(reason)),
+        PluginState::Failed(reason) => (WitPluginState::Failed, Some(reason)),
+        PluginState::Loaded => (WitPluginState::Loaded, None),
     }
 }
