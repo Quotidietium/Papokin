@@ -819,9 +819,9 @@ impl LivingEntity {
                 .map_or_else(
                     || {
                         tracing::warn!(
-                            "实体类型 {:?} 没有属性 {:?} 的基础值；回退到默认值 {}",
-                            self.entity.entity_type,
-                            attribute.id,
+                            "实体类型 {} 没有属性 {} 的基础值；回退到默认值 {}",
+                            self.entity.entity_type.resource_name,
+                            attribute.name,
                             attribute.default_value,
                         );
                         attribute.default_value
