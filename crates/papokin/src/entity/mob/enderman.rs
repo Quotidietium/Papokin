@@ -276,7 +276,7 @@ impl EndermanEntity {
                     operation: ModifierOperation::Add,
                 };
 
-                living.update_attribute(&Attributes::MOVEMENT_SPEED, |inst| {
+                living.update_declared_attribute(&Attributes::MOVEMENT_SPEED, |inst| {
                     inst.add_or_replace_modifier(modifier);
                 });
 
@@ -291,7 +291,7 @@ impl EndermanEntity {
             if self.speed_boosted.swap(false, Ordering::Relaxed) {
                 let living = &self.mob_entity.living_entity;
 
-                living.update_attribute(&Attributes::MOVEMENT_SPEED, |inst| {
+                living.update_existing_attribute(&Attributes::MOVEMENT_SPEED, |inst| {
                     inst.remove_modifier(ENDERMAN_SPEED_BOOST_ID);
                 });
 

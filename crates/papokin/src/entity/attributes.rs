@@ -216,6 +216,20 @@ impl AttributeRegistry {
     }
 }
 
+/// 返回实体类型注册表为该属性声明的基础值；未声明时返回 `None`。
+///
+/// 装备与药水效果等隐式属性修饰符只应作用于已声明的属性——
+/// 原版中未声明该属性的实体天然不受其影响（例如僵尸没有
+/// `attack_speed`，武器的攻速修饰符对它无效）。
+#[must_use]
+pub fn declared_base(entity_type: &EntityType, attribute: &Attributes) -> Option<f64> {
+    entity_type
+        .attributes
+        .iter()
+        .find(|a| a.0.id == attribute.id)
+        .map(|a| a.1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,6 +245,44 @@ mod tests {
         assert!(speed_attr.is_some());
         let (_, base_speed) = speed_attr.unwrap();
         assert!((base_speed - 0.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn declared_base_reflects_entity_type_table() {
+        // 僵尸未声明 attack_speed（原版即如此）：武器攻速修饰符不适用
+        assert_eq!(
+            declared_base(&EntityType::ZOMBIE, &Attributes::ATTACK_SPEED),
+            None
+        );
+        // 僵尸声明 attack_damage，基础值 3（原版数据）
+        assert_eq!(
+            declared_base(&EntityType::ZOMBIE, &Attributes::ATTACK_DAMAGE),
+            Some(3.0)
+        );
+        // 玩家声明 attack_speed，基础值 4
+        assert_eq!(
+            declared_base(&EntityType::PLAYER, &Attributes::ATTACK_SPEED),
+            Some(4.0)
+        );
+    }
+
+    #[test]
+    fn zombie_combat_attributes_match_vanilla() {
+        // 钉死原版 Zombie#createAttributes 的五项战斗属性；
+        // 缺失/多出都意味着数据层跑偏，而非在读取侧打补丁
+        let zombie = &EntityType::ZOMBIE;
+        assert_eq!(declared_base(zombie, &Attributes::ARMOR), Some(2.0));
+        assert_eq!(declared_base(zombie, &Attributes::ATTACK_DAMAGE), Some(3.0));
+        assert_eq!(declared_base(zombie, &Attributes::FOLLOW_RANGE), Some(35.0));
+        assert_eq!(
+            declared_base(zombie, &Attributes::SPAWN_REINFORCEMENTS),
+            Some(0.0)
+        );
+        let speed = declared_base(zombie, &Attributes::MOVEMENT_SPEED).unwrap();
+        assert!(
+            (speed - 0.23).abs() < 1e-6,
+            "僵尸移速应为 0.23，实为 {speed}"
+        );
     }
 
     #[test]

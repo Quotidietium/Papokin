@@ -451,7 +451,7 @@ impl HostLivingEntity for PluginHostState {
         let entity = living_entity_from_resource(self, &this)?;
         let attribute = from_wit_attribute(attr);
         if let Some(living) = entity.get_living_entity() {
-            living.update_attribute(attribute, |inst| inst.remove_modifier(&id));
+            living.update_existing_attribute(attribute, |inst| inst.remove_modifier(&id));
             crate::entity::attributes::send_attribute_updates_for_living(
                 living,
                 vec![attribute.clone()],

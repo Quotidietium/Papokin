@@ -480,6 +480,13 @@ impl LivingEntity {
                 (Attributes::ATTACK_SPEED, speed_modifiers),
                 (Attributes::ATTACK_DAMAGE, damage_modifiers),
             ] {
+                // 未声明该属性的实体（如僵尸没有 attack_speed）不受
+                // 武器修饰符影响，也不应把捏造出的属性同步给客户端
+                if crate::entity::attributes::declared_base(self.entity.entity_type, &attribute)
+                    .is_none()
+                {
+                    continue;
+                }
                 let instance = attributes
                     .entry(attribute.id)
                     .or_insert_with(|| AttributeInstance::new(attribute.default_value));
@@ -553,8 +560,9 @@ impl LivingEntity {
             map.remove(slot).unwrap_or_default()
         };
         for (attr_id, modifier_id) in previous {
-            if let Some(attr) = attributes_by_id(attr_id) {
-                self.update_attribute(attr, |inst| inst.remove_modifier(&modifier_id));
+            if let Some(attr) = attributes_by_id(attr_id)
+                && self.update_existing_attribute(attr, |inst| inst.remove_modifier(&modifier_id))
+            {
                 push_unique_attribute(touched, attr);
             }
         }
@@ -576,15 +584,18 @@ impl LivingEntity {
                 Operation::AddMultipliedBase => ModifierOperation::MultiplyBase,
                 Operation::AddMultipliedTotal => ModifierOperation::MultiplyTotal,
             };
-            self.update_attribute(item_mod.r#type, |inst| {
+            // 实体类型未声明的属性（如僵尸的 attack_speed）不受
+            // 装备修饰符影响；只有真正应用的才记录，供后续移除
+            if self.update_declared_attribute(item_mod.r#type, |inst| {
                 inst.add_or_replace_modifier(Modifier {
                     id: item_mod.id.to_string(),
                     amount: item_mod.amount,
                     operation,
                 });
-            });
-            applied.push((item_mod.r#type.id, item_mod.id.to_string()));
-            push_unique_attribute(touched, item_mod.r#type);
+            }) {
+                applied.push((item_mod.r#type.id, item_mod.id.to_string()));
+                push_unique_attribute(touched, item_mod.r#type);
+            }
         }
 
         if !applied.is_empty() {
@@ -824,6 +835,51 @@ impl LivingEntity {
         inst.dirty.store(true, Ordering::Relaxed);
     }
 
+    /// 仅在实体类型声明了该属性时更新其实例；未声明时静默跳过并
+    /// 返回 `false`。用于装备/药水效果等隐式修饰符路径：原版中
+    /// 未声明该属性的实体不受其影响（如僵尸没有 `attack_speed`，
+    /// 武器的攻速修饰符对它无效），不应为此新建实例或告警。
+    pub fn update_declared_attribute<F: FnOnce(&mut AttributeInstance)>(
+        &self,
+        attribute: &Attributes,
+        f: F,
+    ) -> bool {
+        let mut map = self
+            .attributes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(base) =
+            crate::entity::attributes::declared_base(self.entity.entity_type, attribute)
+        else {
+            return false;
+        };
+        let inst = map
+            .entry(attribute.id)
+            .or_insert_with(|| AttributeInstance::new(base));
+        f(inst);
+        inst.dirty.store(true, Ordering::Relaxed);
+        true
+    }
+
+    /// 仅在本地已存在该属性实例时更新；无实例时返回 `false`。
+    /// 用于修饰符移除路径：不为移除一个修饰符而新建实例。
+    pub fn update_existing_attribute<F: FnOnce(&mut AttributeInstance)>(
+        &self,
+        attribute: &Attributes,
+        f: F,
+    ) -> bool {
+        let mut map = self
+            .attributes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(inst) = map.get_mut(&attribute.id) else {
+            return false;
+        };
+        f(inst);
+        inst.dirty.store(true, Ordering::Relaxed);
+        true
+    }
+
     ///使用本地实例返回 `attribute` 的计算值，不可用时回退到注册表
     /// 回退到 `attribute.default_value`（如果不存在本地实例）。
     pub fn get_attribute_value(&self, attribute: &Attributes) -> f64 {
@@ -957,7 +1013,10 @@ impl LivingEntity {
         // 修改属性（如速度）的效果也应更新
         // 实体的属性实例（服务器端），然后通知客户端。
         if !effect.effect_type.attribute_modifiers.is_empty() {
-            // 将每个属性修饰符应用到本地 AttributeInstance 中
+            // 将每个属性修饰符应用到本地 AttributeInstance 中；
+            // 实体类型未声明的属性（如僵尸的 attack_speed）不受
+            // 效果修饰符影响，也不计入数据包更新
+            let mut touched_attrs: Vec<papokin_data::attributes::Attributes> = Vec::new();
             for m in effect.effect_type.attribute_modifiers {
                 let id = m.id.to_string();
                 let op = match m.operation {
@@ -972,16 +1031,10 @@ impl LivingEntity {
                     operation: op,
                 };
 
-                self.update_attribute(m.attribute, |inst| {
+                if self.update_declared_attribute(m.attribute, |inst| {
                     inst.add_or_replace_modifier(mod_inst.clone());
-                });
-            }
-
-            // 根据每个受影响属性的激活效果重新计算数据包修饰符
-            let mut touched_attrs: Vec<papokin_data::attributes::Attributes> = Vec::new();
-            for m in effect.effect_type.attribute_modifiers {
-                if !touched_attrs.iter().any(|a| a.id == m.attribute.id) {
-                    touched_attrs.push(m.attribute.clone());
+                }) {
+                    push_unique_attribute(&mut touched_attrs, m.attribute);
                 }
             }
 
@@ -1096,17 +1149,12 @@ impl LivingEntity {
             for m in effect_type.attribute_modifiers {
                 let id = m.id.to_string();
 
-                // 清理本地服务器状态
-                self.update_attribute(m.attribute, |inst| {
+                // 清理本地服务器状态；实例不存在（如该属性从未
+                // 应用于此实体类型）时无需移除，也不计入数据包更新
+                if self.update_existing_attribute(m.attribute, |inst| {
                     inst.remove_modifier(&id);
-                });
-
-                // 为数据包更新跟踪不重复的属性
-                if !touched_attrs
-                    .iter()
-                    .any(|a: &Attributes| a.id == m.attribute.id)
-                {
-                    touched_attrs.push(m.attribute.clone());
+                }) {
+                    push_unique_attribute(&mut touched_attrs, m.attribute);
                 }
             }
 
@@ -3855,7 +3903,7 @@ pub const SPEED_MODIFIER_SPRINTING_AMOUNT: f64 = 0.300_000_011_920_928_96;
 impl LivingEntity {
     pub fn set_sprinting(&self, is_sprinting: bool) {
         self.entity.set_sprinting(is_sprinting);
-        self.update_attribute(&Attributes::MOVEMENT_SPEED, |speed| {
+        if self.update_declared_attribute(&Attributes::MOVEMENT_SPEED, |speed| {
             speed.remove_modifier(SPEED_MODIFIER_SPRINTING_ID);
             if is_sprinting {
                 speed.add_or_replace_modifier(Modifier {
@@ -3864,11 +3912,12 @@ impl LivingEntity {
                     operation: ModifierOperation::MultiplyTotal,
                 });
             }
-        });
-        crate::entity::attributes::send_attribute_updates_for_living(
-            self,
-            vec![Attributes::MOVEMENT_SPEED],
-        );
+        }) {
+            crate::entity::attributes::send_attribute_updates_for_living(
+                self,
+                vec![Attributes::MOVEMENT_SPEED],
+            );
+        }
     }
 
     #[must_use]
