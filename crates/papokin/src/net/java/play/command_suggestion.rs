@@ -23,9 +23,12 @@ impl JavaClient {
             return;
         };
 
-        let Some((last_word_start, _)) = cmd.char_indices().rfind(|(_, c)| c.is_whitespace())
-        else {
-            return;
+        // 补全范围：最后一个空格之后为待补全的词。缓冲区无空格时
+        // 正在补全的是首词（命令名本身），范围为去掉斜杠后的整个
+        // 缓冲区——不能提前返回，否则 "/plu"+TAB 得不到任何建议
+        let (start, length) = match cmd.char_indices().rfind(|(_, c)| c.is_whitespace()) {
+            Some((last_word_start, _)) => (last_word_start + 2, cmd.len() - last_word_start - 1),
+            None => (1, cmd.len()),
         };
 
         let suggestions = server
@@ -65,8 +68,8 @@ impl JavaClient {
 
         let response = CCommandSuggestions::new(
             packet.id,
-            ((last_word_start + 2) as i32).into(),
-            ((cmd.len() - last_word_start - 1) as i32).into(),
+            (start as i32).into(),
+            (length as i32).into(),
             send_event
                 .suggestions
                 .into_iter()
