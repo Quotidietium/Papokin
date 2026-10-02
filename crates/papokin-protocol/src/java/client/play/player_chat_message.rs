@@ -1,12 +1,12 @@
 use std::io::Write;
 
-use papokin_data::packet::clientbound::play::PLAYER_CHAT;
-use papokin_macros::java_packet;
+use papokin_data::packet::clientbound::play::{CHAT, PLAYER_CHAT};
 use papokin_util::{text::TextComponent, version::JavaMinecraftVersion};
 
 use crate::{
     ClientPacket, WritingError,
     codec::{bit_set::BitSet, var_int::VarInt},
+    packet::MultiVersionJavaPacket,
     ser::NetworkWriteExt,
 };
 
@@ -14,7 +14,6 @@ use crate::{
 ///
 /// 此数据包是现代安全聊天系统的骨干。它包含
 /// 跟踪索引、数字签名以及用于报告的上下文。
-#[java_packet(PLAYER_CHAT)]
 pub struct CPlayerChatMessage {
     /// 发送给此特定客户端的消息的递增索引。
     /// 登录时从 0 开始；若序列被打断，客户端会断开连接。
@@ -48,6 +47,18 @@ pub struct CPlayerChatMessage {
     pub sender_name: TextComponent,
     /// 目标的显示名称（用于私信）。
     pub target_name: Option<TextComponent>,
+}
+
+/// 26.2 将 `chat` 更名为 `player_chat`，生成表中的两个常量
+/// 各只覆盖一个时代，须按版本选择，否则 1.x 版本下 id 为 -1。
+impl MultiVersionJavaPacket for CPlayerChatMessage {
+    fn to_id(version: JavaMinecraftVersion) -> i32 {
+        if version >= JavaMinecraftVersion::V_26_2 {
+            PLAYER_CHAT.to_id(version)
+        } else {
+            CHAT.to_id(version)
+        }
+    }
 }
 
 impl CPlayerChatMessage {
@@ -136,4 +147,23 @@ pub enum FilterType {
     FullyFiltered,
     /// 仅过滤消息中的部分字符
     PartiallyFiltered(BitSet),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 数值钉死为 assets/packet/<版本>_packets.json 的权威 id：
+    // 26.2 更名后若误用单一 PLAYER_CHAT 常量，1.x 下 id 为 -1，
+    // 签名聊天包被静默丢弃
+    #[test]
+    fn id_matches_authoritative_table_per_era() {
+        assert_eq!(
+            CPlayerChatMessage::to_id(JavaMinecraftVersion::V_1_21_11),
+            63
+        );
+        assert_eq!(CPlayerChatMessage::to_id(JavaMinecraftVersion::V_26_1), 65);
+        assert_eq!(CPlayerChatMessage::to_id(JavaMinecraftVersion::V_26_2), 65);
+        assert_eq!(CPlayerChatMessage::to_id(JavaMinecraftVersion::V_26_3), 66);
+    }
 }
