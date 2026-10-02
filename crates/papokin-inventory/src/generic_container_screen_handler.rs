@@ -206,7 +206,10 @@ impl ScreenHandler for GenericContainerScreenHandler {
 
     fn on_closed(&mut self, player: &dyn InventoryPlayer) {
         self.default_on_closed(player);
-        if !self.is_spectator && !player.is_spectator() {
+        // 只按开屏时的旁观快照判定：`on_open` 以同一快照门控。
+        // 若再看当前模式，开屏后切换旁观的玩家会跳过 `on_close`，
+        // 容器的观察者计数永远减不下来（盖子卡住、比较器输出残留）。
+        if !self.is_spectator {
             self.inventory.on_close();
         }
     }
