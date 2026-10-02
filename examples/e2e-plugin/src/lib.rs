@@ -1085,4 +1085,58 @@ fn exercise_plugin_manager(server: &papokin_plugin_api::Server) {
         }
         other => tracing::info!("E2E plugman-reload-state-bad {other:?}"),
     }
+
+    // Idempotency and boundary semantics: enabling an active plugin and
+    // re-disabling a disabled one are no-ops; a second unload and enabling
+    // an unloaded plugin are errors.
+    if manager.enable_plugin("e2e-target").is_ok() {
+        tracing::info!("E2E plugman-enable-active-noop ok");
+    } else {
+        tracing::info!("E2E plugman-enable-active-unexpected-err");
+    }
+    if manager.disable_plugin("e2e-target").is_ok()
+        && manager.disable_plugin("e2e-target").is_ok()
+    {
+        tracing::info!("E2E plugman-redisable-noop ok");
+    } else {
+        tracing::info!("E2E plugman-redisable-unexpected-err");
+    }
+    if manager.enable_plugin("e2e-target").is_err() {
+        tracing::info!("E2E plugman-edge-reenable-failed");
+        return;
+    }
+    if manager.unload_plugin("e2e-target").is_err() {
+        tracing::info!("E2E plugman-edge-unload-failed");
+        return;
+    }
+    match manager.unload_plugin("e2e-target") {
+        Err(_) => tracing::info!("E2E plugman-double-unload-rejected ok"),
+        Ok(()) => tracing::info!("E2E plugman-double-unload-accepted"),
+    }
+    match manager.enable_plugin("e2e-target") {
+        Err(_) => tracing::info!("E2E plugman-enable-unloaded-rejected ok"),
+        Ok(()) => tracing::info!("E2E plugman-enable-unloaded-accepted"),
+    }
+
+    // Mini soak: repeated unload/load of the same plugin. Each cycle must
+    // fully recycle the store driver, epoch ticker and JIT state — the
+    // long-running-stability regression check. Ends with the target loaded.
+    if manager.load_plugin("e2e_target_plugin.wasm").is_err() {
+        tracing::info!("E2E plugman-soak-prime-failed");
+        return;
+    }
+    let mut cycles = 0_u32;
+    for _ in 0..5 {
+        let unloaded = manager.unload_plugin("e2e-target").is_ok();
+        let reloaded = unloaded && manager.load_plugin("e2e_target_plugin.wasm").is_ok();
+        if !reloaded {
+            break;
+        }
+        cycles += 1;
+    }
+    if cycles == 5 {
+        tracing::info!("E2E plugman-soak ok cycles={cycles}");
+    } else {
+        tracing::info!("E2E plugman-soak-incomplete cycles={cycles}");
+    }
 }
