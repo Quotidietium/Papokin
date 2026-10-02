@@ -128,6 +128,27 @@ impl<S: CommandSource> CommandDispatcher<S> {
     /// 使插件命令及其别名在注册前保持不可用。
     pub fn deactivate_plugin_command_and_aliases(&mut self, name: &str) {
         let primary_name = self.primary_command_name(name);
+
+        // 节点保留在树中以便重新注册时合并；但节点上的执行器/建议器
+        // 持有注册方（插件）的强引用，必须随停用清除，否则已卸载
+        // 插件的对象会被树永久钉住。停用期间这些回调本就不可达。
+        if let Some(primary_id) = self.tree.get(&primary_name) {
+            let primary_node: NodeId = primary_id.into();
+            let mut subtree_roots = vec![primary_node];
+            for child in self.tree.get_root_children() {
+                let node_id: NodeId = child.into();
+                let node = &self.tree[node_id];
+                if let Some(redirect) = node.redirect()
+                    && self.tree.resolve(redirect) == Some(primary_node)
+                {
+                    subtree_roots.push(node_id);
+                }
+            }
+            for node_id in subtree_roots {
+                self.tree.clear_callbacks_in_subtree(node_id);
+            }
+        }
+
         for alias in self.tree_alias_names(&primary_name) {
             self.deactivate_plugin_command(alias);
         }
@@ -1358,4 +1379,57 @@ mod tests {
         assert_eq!(dispatcher.execute_input("leakcheck sub", &source), Ok(0));
     }
 
+    #[test]
+    fn deactivated_plugin_command_drops_callbacks_until_re_registered() {
+        let mut dispatcher = CommandDispatcher::new();
+        let executor: fn(&CommandContext) -> CommandExecutorResult = |_| Ok(1);
+        let command = || {
+            CommandArgumentBuilder::new("plugin-command", "A plugin command")
+                .with_source("test-plugin")
+                .executes(executor)
+                .then(crate::argument_builder::literal("sub").executes(executor))
+        };
+        dispatcher.register_with_aliases(command(), &["plugin-alias"]);
+
+        let has_executor = |dispatcher: &CommandDispatcher, name: &str| {
+            let id: crate::node::attached::NodeId =
+                dispatcher.tree.get(name).expect("命令应存在").into();
+            dispatcher.tree[id].command().is_some()
+        };
+        let sub_has_executor = |dispatcher: &CommandDispatcher| {
+            let root: crate::node::attached::NodeId = dispatcher
+                .tree
+                .get("plugin-command")
+                .expect("命令应存在")
+                .into();
+            let sub = dispatcher.tree[root]
+                .children_ref()
+                .get("sub")
+                .copied()
+                .expect("子命令应存在");
+            dispatcher.tree[sub].command().is_some()
+        };
+        assert!(has_executor(&dispatcher, "plugin-command"));
+        assert!(has_executor(&dispatcher, "plugin-alias"));
+        assert!(sub_has_executor(&dispatcher));
+
+        dispatcher.deactivate_commands_from_source("test-plugin");
+        // 节点保留以便重新注册合并，但执行器回调必须全部清除：
+        // 否则已卸载插件会被树中节点的强引用永久钉住
+        assert!(!has_executor(&dispatcher, "plugin-command"));
+        assert!(!has_executor(&dispatcher, "plugin-alias"));
+        assert!(!sub_has_executor(&dispatcher));
+
+        // 重新注册时合并路径把新回调写回保留的节点
+        dispatcher.register_with_aliases(command(), &["plugin-alias"]);
+        assert!(has_executor(&dispatcher, "plugin-command"));
+        assert!(has_executor(&dispatcher, "plugin-alias"));
+        assert!(sub_has_executor(&dispatcher));
+        let source = DummySource::dummy();
+        assert_eq!(
+            dispatcher.execute_input("plugin-command sub", &source),
+            Ok(1)
+        );
+        assert_eq!(dispatcher.execute_input("plugin-alias", &source), Ok(1));
+    }
 }

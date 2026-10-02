@@ -224,6 +224,14 @@ impl<S: CommandSource> Tree<S> {
             if let Some(command) = node.owned.command {
                 self[existing].set_command(Some(command));
             }
+            // 新节点带来建议器时同步刷新：命令停用期间回调会被清空，
+            // 重新注册必须把新回调写回保留的既有节点。
+            if let crate::node::NodeMetadata::Argument(meta) = node.meta
+                && let Some(provider) = meta.suggestion_provider
+                && let AttachedNode::Argument(existing_node) = &mut self[existing]
+            {
+                existing_node.meta.suggestion_provider = Some(provider);
+            }
             for (_, child) in node.children {
                 self.add_detached_child(existing, child);
             }
@@ -232,6 +240,24 @@ impl<S: CommandSource> Tree<S> {
             let node = self.attach(node);
             self[parent].children_mut_ref().insert(node_name, node);
             node
+        }
+    }
+
+    /// 清除以 `root` 为根的整棵子树上的执行器与建议器回调。
+    ///
+    /// 插件命令的回调持有插件实例的强引用：停用命令时节点本身
+    /// 保留在树中（供重新注册合并），若不清除回调，已卸载插件的
+    /// 对象会被节点永久钉住。停用期间这些回调本就不可达；重新
+    /// 注册时合并路径会把新回调写回。
+    pub fn clear_callbacks_in_subtree(&mut self, root: NodeId) {
+        let children: Vec<NodeId> = self[root].children_ref().values().copied().collect();
+        let node = &mut self[root];
+        node.set_command(None);
+        if let AttachedNode::Argument(argument) = node {
+            argument.meta.suggestion_provider = None;
+        }
+        for child in children {
+            self.clear_callbacks_in_subtree(child);
         }
     }
 
