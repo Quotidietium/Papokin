@@ -1339,7 +1339,23 @@ impl PluginManager {
                     )));
                 }
 
+                // 防并发重复加载：插件名要等 loader.load 读回元数据才
+                // 可知，此处先占位 Loading 态；同名已有 Loading 占位说明
+                // 另一加载任务（指令/API/热重载监视器）正在进行。占位会
+                // 覆盖历史 Failed 记录，后续提前返回的错误路径负责还原。
+                let prior_state = {
+                    let mut states = self.plugin_states.write().await;
+                    if matches!(states.get(&metadata.name), Some(PluginState::Loading)) {
+                        return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                            format!("插件 \"{}\" 正在加载，请勿重复加载", metadata.name),
+                        )));
+                    }
+                    states.insert(metadata.name.clone(), PluginState::Loading)
+                };
+
                 if plugin_override.is_some_and(|o| !o.enabled) {
+                    self.restore_pre_load_state(&metadata.name, prior_state)
+                        .await;
                     return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
                         format!("插件 \"{}\" 已在配置中禁用", metadata.name),
                     )));
@@ -1358,6 +1374,8 @@ impl PluginManager {
                     if !crate::plugin::loader::wasm::wasm_host::signature::is_wasm_signed(
                         &wasm_bytes,
                     ) {
+                        self.restore_pre_load_state(&metadata.name, prior_state)
+                            .await;
                         return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
                             format!(
                                 "插件 \"{}\" 未签名或无效，且 allow_unsigned 已禁用",
@@ -1376,6 +1394,8 @@ impl PluginManager {
 
                 if !allowed {
                     warn!("插件 \"{}\" 的权限被拒绝，跳过加载。", metadata.name);
+                    self.restore_pre_load_state(&metadata.name, prior_state)
+                        .await;
                     return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
                         "权限被拒绝".to_string(),
                     )));
@@ -1455,6 +1475,21 @@ impl PluginManager {
     /// 获取插件的当前状态
     pub async fn get_plugin_state(&self, plugin_name: &str) -> Option<PluginState> {
         self.plugin_states.read().await.get(plugin_name).cloned()
+    }
+
+    /// 还原 `start_loading_plugin` 占位 Loading 之前的状态记录
+    /// （该函数在读取元数据后先占位 Loading 防并发重复加载；
+    /// 占位前没有记录时删除占位即可）。
+    async fn restore_pre_load_state(&self, plugin_name: &str, prior: Option<PluginState>) {
+        let mut states = self.plugin_states.write().await;
+        match prior {
+            Some(state) => {
+                states.insert(plugin_name.to_string(), state);
+            }
+            None => {
+                states.remove(plugin_name);
+            }
+        }
     }
 
     /// 检查插件是否处于活动状态
