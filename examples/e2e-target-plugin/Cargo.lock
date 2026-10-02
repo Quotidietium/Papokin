@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-plugin-api"
-version = "0.3.6+1.21.11"
+version = "0.3.7+1.21.11"
 dependencies = [
  "postcard",
  "serde_json",
