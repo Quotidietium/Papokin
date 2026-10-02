@@ -28,6 +28,9 @@ pub enum TemplateError {
 
     #[error("Invalid palette index: {0}")]
     InvalidPaletteIndex(u32),
+
+    #[error("Runtime template quota exceeded (max {0})")]
+    RuntimeQuotaExceeded(usize),
 }
 
 /// 放置、变换或查询 [`StructureTemplate`] 时使用的设置。

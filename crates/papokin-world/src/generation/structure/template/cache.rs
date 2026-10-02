@@ -30,8 +30,20 @@ fn canonicalize(name: &str) -> String {
 /// 共享单一条目。
 /// 该缓存是线程安全的，可从多个线程访问。
 pub struct TemplateCache {
+    /// 内嵌模板的惰性加载缓存。
     cache: DashMap<String, Arc<StructureTemplate>>,
+    /// 运行期注册的模板：`键 -> (注册者插件名, 模板)`。
+    ///
+    /// 与内嵌缓存分离存放，插件卸载/禁用时才能按归属回收；
+    /// 混放则无法区分哪些是插件注册的、哪些是世界自身的。
+    runtime: DashMap<String, (String, Arc<StructureTemplate>)>,
 }
+
+/// 运行期注册模板的全局条目上限。
+///
+/// 解析后的模板驻留主机内存，不占 WASM 线性内存配额；
+/// 无上限时恶意插件可注册海量模板拖垮主机。
+const MAX_RUNTIME_TEMPLATES: usize = 2048;
 
 impl Default for TemplateCache {
     fn default() -> Self {
@@ -45,6 +57,7 @@ impl TemplateCache {
     pub fn new() -> Self {
         Self {
             cache: DashMap::new(),
+            runtime: DashMap::new(),
         }
     }
 
@@ -67,13 +80,21 @@ impl TemplateCache {
 
     /// 按名称获取模板，加载失败时返回错误。
     ///
+    /// 查找顺序：运行期注册（同名覆盖内嵌）、已加载的内嵌缓存、
+    /// 内嵌资源惰性加载。
+    ///
     /// # Errors
     ///
     ///若模板不存在或解析失败，则返回错误。
     pub fn get_or_error(&self, name: &str) -> Result<Arc<StructureTemplate>, TemplateError> {
         let key = canonicalize(name);
 
-        // 先检查缓存
+        // 运行期注册的同名模板覆盖内嵌资源
+        if let Some(entry) = self.runtime.get(&key) {
+            return Ok(Arc::clone(&entry.1));
+        }
+
+        // 再查已加载的内嵌缓存
         if let Some(template) = self.cache.get(&key) {
             return Ok(Arc::clone(&template));
         }
@@ -106,22 +127,47 @@ impl TemplateCache {
     /// `name` 可为裸形式（`foo`）或带命名空间（`papokin:foo`）；
     /// 以与 [`Self::get`] 相同的方式规范化。以某个名称注册
     /// 已存在的模板——无论是内嵌的还是先前注册的——都会替换它，
-    /// 因为查找会先查缓存，再查内嵌资源。
+    /// 在运行时从原始 gzip 压缩的 NBT 字节注册模板（原版
+    /// `.nbt` 结构格式）。
+    ///
+    /// `name` 可为裸形式（`foo`）或带命名空间（`papokin:foo`）；
+    /// 以与 [`Self::get`] 相同的方式规范化。以某个名称注册
+    /// 已存在的模板——无论是内嵌的还是先前注册的——都会替换它，
+    /// 因为查找会先查运行期注册，再查内嵌资源。
+    ///
+    /// `owner` 为注册者插件名：卸载/禁用时按归属回收
+    /// （[`Self::remove_templates_from`]）。运行期注册总数受
+    /// [`MAX_RUNTIME_TEMPLATES`] 上限约束——解析后的模板驻留
+    /// 主机内存，不受 WASM 内存配额限制。
     ///
     /// # Errors
     ///
     ///若 `nbt_bytes` 解压缩失败或无法解析为复合标签，则返回错误
-    /// 结构模板。出错时缓存保持不变。
+    /// 结构模板；运行期注册条目超上限时返回
+    /// [`TemplateError::RuntimeQuotaExceeded`]。出错时缓存保持不变。
     pub fn register_template(
         &self,
         name: &str,
         nbt_bytes: &[u8],
+        owner: &str,
     ) -> Result<Arc<StructureTemplate>, TemplateError> {
         let key = canonicalize(name);
         let template = StructureTemplate::from_nbt_bytes(nbt_bytes)?;
+        if !self.runtime.contains_key(&key) && self.runtime.len() >= MAX_RUNTIME_TEMPLATES {
+            return Err(TemplateError::RuntimeQuotaExceeded(MAX_RUNTIME_TEMPLATES));
+        }
         let arc = Arc::new(template);
-        self.cache.insert(key, Arc::clone(&arc));
+        self.runtime
+            .insert(key, (owner.to_owned(), Arc::clone(&arc)));
         Ok(arc)
+    }
+
+    /// 回收某插件注册的全部运行期模板。
+    ///
+    /// 插件卸载/禁用后其模板不应再可被 `/place` 或插件 API
+    /// 解析；内嵌模板不受影响。
+    pub fn remove_templates_from(&self, owner: &str) {
+        self.runtime.retain(|_, (plugin, _)| plugin != owner);
     }
 
     /// 返回名为 `name` 的模板能否被解析，无论是从
@@ -131,7 +177,9 @@ impl TemplateCache {
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         let key = canonicalize(name);
-        self.cache.contains_key(&key) || Self::load_template_bytes(&key).is_some()
+        self.runtime.contains_key(&key)
+            || self.cache.contains_key(&key)
+            || Self::load_template_bytes(&key).is_some()
     }
 
     /// 返回当前缓存中所有模板的名称。
@@ -141,24 +189,35 @@ impl TemplateCache {
     /// 而应改用 [`all_template_names`] 列出的内容。
     #[must_use]
     pub fn cached_names(&self) -> Vec<String> {
-        self.cache.iter().map(|entry| entry.key().clone()).collect()
+        let mut names: Vec<String> = self
+            .runtime
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        for entry in &self.cache {
+            if !names.contains(entry.key()) {
+                names.push(entry.key().clone());
+            }
+        }
+        names
     }
 
     /// 返回已缓存模板的数量。
     #[must_use]
     pub fn len(&self) -> usize {
-        self.cache.len()
+        self.cache.len() + self.runtime.len()
     }
 
     /// 返回缓存是否为空。
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
+        self.cache.is_empty() && self.runtime.is_empty()
     }
 
     /// 清除所有缓存的模板。
     pub fn clear(&self) {
         self.cache.clear();
+        self.runtime.clear();
     }
 
     /// 从内嵌资源加载原始模板字节。
@@ -205,8 +264,16 @@ pub fn get_template(name: &str) -> Option<Arc<StructureTemplate>> {
 pub fn register_template(
     name: &str,
     nbt_bytes: &[u8],
+    owner: &str,
 ) -> Result<Arc<StructureTemplate>, TemplateError> {
-    global_cache().register_template(name, nbt_bytes)
+    global_cache().register_template(name, nbt_bytes, owner)
+}
+
+/// 从全局缓存回收 `owner` 注册的全部运行期模板。
+///
+/// 插件卸载/禁用时调用；内嵌模板不受影响。
+pub fn remove_templates_from(owner: &str) {
+    global_cache().remove_templates_from(owner);
 }
 
 /// 返回名为 `name` 的模板能否从全局
@@ -322,7 +389,7 @@ mod tests {
 
         assert!(!cache.contains("papokin_test:mono_block"));
         let template = cache
-            .register_template("papokin_test:mono_block", &bytes)
+            .register_template("papokin_test:mono_block", &bytes, "test_plugin")
             .expect("注册必须成功");
         assert_eq!(template.size.x, 1);
         assert_eq!(template.size.y, 1);
@@ -347,7 +414,7 @@ mod tests {
         let bytes = minimal_template_bytes();
 
         cache
-            .register_template("papokin_test_bare", &bytes)
+            .register_template("papokin_test_bare", &bytes, "test_plugin")
             .expect("注册必须成功");
         // 裸名称落入原版命名空间，与 `get` 语义一致。
         assert!(cache.contains("minecraft:papokin_test_bare"));
@@ -360,10 +427,10 @@ mod tests {
         let bytes = minimal_template_bytes();
 
         let first = cache
-            .register_template("papokin_test:replace_me", &bytes)
+            .register_template("papokin_test:replace_me", &bytes, "test_plugin")
             .expect("首次注册必须成功");
         let second = cache
-            .register_template("papokin_test:replace_me", &bytes)
+            .register_template("papokin_test:replace_me", &bytes, "test_plugin")
             .expect("第二次注册必须成功");
         assert!(!Arc::ptr_eq(&first, &second));
         let loaded = cache
@@ -375,7 +442,8 @@ mod tests {
     #[test]
     fn register_template_rejects_invalid_bytes() {
         let cache = TemplateCache::new();
-        let result = cache.register_template("papokin_test:broken", b"not nbt at all");
+        let result =
+            cache.register_template("papokin_test:broken", b"not nbt at all", "test_plugin");
         assert!(result.is_err());
         assert!(!cache.contains("papokin_test:broken"));
     }
@@ -383,7 +451,8 @@ mod tests {
     #[test]
     fn global_cache_register_and_list() {
         let bytes = minimal_template_bytes();
-        register_template("papokin_test:global_mono_block", &bytes).expect("全局注册必须成功");
+        register_template("papokin_test:global_mono_block", &bytes, "test_plugin")
+            .expect("全局注册必须成功");
 
         assert!(has_template("papokin_test:global_mono_block"));
         assert!(get_template("papokin_test:global_mono_block").is_some());
@@ -396,5 +465,43 @@ mod tests {
         let mut deduped = names.clone();
         deduped.dedup();
         assert_eq!(names, deduped);
+    }
+    #[test]
+    fn remove_templates_from_reclaims_only_that_owner() {
+        let cache = TemplateCache::new();
+        let bytes = minimal_template_bytes();
+        cache
+            .register_template("papokin_test:from_a", &bytes, "plugin_a")
+            .expect("注册必须成功");
+        cache
+            .register_template("papokin_test:from_b", &bytes, "plugin_b")
+            .expect("注册必须成功");
+
+        cache.remove_templates_from("plugin_a");
+        assert!(!cache.contains("papokin_test:from_a"));
+        assert!(cache.contains("papokin_test:from_b"));
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
+    fn runtime_template_quota_is_enforced() {
+        let cache = TemplateCache::new();
+        let bytes = minimal_template_bytes();
+        for i in 0..super::MAX_RUNTIME_TEMPLATES {
+            cache
+                .register_template(&format!("papokin_test:quota_{i}"), &bytes, "greedy")
+                .expect("配额内注册必须成功");
+        }
+        // 超上限的新键被拒绝；覆盖既有键仍允许
+        let overflow = cache.register_template("papokin_test:quota_overflow", &bytes, "greedy");
+        assert!(matches!(
+            overflow,
+            Err(TemplateError::RuntimeQuotaExceeded(
+                super::MAX_RUNTIME_TEMPLATES
+            ))
+        ));
+        cache
+            .register_template("papokin_test:quota_0", &bytes, "greedy")
+            .expect("覆盖既有键不受配额限制");
     }
 }

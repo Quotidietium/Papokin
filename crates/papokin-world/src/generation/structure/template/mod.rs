@@ -44,7 +44,7 @@ pub use cache::{
     TemplateCache, all_embedded_datapack_names, all_pool_names, all_structure_names,
     all_template_names, get_pool_elements, get_processor_list_json, get_template,
     get_template_pool_json, global_cache, has_template, list_template_names, register_template,
-    template_bytes,
+    remove_templates_from, template_bytes,
 };
 pub use papokin_data::{BlockState, Mirror as BlockMirror, Rotation as BlockRotation};
 pub use processor::StructureProcessor;

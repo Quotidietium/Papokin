@@ -1479,6 +1479,9 @@ impl PluginManager {
         self.unregister_all_service_providers(name).await;
         self.unregister_all_incoming_channels(name);
         self.restore_plugin_chunk_generators(name);
+        // 回收该插件注册的运行期结构模板：全局模板缓存按插件
+        // 归属追踪，不回收则模板永久可解析并占住主机内存。
+        papokin_world::generation::structure::template::remove_templates_from(name);
 
         if let Some(instance) = plugin.instance.take() {
             // 活动插件在卸载前会被优雅地禁用。
@@ -1543,6 +1546,9 @@ impl PluginManager {
         self.unregister_all_service_providers(name).await;
         self.unregister_all_incoming_channels(name);
         self.restore_plugin_chunk_generators(name);
+        // 回收该插件注册的运行期结构模板：全局模板缓存按插件
+        // 归属追踪，不回收则模板永久可解析并占住主机内存。
+        papokin_world::generation::structure::template::remove_templates_from(name);
         instance.on_disable(context).await.ok();
 
         {
@@ -1819,6 +1825,7 @@ impl PluginManager {
             .await
             .retain(|_, (owner, _)| owner != plugin);
     }
+
     ///返回 `service` 的所有活动提供者，按优先级降序排序
     /// 优先级排序（其次按注册顺序）。
     #[must_use]

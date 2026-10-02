@@ -36,9 +36,16 @@ impl StructureHost for PluginHostState {
         name: String,
         nbt: Vec<u8>,
     ) -> wasmtime::Result<Result<(), String>> {
-        Ok(template_registry::register_template(&name, &nbt)
-            .map(|_| ())
-            .map_err(|err| err.to_string()))
+        // 以插件名登记归属：卸载/禁用时按归属回收模板，
+        // 否则全局模板缓存会被插件注册的模板永久占住。
+        let Some(plugin) = self.plugin.as_ref().and_then(std::sync::Weak::upgrade) else {
+            return Ok(Err("插件未激活".to_owned()));
+        };
+        Ok(
+            template_registry::register_template(&name, &nbt, &plugin.name)
+                .map(|_| ())
+                .map_err(|err| err.to_string()),
+        )
     }
 
     async fn has_structure(&mut self, name: String) -> wasmtime::Result<bool> {
