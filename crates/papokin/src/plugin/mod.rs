@@ -1568,6 +1568,84 @@ impl PluginManager {
         Ok(())
     }
 
+    /// 启用此前被禁用（或初始启用失败）的已加载插件。
+    ///
+    /// 调用 guest 的 `on-enable`，由其按常规契约重新注册事件
+    /// 处理器、命令、服务与消息通道；成功后恢复 `Loaded` 状态
+    /// 并唤醒等待者。启用失败按 Paper 分级处理（与初始加载
+    /// 一致）：清扫部分启用期间的注册项并回调 `on_disable`，
+    /// 插件保持已加载但非活动状态。
+    ///
+    /// # Errors
+    /// 插件未加载、实例不存在或 `on-enable` 返回错误时以 `Err` 报告。
+    pub async fn enable_plugin(&self, name: &str) -> Result<(), ManagerError> {
+        let (instance, context, is_active) = {
+            let plugins = self
+                .plugins
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let plugin = plugins
+                .iter()
+                .find(|p| p.metadata.name == name)
+                .ok_or_else(|| ManagerError::PluginNotFound(name.to_string()))?;
+            (
+                plugin.instance.clone(),
+                plugin.context.clone(),
+                plugin.is_active,
+            )
+        };
+
+        let Some(instance) = instance else {
+            return Err(ManagerError::PluginNotFound(name.to_string()));
+        };
+        if is_active {
+            return Ok(()); // 已处于启用状态
+        }
+
+        match instance.on_enable(context.clone()).await {
+            Ok(()) => {
+                {
+                    let mut plugins = self
+                        .plugins
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if let Some(plugin) = plugins.iter_mut().find(|p| p.metadata.name == name) {
+                        plugin.is_active = true;
+                    }
+                }
+                self.plugin_states
+                    .write()
+                    .await
+                    .insert(name.to_string(), PluginState::Loaded);
+                self.state_notify.notify_waiters();
+                info!("已启用插件 {name}");
+                Ok(())
+            }
+            Err(enable_error) => {
+                // 与初始加载的启用失败分级一致：清掉部分启用期间的
+                // 注册项，并回调 `on_disable`（其会取消已调度的任务）。
+                self.unregister_handlers(name);
+                context.unregister_commands();
+                self.unregister_all_service_providers(name).await;
+                self.unregister_all_incoming_channels(name);
+                self.restore_plugin_chunk_generators(name);
+                papokin_world::generation::structure::template::remove_templates_from(name);
+                let _ = instance.on_disable(context).await;
+
+                let error_msg = format!("启用失败：{enable_error}");
+                self.plugin_states
+                    .write()
+                    .await
+                    .insert(name.to_string(), PluginState::Disabled(error_msg.clone()));
+                self.state_notify.notify_waiters();
+                error!("重新启用插件 {name} 失败：{error_msg}");
+                Err(ManagerError::LoaderError(
+                    LoaderError::InitializationFailed(error_msg),
+                ))
+            }
+        }
+    }
+
     fn unregister_handlers(&self, source: &str) {
         self.handlers.rcu(|handlers| {
             let mut new_handlers = (**handlers).clone();
