@@ -154,12 +154,23 @@ fn vanilla_name(domain: &str, id: u16) -> Option<String> {
 static WARN_ONCE_KEYS: LazyLock<Mutex<HashSet<String>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
 
+/// `WARN_ONCE_KEYS` 的硬上限。键由未知注册表 id/名称构成，
+/// 可来自网络包或 NBT（即由发送方控制），不设上限则持续
+/// 制造新键的输入会把表无界撑大。超阈整体清空：重复警告的
+/// 洪峰天然受数据包速率约束，而内存必须有界。
+const MAX_WARN_ONCE_KEYS: usize = 4096;
+
 /// 首次以给定键调用时记录一条警告。
 fn warn_once(key: String, message: impl FnOnce() -> String) {
-    let first = WARN_ONCE_KEYS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(key);
+    let first = {
+        let mut keys = WARN_ONCE_KEYS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if keys.len() >= MAX_WARN_ONCE_KEYS {
+            keys.clear();
+        }
+        keys.insert(key)
+    };
     if first {
         tracing::warn!("{}", message());
     }
@@ -3162,6 +3173,20 @@ impl DataComponentCodec<Self> for BreakSoundImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// warn-once 表的键可由发送方控制的未知 id/名称构成；
+    /// 灌入超过上限的不同键后表仍必须有界（超阈整体清空）。
+    #[test]
+    fn warn_once_table_stays_bounded_under_distinct_keys() {
+        for i in 0..(MAX_WARN_ONCE_KEYS + 512) {
+            warn_once(format!("bounded_probe:{i}"), || "probe".to_string());
+        }
+        let len = WARN_ONCE_KEYS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert!(len <= MAX_WARN_ONCE_KEYS, "warn-once 表超界: {len}");
+    }
 
     /// 伪造的 `max_stack_size` = 0 必须在解码时被拒绝（原版范围 1..=99）；
     /// 0 会在收纳袋重量计算等处触发除零 panic。
