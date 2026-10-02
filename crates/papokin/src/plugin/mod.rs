@@ -777,6 +777,17 @@ impl PluginManager {
                             let error_msg = format!("启用失败：{enable_error}");
                             self_ref_clone.unregister_handlers(&plugin_name);
                             context.unregister_commands();
+                            // 与 disable_plugin 的全量清扫对齐：部分启用期间
+                            // 注册的服务/通道/生成器/模板若不清除，会指向一个
+                            // 从未成功启用的插件并永久滞留。
+                            self_ref_clone
+                                .unregister_all_service_providers(&plugin_name)
+                                .await;
+                            self_ref_clone.unregister_all_incoming_channels(&plugin_name);
+                            self_ref_clone.restore_plugin_chunk_generators(&plugin_name);
+                            papokin_world::generation::structure::template::remove_templates_from(
+                                &plugin_name,
+                            );
 
                             // 与 Paper 对齐：onEnable 失败后会
                             // onDisable，它还会停止该插件的所有任务
