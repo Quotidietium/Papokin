@@ -31,3 +31,15 @@ impl crate::ClientPacket for SKeepAlive {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packet::MultiVersionJavaPacket;
+
+    // 配置阶段分发臂依赖此 id；数值钉死为权威表 id（1.21.11 下为 4）
+    #[test]
+    fn id_matches_authoritative_table() {
+        assert_eq!(SKeepAlive::to_id(JavaMinecraftVersion::V_1_21_11), 4);
+    }
+}

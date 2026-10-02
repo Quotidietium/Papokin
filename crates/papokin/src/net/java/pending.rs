@@ -14,7 +14,9 @@ use papokin_protocol::{
         packet_encoder::TCPNetworkEncoder,
         server::config::{
             SAcceptCodeOfConduct, SAcknowledgeFinishConfig, SClientInformationConfig,
-            SConfigCookieResponse, SConfigPong, SConfigResourcePack, SKnownPacks, SPluginMessage,
+            SConfigCookieResponse, SConfigPong, SConfigResourcePack,
+            SCustomClickAction as SConfigCustomClickAction, SKeepAlive as SConfigKeepAlive,
+            SKnownPacks, SPluginMessage,
         },
     },
     packet::MultiVersionJavaPacket,
@@ -505,6 +507,22 @@ impl PendingConnection {
             }
             id if id == SConfigPong::to_id(version) => {
                 let _pong = SConfigPong::read(&mut payload, &version)?;
+                Ok(None)
+            }
+            id if id == SConfigKeepAlive::to_id(version) => {
+                // 服务端在配置阶段从不主动发 keep-alive（无对应计时循环），
+                // 客户端只会在收到后回应；读掉即可，避免落入未知 id 断连
+                let keep_alive = SConfigKeepAlive::read(&mut payload, &version)?;
+                debug!(
+                    "忽略了未请求的配置 keep-alive id {}",
+                    keep_alive.keep_alive_id
+                );
+                Ok(None)
+            }
+            id if id == SConfigCustomClickAction::to_id(version) => {
+                // 配置阶段服务端不下发自定义点击动作（对话框在游戏阶段），
+                // 读掉响应避免落入未知 id 断连
+                let _click = SConfigCustomClickAction::read(&mut payload, &version)?;
                 Ok(None)
             }
             id if id == SAcceptCodeOfConduct::to_id(version) => {
