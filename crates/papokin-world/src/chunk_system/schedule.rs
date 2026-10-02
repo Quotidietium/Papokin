@@ -987,23 +987,28 @@ impl GenerationSchedule {
     /// 回滚 `blocking_send` 失败批次在 `io_lock` 中登记的在途保存
     /// 计数（写线程已退出，不会有人释放它们）。
     fn rollback_io_lock_entries(&self, positions: impl Iterator<Item = ChunkPos>) {
-        let mut data = self
-            .io_lock
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for pos in positions {
-            match data.entry(pos) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    if *entry.get() <= 1 {
-                        entry.remove();
-                    } else {
-                        *entry.get_mut() -= 1;
+        {
+            let mut data = self
+                .io_lock
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for pos in positions {
+                match data.entry(pos) {
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        if *entry.get() <= 1 {
+                            entry.remove();
+                        } else {
+                            *entry.get_mut() -= 1;
+                        }
                     }
+                    std::collections::hash_map::Entry::Vacant(_) => {}
                 }
-                std::collections::hash_map::Entry::Vacant(_) => {}
             }
         }
+        // 条目已释放，必须唤醒等待同名区块的读取任务——与写线程
+        // 正常释放路径一致；不通知则等待方可能永久挂起。
+        self.io_lock.1.notify_waiters();
     }
 
     fn drop_node(&mut self, node: NodeKey) {
