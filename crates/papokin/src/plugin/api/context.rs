@@ -21,6 +21,7 @@ use crate::{
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 use super::{EventPriority, Payload};
+use crate::plugin::DynEventHandler;
 
 /// `Context` 结构体表示插件的上下文，包含元数据、
 /// 一个服务器引用，以及事件处理器。
@@ -414,12 +415,18 @@ impl Context {
             _phantom: std::marker::PhantomData,
         });
 
+        let identity = DynEventHandler::handler_identity(typed_handler.as_ref());
         self.handlers.rcu(|handlers| {
             let mut new_handlers = (**handlers).clone();
-            new_handlers
-                .entry(E::get_name_static())
-                .or_default()
-                .push(typed_handler.clone());
+            let handlers_for_event = new_handlers.entry(E::get_name_static()).or_default();
+            // 同一处理器 Arc 重复注册同一事件时跳过：插件在回调中
+            // 误反复注册会让 Vec 无界增长，且同一处理器被多次调用。
+            if !handlers_for_event
+                .iter()
+                .any(|existing| existing.handler_identity() == identity)
+            {
+                handlers_for_event.push(typed_handler.clone());
+            }
             Arc::new(new_handlers)
         });
     }

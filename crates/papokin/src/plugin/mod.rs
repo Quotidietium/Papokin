@@ -97,6 +97,13 @@ pub trait DynEventHandler: Send + Sync {
         None
     }
 
+    /// 底层处理器的指针标识，用于重复注册去重。
+    ///
+    /// 同一处理器 `Arc` 被重复注册到同一事件时据此跳过；
+    /// 返回 0 表示无标识（不参与去重）。
+    fn handler_identity(&self) -> usize {
+        0
+    }
 }
 
 /// 与 Bukkit 兼容的分发顺序：`Lowest` 最先，`Highest` 最后；排序稳定，
@@ -206,6 +213,9 @@ where
         self.source.as_deref()
     }
 
+    fn handler_identity(&self) -> usize {
+        Arc::as_ptr(&self.handler).cast::<()>() as usize
+    }
 }
 
 /// 事件处理器映射的类型别名，其键为静态字符串
