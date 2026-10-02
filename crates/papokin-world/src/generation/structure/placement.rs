@@ -35,8 +35,18 @@ pub struct GlobalStructureCache {
     /// 拼图结构的放置完全由其起始区块和
     /// 世界种子，因此在这里只计算一次，而不是每次都重新计算
     /// 周围结构引用与其重叠的区块。
+    ///
+    /// 命中与未命中都会记忆化，条目只随探索范围增长；
+    /// 超过 [`MAX_STRUCTURE_START_CACHE_ENTRIES`] 时按任意顺序淘汰一半，
+    /// 被淘汰的条目下次查询时重算（结果由世界种子决定，语义不变）。
     structure_starts: OnceLock<DashMap<(StructureKeys, i32, i32), Option<StructurePosition>>>,
 }
+
+/// 结构起点缓存的条目上限。
+///
+/// `Some` 值内含整份拼图部件集（村庄等可达数十 KB），只插不删会让
+/// 大世界/长时间运行内存无界上涨；阈值取远高于常规活跃工作集的水平。
+const MAX_STRUCTURE_START_CACHE_ENTRIES: usize = 8192;
 
 struct RingTask {
     initial_x: i32,
@@ -83,6 +93,20 @@ impl GlobalStructureCache {
         }
         let computed = compute();
         cache.insert((key, chunk_x, chunk_z), computed.clone());
+        // 只插不删的记忆化缓存须人为封顶：超限后淘汰一半，
+        // 被淘汰项下次查询时按同一种子确定性重算。
+        let len = cache.len();
+        if len > MAX_STRUCTURE_START_CACHE_ENTRIES {
+            let mut evicted = 0;
+            cache.retain(|_, _| {
+                if evicted < MAX_STRUCTURE_START_CACHE_ENTRIES / 2 {
+                    evicted += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
         computed
     }
 
@@ -403,15 +427,15 @@ fn is_start_chunk_random_spread(
 #[cfg(test)]
 mod tests {
     use papokin_data::structures::{
-        RandomSpreadStructurePlacement, StructurePlacementCalculator, StructureSet,
+        RandomSpreadStructurePlacement, StructureKeys, StructurePlacementCalculator, StructureSet,
     };
     use papokin_util::random::{
         RandomGenerator, RandomImpl, get_region_seed, legacy_rand::LegacyRand,
     };
 
     use crate::generation::structure::placement::{
-        GlobalStructureCache, apply_frequency_reduction, get_start_chunk_random_spread,
-        is_start_chunk, should_generate_structure,
+        GlobalStructureCache, MAX_STRUCTURE_START_CACHE_ENTRIES, apply_frequency_reduction,
+        get_start_chunk_random_spread, is_start_chunk, should_generate_structure,
     };
 
     #[test]
@@ -477,5 +501,30 @@ mod tests {
             excluded.1,
             &cache,
         ));
+    }
+    #[test]
+    fn structure_start_cache_evicts_half_when_exceeding_cap() {
+        let cache = GlobalStructureCache::new();
+        let total = MAX_STRUCTURE_START_CACHE_ENTRIES + 16;
+        for i in 0..total {
+            let value = cache.get_or_compute_structure_start(
+                StructureKeys::VillagePlains,
+                i as i32,
+                0,
+                || None,
+            );
+            assert!(value.is_none());
+        }
+        let map = cache.structure_starts.get().expect("缓存应已初始化");
+        assert!(
+            map.len() <= MAX_STRUCTURE_START_CACHE_ENTRIES,
+            "缓存条目数 {} 超过上限 {}",
+            map.len(),
+            MAX_STRUCTURE_START_CACHE_ENTRIES
+        );
+        // 被淘汰的键下次查询按同一闭包确定性重算，语义不变
+        let recomputed =
+            cache.get_or_compute_structure_start(StructureKeys::VillagePlains, 0, 0, || None);
+        assert!(recomputed.is_none());
     }
 }
