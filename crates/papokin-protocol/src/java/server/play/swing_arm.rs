@@ -57,3 +57,17 @@ impl crate::ClientPacket for SSwingArm {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::packet::MultiVersionJavaPacket;
+
+    // 跨时代选择的既有范式；数值钉死为权威表 id，防止后人"简化"回退
+    #[test]
+    fn id_matches_authoritative_table_per_era() {
+        assert_eq!(SSwingArm::to_id(JavaMinecraftVersion::V_1_21_11), 60);
+        assert_eq!(SSwingArm::to_id(JavaMinecraftVersion::V_26_2), 63);
+        assert_eq!(SSwingArm::to_id(JavaMinecraftVersion::V_26_3), 46);
+    }
+}
