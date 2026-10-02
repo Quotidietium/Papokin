@@ -203,7 +203,10 @@ pub const fn from_wit_block_direction(dir: WitBlockDirection) -> papokin_data::B
 }
 
 pub struct CustomWasmGoal {
-    pub plugin: Arc<WasmPlugin>,
+    /// 弱引用持有插件：生物的 AI 目标随实体长期存活（实体存档
+    /// 也会保留），强引用会把已卸载插件的对象永久钉住。插件
+    /// 卸载后目标自动惰性化（不再启动，运行中的停止）。
+    pub plugin: std::sync::Weak<WasmPlugin>,
     pub goal_id: u32,
 }
 
@@ -227,6 +230,10 @@ enum BoolGoalCall {
 
 impl CustomWasmGoal {
     fn invoke(&self, mob: &dyn InternalMob, call: GoalCall) {
+        let Some(plugin) = self.plugin.upgrade() else {
+            // 插件已卸载：目标惰性化
+            return;
+        };
         let Some(entity) = current_mob_entity(mob) else {
             return;
         };
@@ -234,7 +241,6 @@ impl CustomWasmGoal {
         let Some(server) = world.server.upgrade() else {
             return;
         };
-        let plugin = self.plugin.clone();
         let goal_id = self.goal_id;
         let run = async move {
             let function = match plugin.plugin_instance.as_ref() {
@@ -298,6 +304,10 @@ impl CustomWasmGoal {
     /// 任何失败（实体消失、插件已卸载、访客陷阱）都会返回 `false`，
     /// 这是安全的默认行为：目标不会启动，或会停止。
     fn invoke_bool(&self, mob: &dyn InternalMob, call: BoolGoalCall) -> bool {
+        let Some(plugin) = self.plugin.upgrade() else {
+            // 插件已卸载：不启动/停止，目标惰性化
+            return false;
+        };
         let Some(entity) = current_mob_entity(mob) else {
             return false;
         };
@@ -305,7 +315,6 @@ impl CustomWasmGoal {
         let Some(server) = world.server.upgrade() else {
             return false;
         };
-        let plugin = self.plugin.clone();
         let goal_id = self.goal_id;
         let run = async move {
             let function = match plugin.plugin_instance.as_ref() {
@@ -458,7 +467,13 @@ impl HostMob for PluginHostState {
         let entity = mob_from_resource(self, &this)?;
         if let Some(mob) = entity.get_mob() {
             let mob_entity = mob.get_mob_entity();
-            mob_entity.add_goal(priority, CustomWasmGoal { plugin, goal_id });
+            mob_entity.add_goal(
+                priority,
+                CustomWasmGoal {
+                    plugin: Arc::downgrade(&plugin),
+                    goal_id,
+                },
+            );
         }
         Ok(())
     }
