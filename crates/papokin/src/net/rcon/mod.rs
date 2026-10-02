@@ -40,6 +40,10 @@ const AUTH_BLOCK_DURATION: Duration = Duration::from_secs(300);
 /// 没有它，攻击者可建立 `max_connections` 个不发数据的连接把管理员
 /// 锁在 RCON 之外（占坑 `DoS`）。
 const UNAUTHENTICATED_READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// 单连接入站缓冲上限：客户端声明超大长度前缀后逐字节滴注即可
+/// 绕过读超时让缓冲无限增长；合法 RCON 包（命令行）远小于该值，
+/// 超限直接断开。
+const MAX_INCOMING_BUFFER: usize = 64 * 1024;
 
 #[derive(Clone, Copy)]
 struct AuthFailState {
@@ -337,6 +341,13 @@ impl RCONClient {
             return Ok(true);
         }
         self.incoming.extend_from_slice(&buf[..n]);
+        if self.incoming.len() > MAX_INCOMING_BUFFER {
+            debug!(
+                "RCON ({})：入站缓冲超过 {MAX_INCOMING_BUFFER} 字节上限，已断开",
+                self.address
+            );
+            return Ok(true);
+        }
         Ok(false)
     }
 
