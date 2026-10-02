@@ -1331,4 +1331,31 @@ mod tests {
                 .any(|s| s.suggestion == "secretcmd")
         );
     }
+
+    #[test]
+    fn re_registering_same_command_does_not_grow_tree_arena() {
+        let mut dispatcher = CommandDispatcher::new();
+        let build = || {
+            CommandArgumentBuilder::new("leakcheck", "泄漏检查")
+                .executes(NoopExecutor)
+                .then(crate::argument_builder::literal("sub").executes(NoopExecutor))
+                .build()
+        };
+        dispatcher.register(build());
+        let size_after_first = dispatcher.tree.len();
+        // 插件热重载/重新启用会对同名命令重复注册：合并必须复用既有节点，
+        // 不得在 arena 中留下孤儿子树
+        for _ in 0..8 {
+            dispatcher.register(build());
+        }
+        assert_eq!(
+            dispatcher.tree.len(),
+            size_after_first,
+            "重复注册同名命令后 arena 节点数不得增长"
+        );
+        // 合并后的命令仍可按原路径执行
+        let source = DummySource::dummy();
+        assert_eq!(dispatcher.execute_input("leakcheck sub", &source), Ok(0));
+    }
+
 }

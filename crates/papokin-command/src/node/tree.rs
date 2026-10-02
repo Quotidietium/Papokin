@@ -178,11 +178,9 @@ impl<S: CommandSource> Tree<S> {
 
     /// 向此树的根节点添加一个 [`CommandDetachedNode`]。
     pub fn add_child_to_root(&mut self, node: impl Into<CommandDetachedNode<S>>) -> CommandNodeId {
-        // 首先，将该节点附加到此树
         let node = node.into();
         let name = node.meta.literal.to_string();
-        let node = self.attach(node.into());
-        let node = self.add_attached_child(ROOT_NODE_ID, node);
+        let node = self.add_detached_child(ROOT_NODE_ID, node.into());
 
         // 这是安全的，因为节点 ID 现在指向一个 `CommandAttachedNode`。
         let node = CommandNodeId(node.0);
@@ -200,49 +198,38 @@ impl<S: CommandSource> Tree<S> {
     /// 从本质上说，这意味着 [`CommandDetachedNode`] 必须拥有根节点
     /// 树*作为其父节点*，以便挂载到树上。
     pub fn add_child(&mut self, parent: NodeId, node: impl Into<DetachedNode<S>>) -> NodeId {
-        let node = node.into();
+        self.add_detached_child(parent, node.into())
+    }
+
+    /// 向给定节点添加一个仍处于分离状态的子节点。
+    ///
+    /// 同名子节点已存在时执行合并而非替换：新节点的执行器（若有）
+    /// 覆盖到既有节点上，其子节点递归合并。合并直接作用于分离节点——
+    /// 先 attach 再合并会让落选的重名子树以孤儿身份永久滞留 arena
+    /// （`nodes` 只增不减），插件热重载或重新启用每循环一次
+    /// 便泄漏整棵命令子树。
+    ///
+    /// # Panics
+    ///
+    /// 如果要添加到非根节点的节点是 [`DetachedNode::Command`] 则 panic。
+    fn add_detached_child(&mut self, parent: NodeId, node: DetachedNode<S>) -> NodeId {
         assert!(
             parent == ROOT_NODE_ID || !matches!(node, DetachedNode::Command(_)),
             "Cannot add a CommandDetachedNode as a child of a non-root node"
         );
 
-        // 首先，将该节点附加到此树
-        let node = self.attach(node);
-        self.add_attached_child(parent, node)
-    }
-
-    /// 向给定节点添加一个已附加的子节点。
-    ///
-    /// # Panics
-    ///
-    /// 如果要添加到非根节点的节点是 [`CommandAttachedNode`] 则 panic，
-    /// 或要添加到某节点的节点是 [`RootAttachedNode`]，
-    ///
-    /// 从本质上说，这意味着 [`CommandAttachedNode`] 必须拥有根节点
-    /// 树*作为其父节点*，而 [`RootAttachedNode`] 不能拥有父节点。
-    fn add_attached_child(&mut self, parent: NodeId, node: NodeId) -> NodeId {
-        assert!(
-            parent == ROOT_NODE_ID || self[node].classification() != NodeClassification::Command,
-            "Cannot add a CommandAttachedNode as a child of a non-root node"
-        );
-
-        let node_name = self[node].name();
-
-        let child = self[parent].children_ref().get(&node_name);
-        if let Some(child) = child {
-            let node_command = self[node].command().clone();
-            let node_children: Vec<NodeId> = self[node].children_ref().values().copied().collect();
-
-            let child = *child;
-            // 合并到子节点上。
-            if let Some(command) = node_command {
-                self[child].set_command(Some(command));
+        let node_name = node.name();
+        if let Some(&existing) = self[parent].children_ref().get(&node_name) {
+            let node = node.decompose();
+            if let Some(command) = node.owned.command {
+                self[existing].set_command(Some(command));
             }
-            for grandchild in node_children {
-                self.add_attached_child(child, grandchild);
+            for (_, child) in node.children {
+                self.add_detached_child(existing, child);
             }
-            child
+            existing
         } else {
+            let node = self.attach(node);
             self[parent].children_mut_ref().insert(node_name, node);
             node
         }
