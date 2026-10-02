@@ -511,6 +511,13 @@ impl Plugin for E2ePlugin {
             tracing::info!("E2E async-task-fired");
         });
 
+        // Plugin-manager API (new mechanism): a plugin driving the full
+        // lifecycle of a second plugin, replacing the built-in plugman
+        // command. Delayed so the target plugin is fully enabled first.
+        context.schedule_async_delayed_task(2000, |server| {
+            exercise_plugin_manager(&server);
+        });
+
         // Services registry (new mechanism): register + discover self.
         context.register_service("e2e:test", 5)?;
         match context.get_service_provider("e2e:test") {
@@ -965,3 +972,117 @@ impl Plugin for E2ePlugin {
 }
 
 register_plugin!(E2ePlugin);
+
+/// Drives the whole lifecycle of the `e2e-target` plugin through the
+/// plugin-manager API: list/get queries, disable, re-enable, unload, and a
+/// final reload from the plugins directory — everything a third-party
+/// plugman replacement needs.
+fn exercise_plugin_manager(server: &papokin_plugin_api::Server) {
+    use papokin_plugin_api::plugin_manager::PluginState;
+
+    let manager = server.get_plugin_manager();
+
+    let names: Vec<String> = manager
+        .list_plugins()
+        .into_iter()
+        .map(|info| info.name)
+        .collect();
+    if names.iter().any(|name| name == "e2e-target") {
+        tracing::info!("E2E plugman-list ok plugins={names:?}");
+    } else {
+        tracing::info!("E2E plugman-list-missing-target plugins={names:?}");
+        return;
+    }
+
+    match manager.get_plugin("e2e-target") {
+        Some(info) => tracing::info!(
+            "E2E plugman-get ok version={} active={} state={:?}",
+            info.version,
+            info.is_active,
+            info.state
+        ),
+        None => {
+            tracing::info!("E2E plugman-get-unexpected-miss");
+            return;
+        }
+    }
+    if manager.get_plugin("e2e-no-such-plugin").is_none() {
+        tracing::info!("E2E plugman-get-absent ok");
+    } else {
+        tracing::info!("E2E plugman-get-absent-unexpected-hit");
+    }
+
+    // Self-targeting disable/unload would deadlock the caller's own store
+    // driver, so the host must reject both.
+    match manager.disable_plugin("e2e-plugin") {
+        Err(err) => tracing::info!("E2E plugman-self-disable-rejected ok {err}"),
+        Ok(()) => tracing::info!("E2E plugman-self-disable-accepted"),
+    }
+    match manager.unload_plugin("e2e-plugin") {
+        Err(err) => tracing::info!("E2E plugman-self-unload-rejected ok {err}"),
+        Ok(()) => tracing::info!("E2E plugman-self-unload-accepted"),
+    }
+
+    if let Err(err) = manager.disable_plugin("e2e-target") {
+        tracing::info!("E2E plugman-disable-failed {err}");
+        return;
+    }
+    tracing::info!("E2E plugman-disable ok");
+
+    match manager.get_plugin("e2e-target") {
+        Some(info) if !info.is_active && info.state == PluginState::Disabled => {
+            tracing::info!("E2E plugman-state-after-disable ok detail={:?}", info.state_detail);
+        }
+        other => {
+            tracing::info!("E2E plugman-state-after-disable-bad {other:?}");
+            return;
+        }
+    }
+
+    if let Err(err) = manager.enable_plugin("e2e-target") {
+        tracing::info!("E2E plugman-enable-failed {err}");
+        return;
+    }
+    tracing::info!("E2E plugman-enable ok");
+
+    if let Err(err) = manager.unload_plugin("e2e-target") {
+        tracing::info!("E2E plugman-unload-failed {err}");
+        return;
+    }
+    tracing::info!("E2E plugman-unload ok");
+
+    match manager.get_plugin("e2e-target") {
+        None => tracing::info!("E2E plugman-gone-after-unload ok"),
+        Some(info) => tracing::info!(
+            "E2E plugman-after-unload-still-present active={} state={:?}",
+            info.is_active,
+            info.state
+        ),
+    }
+
+    // Path traversal and missing files must be rejected before any load is
+    // attempted.
+    if manager.load_plugin("../e2e_target_plugin.wasm").is_err() {
+        tracing::info!("E2E plugman-traversal-rejected ok");
+    } else {
+        tracing::info!("E2E plugman-traversal-accepted");
+    }
+    if manager.load_plugin("e2e-no-such-file.wasm").is_err() {
+        tracing::info!("E2E plugman-missing-file-rejected ok");
+    } else {
+        tracing::info!("E2E plugman-missing-file-accepted");
+    }
+
+    if let Err(err) = manager.load_plugin("e2e_target_plugin.wasm") {
+        tracing::info!("E2E plugman-load-failed {err}");
+        return;
+    }
+    tracing::info!("E2E plugman-load ok");
+
+    match manager.get_plugin("e2e-target") {
+        Some(info) if info.is_active => {
+            tracing::info!("E2E plugman-reloaded ok active={}", info.is_active);
+        }
+        other => tracing::info!("E2E plugman-reload-state-bad {other:?}"),
+    }
+}
