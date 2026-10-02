@@ -123,6 +123,8 @@ pub mod mobs;
 ///
 /// 在 `PluginMetadata` 中使用这些内容，以请求访问特定的宿主功能。
 pub mod permissions;
+/// 插件生命周期的查看与管理（动态加载/卸载/启用/禁用）。
+pub mod plugin_manager;
 /// 自定义配方注册与构建器工具。
 pub mod recipe;
 /// 自定义注册表条目注册与查询工具。
@@ -199,6 +201,7 @@ pub use mobs::{
     MobData, Sheep, SheepData, Shulker, ShulkerData, Slime, SlimeData, Villager, VillagerData,
     VillagerProfession, Wolf, WolfData, Zombie, ZombieData,
 };
+pub use plugin_manager::{PluginInfo, PluginManager, PluginState};
 pub use potions_wit::PotionType;
 pub use recipe::{
     BrewingRecipeBuilder, CookingRecipeBuilder, Ingredient, RecipeCategory, RecipeError,
