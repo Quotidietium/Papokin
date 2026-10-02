@@ -127,29 +127,30 @@ impl PlayerDataStorage {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             // 如果不在缓存中，则从磁盘加载
+            // 注意：所有分支都必须落到末尾的 `prune_save_lock`，
+            // 提前 return 会把 per-UUID 锁条目永久留在 `save_locks`
+            // 里（无档新玩家每进一人就漏一条）。
             let path = self.get_player_data_path(uuid);
-            if !path.exists() {
+            if path.exists() {
+                match File::open(&path) {
+                    Ok(file) => match papokin_nbt::nbt_compress::read_gzip_compound_tag(file) {
+                        Ok(nbt) => {
+                            debug!("已从磁盘加载玩家 {uuid} 的数据");
+                            Ok((true, nbt))
+                        }
+                        Err(e) => {
+                            error!("读取玩家 {uuid} 的数据失败：{e}");
+                            Err(PlayerDataError::Nbt(e.to_string()))
+                        }
+                    },
+                    Err(e) => {
+                        error!("打开玩家 {uuid} 的数据文件失败：{e}");
+                        Err(PlayerDataError::Io(e))
+                    }
+                }
+            } else {
                 debug!("未找到玩家 {uuid} 的数据文件");
-                return Ok((false, NbtCompound::new()));
-            }
-
-            let file = match File::open(&path) {
-                Ok(file) => file,
-                Err(e) => {
-                    error!("打开玩家 {uuid} 的数据文件失败：{e}");
-                    return Err(PlayerDataError::Io(e));
-                }
-            };
-
-            match papokin_nbt::nbt_compress::read_gzip_compound_tag(file) {
-                Ok(nbt) => {
-                    debug!("已从磁盘加载玩家 {uuid} 的数据");
-                    Ok((true, nbt))
-                }
-                Err(e) => {
-                    error!("读取玩家 {uuid} 的数据失败：{e}");
-                    Err(PlayerDataError::Nbt(e.to_string()))
-                }
+                Ok((false, NbtCompound::new()))
             }
         };
         self.prune_save_lock(uuid);
