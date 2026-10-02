@@ -37,9 +37,15 @@ pub async fn start_query_handler(server: Arc<Server>, query_addr: SocketAddr) {
     tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(30));
 
+        // 必须随服务器关停退出：该任务持有令牌表的 Arc，
+        // 不退出则关停后任务与表都永久驻留运行时。
         loop {
-            interval.tick().await;
-            valid_challenge_tokens_clone.write().await.clear();
+            tokio::select! {
+                () = STOP_INTERRUPT.cancelled() => break,
+                _ = interval.tick() => {
+                    valid_challenge_tokens_clone.write().await.clear();
+                }
+            }
         }
     });
 
