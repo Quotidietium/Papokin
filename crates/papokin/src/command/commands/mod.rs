@@ -52,6 +52,7 @@ mod place;
 mod playsound;
 mod plugin;
 mod plugins;
+mod plugman;
 mod raid;
 mod random;
 mod recipe;
@@ -184,6 +185,7 @@ pub fn default_dispatcher(
     raid::register(&mut dispatcher, registry);
     deop::register(&mut dispatcher, registry);
     kick::register(&mut dispatcher, registry);
+    plugman::register(&mut dispatcher, registry);
     plugin::register(&mut dispatcher, registry);
     plugins::register(&mut dispatcher, registry);
     ban::register(&mut dispatcher, registry);

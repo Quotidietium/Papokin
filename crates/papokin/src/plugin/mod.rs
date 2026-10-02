@@ -35,7 +35,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// 递增此版本号。
 pub const PLUGIN_API_VERSION: u32 = 6;
 
-const PLUGIN_DIR: &str = "./plugins";
+pub(crate) const PLUGIN_DIR: &str = "./plugins";
 
 /// 插件名会用作文件系统路径组件（`plugins/data/<name>/`）、
 /// 权限命名空间（`<name>:<node>`）以及注册表键。拒绝
