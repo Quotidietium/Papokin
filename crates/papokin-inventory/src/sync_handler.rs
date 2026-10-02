@@ -73,6 +73,18 @@ impl SyncHandler {
             .replace(player);
     }
 
+    /// 解除绑定的玩家。
+    ///
+    /// 玩家退出时必须调用：`Player` 持有 `Arc<SyncHandler>`，
+    /// 而这里回持 `Arc<dyn InventoryPlayer>`（即玩家自身），
+    /// 不解除即形成 `Arc` 循环，整份玩家对象永不释放。
+    pub fn clear_player(&self) {
+        self.player
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     /// 发送完整的容器内容更新。
     ///
     /// 此方法将所有槽位、光标物品和属性发送给客户端。

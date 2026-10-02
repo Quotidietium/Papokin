@@ -933,6 +933,12 @@ impl Player {
             .removal_reason
             .store(Some(crate::entity::RemovalReason::UnloadedWithPlayer));
 
+        // 打破两处 Arc 循环：Player ↔ JavaClient（`client.player`
+        // 回持 Player）与 Player ↔ SyncHandler（`sync_handler.player`
+        // 回持 Player）。不断开则每次断线泄漏整份玩家对象图。
+        self.client.player.store(Arc::new(None));
+        self.screen_handler_sync_handler.clear_player();
+
         if !self
             .current_screen_handler
             .lock()
