@@ -128,6 +128,15 @@ impl Drop for PluginRuntime {
     }
 }
 
+impl PluginRuntime {
+    /// 取走 epoch ticker 的所有权（返回后 Drop 不再中止它）。
+    ///
+    /// 加载成功后由调用方转交给 [`WasmPlugin`] 持有：ticker
+    /// 必须活到插件销毁，否则调用超时预算失效。
+    pub const fn take_epoch_ticker(&mut self) -> Option<tokio::task::AbortHandle> {
+        self.epoch_ticker.take()
+    }
+}
 
 pub enum PluginInstance {
     V0_1(wit::v0_1::Plugin),
@@ -141,6 +150,13 @@ pub struct WasmPlugin {
     /// 世界生成器等按插件归属回收的资源以此匹配：卸载/禁用
     /// 时只恢复仍由该插件持有的资源，不误伤其他插件。
     pub name: String,
+    /// 周期性递增引擎 epoch 的后台任务句柄。
+    ///
+    /// ticker 由加载时的 [`PluginRuntime`] 创建，但必须随插件
+    /// 存活：`PluginRuntime` 在 load 返回后即被 drop，ticker 若
+    /// 随之停止，epoch 不再递增，`set_epoch_budget` 的调用超时
+    /// 便永不触发。插件 drop 时在此中止。
+    pub epoch_ticker: std::sync::Mutex<Option<tokio::task::AbortHandle>>,
 }
 
 /// 未配置 `max_memory_mb` 时对插件施加的默认内存上限。
@@ -154,6 +170,14 @@ const EPOCH_TICKER_INTERVAL_MS: u64 = 100;
 
 impl Drop for WasmPlugin {
     fn drop(&mut self) {
+        if let Some(ticker) = self
+            .epoch_ticker
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            ticker.abort();
+        }
         self.store.discard();
     }
 }
@@ -297,6 +321,7 @@ impl PluginRuntime {
             plugin_instance: Arc::new(plugin_instance),
             store,
             name: metadata.name.clone(),
+            epoch_ticker: std::sync::Mutex::new(None),
         });
         let weak_plugin = Arc::downgrade(&wasm_plugin);
         wasm_plugin
