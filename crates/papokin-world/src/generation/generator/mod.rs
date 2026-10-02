@@ -46,6 +46,14 @@ pub trait CustomChunkGenerator: Send + Sync {
         None
     }
 
+    /// 提供该生成器的插件名（如有）。
+    ///
+    /// 插件卸载/禁用时服务器据此把世界生成器恢复为原版，
+    /// 避免世界永久钉住已销毁插件的实例。
+    fn owning_plugin(&self) -> Option<&str> {
+        None
+    }
+
     fn step_to_biomes(&self, chunk: &mut ProtoChunk) {
         chunk.stage = StagedChunkEnum::Biomes;
     }

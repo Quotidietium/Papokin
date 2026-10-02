@@ -2703,6 +2703,10 @@ impl papokin_world::generation::generator::CustomChunkGenerator for WasmChunkGen
         self.seed
     }
 
+    fn owning_plugin(&self) -> Option<&str> {
+        Some(self.plugin.name.as_str())
+    }
+
     fn step_to_biomes(&self, chunk: &mut papokin_world::ProtoChunk) {
         self.invoke_phase(papokin::plugin::world::GenerationPhase::Biomes, chunk);
         chunk.stage = papokin_world::chunk_system::StagedChunkEnum::Biomes;

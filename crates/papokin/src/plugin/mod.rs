@@ -96,6 +96,7 @@ pub trait DynEventHandler: Send + Sync {
     fn source(&self) -> Option<&str> {
         None
     }
+
 }
 
 /// 与 Bukkit 兼容的分发顺序：`Lowest` 最先，`Highest` 最后；排序稳定，
@@ -204,6 +205,7 @@ where
     fn source(&self) -> Option<&str> {
         self.source.as_deref()
     }
+
 }
 
 /// 事件处理器映射的类型别名，其键为静态字符串
@@ -260,6 +262,11 @@ pub struct PluginManager {
     // 用于热重载的后台任务
     hot_reload_task: RwLock<Option<JoinHandle<()>>>,
     hot_reload_enabled: AtomicBool,
+    /// 反向引用所属服务器（弱引用，避免循环）。
+    ///
+    /// 插件卸载/禁用时需要清扫世界持有的插件资源（如自定义
+    /// 区块生成器），这些资源挂在 `Server.worlds` 之下。
+    server: SyncRwLock<Option<std::sync::Weak<crate::server::Server>>>,
     // 创建插件管理器所在线程的线程 ID。
     // 权限提示使用 rustyline，它仅在此线程上是安全的。
     main_thread_id: ThreadId,
@@ -318,7 +325,41 @@ impl PluginManager {
             state_notify: Arc::new(Notify::new()),
             hot_reload_task: RwLock::new(None),
             hot_reload_enabled: AtomicBool::new(false),
+            server: SyncRwLock::new(None),
             main_thread_id: std::thread::current().id(),
+        }
+    }
+
+    /// 绑定所属服务器（服务器构造完成后调用一次）。
+    pub fn set_server(&self, server: &Arc<crate::server::Server>) {
+        *self
+            .server
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::downgrade(server));
+    }
+
+    /// 把所有世界中仍由该插件提供的自定义区块生成器恢复为原版。
+    ///
+    /// 生成器内持 `Arc<WasmPlugin>`：不恢复则 [`Level`] 永久钉住
+    /// 整份插件对象（每次卸载/禁用即泄漏一份），且卸载后触发的
+    /// 区块生成会调用已销毁的 WASM 实例。
+    fn restore_plugin_chunk_generators(&self, name: &str) {
+        let server = self
+            .server
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade);
+        let Some(server) = server else {
+            return;
+        };
+        for world in server.worlds.load().iter() {
+            if world.level.reset_world_gen_if_owned_by(name) {
+                info!(
+                    "已把世界 {} 的区块生成器恢复为原版（插件 {name} 已卸载/禁用）",
+                    world.level.level_folder.root_folder.display()
+                );
+            }
         }
     }
 
@@ -1427,6 +1468,7 @@ impl PluginManager {
         plugin.context.unregister_commands();
         self.unregister_all_service_providers(name);
         self.unregister_all_incoming_channels(name);
+        self.restore_plugin_chunk_generators(name);
 
         if let Some(instance) = plugin.instance.take() {
             // 活动插件在卸载前会被优雅地禁用。
@@ -1490,6 +1532,7 @@ impl PluginManager {
         context.unregister_commands();
         self.unregister_all_service_providers(name);
         self.unregister_all_incoming_channels(name);
+        self.restore_plugin_chunk_generators(name);
         instance.on_disable(context).await.ok();
 
         {
@@ -1758,7 +1801,6 @@ impl PluginManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|r| r.plugin != plugin);
     }
-
     ///返回 `service` 的所有活动提供者，按优先级降序排序
     /// 优先级排序（其次按注册顺序）。
     #[must_use]

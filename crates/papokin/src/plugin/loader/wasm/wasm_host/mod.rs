@@ -128,6 +128,7 @@ impl Drop for PluginRuntime {
     }
 }
 
+
 pub enum PluginInstance {
     V0_1(wit::v0_1::Plugin),
 }
@@ -135,6 +136,11 @@ pub enum PluginInstance {
 pub struct WasmPlugin {
     pub plugin_instance: Arc<PluginInstance>,
     pub store: concurrent_store::LegacyStore,
+    /// 插件清单中的名称。
+    ///
+    /// 世界生成器等按插件归属回收的资源以此匹配：卸载/禁用
+    /// 时只恢复仍由该插件持有的资源，不误伤其他插件。
+    pub name: String,
 }
 
 /// 未配置 `max_memory_mb` 时对插件施加的默认内存上限。
@@ -290,6 +296,7 @@ impl PluginRuntime {
         let wasm_plugin = Arc::new(WasmPlugin {
             plugin_instance: Arc::new(plugin_instance),
             store,
+            name: metadata.name.clone(),
         });
         let weak_plugin = Arc::downgrade(&wasm_plugin);
         wasm_plugin

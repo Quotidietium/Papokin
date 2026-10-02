@@ -335,6 +335,8 @@ impl Server {
             level_info,
         };
         let server = Arc::new(server);
+        // 供插件卸载/禁用时回扫世界持有的插件资源（如自定义区块生成器）。
+        server.plugin_manager.set_server(&server);
 
         // 加载服务器级权限声明（permissions.toml）（如果有）。
         if let Err(error) = permissions_file::load_permissions_file(

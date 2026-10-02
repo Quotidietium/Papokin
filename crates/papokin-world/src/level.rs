@@ -98,6 +98,12 @@ pub struct Level {
     entity_saver: Arc<EntitySaver>,
 
     pub world_gen: ArcSwap<WorldGenerator>,
+    /// 世界创建时的原版生成器快照。
+    ///
+    /// 自定义生成器（如插件经 `set_world_gen` 注册）在其提供者
+    /// 卸载后必须能恢复为原版，否则 [`Level`] 会永久持有指向
+    /// 已销毁插件实例的生成器。
+    vanilla_world_gen: Arc<WorldGenerator>,
 
     /// 处理运行时光照更新
     pub light_engine: DynamicLightEngine,
@@ -271,7 +277,8 @@ impl Level {
         let level_ref = Arc::new(Self {
             seed,
             world_portal: ArcSwap::new(Arc::new(None)),
-            world_gen: ArcSwap::new(world_gen),
+            world_gen: ArcSwap::new(Arc::clone(&world_gen)),
+            vanilla_world_gen: world_gen,
             level_folder,
             lighting_config: level_config.lighting,
             light_engine: DynamicLightEngine::new(dim_min_y, dim_min_y + dim_height),
@@ -320,6 +327,24 @@ impl Level {
     #[must_use]
     pub fn world_gen(&self) -> Arc<WorldGenerator> {
         self.world_gen.load_full()
+    }
+
+    /// 若当前生成器是由 `plugin` 提供的自定义生成器，恢复为原版生成器。
+    ///
+    /// 插件卸载/禁用后其 WASM 实例即被销毁；若世界仍持有该插件
+    /// 注册的生成器，`Arc` 会把整份插件对象永久钉住，且任何后续
+    /// 区块生成都会调用已销毁实例。仅当当前生成器仍属于该插件时
+    /// 才恢复（不覆盖此后其他插件注册的生成器）。返回是否恢复。
+    pub fn reset_world_gen_if_owned_by(&self, plugin: &str) -> bool {
+        let current = self.world_gen.load_full();
+        let WorldGenerator::Custom(custom) = &*current else {
+            return false;
+        };
+        if custom.owning_plugin() != Some(plugin) {
+            return false;
+        }
+        self.world_gen.store(Arc::clone(&self.vanilla_world_gen));
+        true
     }
 
     pub fn spawn_entity_generation(self: &Arc<Self>, pos: Vector2<i32>) {
