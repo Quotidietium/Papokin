@@ -65,6 +65,13 @@ pub struct GenerationSchedule {
     /// 在此暂停等待，当区块数据到达时由 `check_waiting_tasks()` 重新排队。
     waiting_for_chunks: HashSetType<NodeKey>,
 
+    /// 各位置的连续生成失败次数：达到 [`MAX_GENERATION_RETRIES`]
+    /// 后放弃重排并失败化等待方，避免确定性失败（如插件生成器对
+    /// 特定区块必崩）让监听器/票据随无限重试永久挂起。
+    /// 生成成功后清除；条目数超 [`MAX_GENERATION_FAILURE_ENTRIES`]
+    /// 时整体清空（失败位置重获完整重试机会）。
+    generation_failures: HashMapType<ChunkPos, u8>,
+
     io_lock: IOLock,
     running_task_count: u16,
     max_in_flight: u16,
@@ -78,6 +85,15 @@ pub struct GenerationSchedule {
     last_unload: std::time::Instant,
     generation_pool: Arc<rayon::ThreadPool>,
 }
+
+/// 同一位置允许的最大连续生成失败次数：达到后放弃重排并
+/// 失败化等待中的监听器（oneshot 发送端被丢弃，等待方按
+/// 空区块兜底），防止确定性失败无限重试耗尽资源。
+const MAX_GENERATION_RETRIES: u8 = 4;
+
+/// `generation_failures` 的条目上限：失败位置异常增多时整体
+/// 清空（失败位置重获完整重试机会），防止计数表无界增长。
+const MAX_GENERATION_FAILURE_ENTRIES: usize = 4096;
 
 impl GenerationSchedule {
     fn publish_chunk(&self, pos: ChunkPos, chunk: SyncChunk) -> Option<SyncChunk> {
@@ -158,6 +174,7 @@ impl GenerationSchedule {
                     loaded_chunk_changes: level_sched.loaded_chunk_changes.clone(),
                     unload_chunks: HashSetType::default(),
                     waiting_for_chunks: HashSetType::default(),
+                    generation_failures: HashMapType::default(),
                     io_lock,
                     running_task_count: 0,
                     max_in_flight,
@@ -1078,6 +1095,7 @@ impl GenerationSchedule {
                         holder.public = true;
                         trace!("通知玩家：区块 {:?} 已从磁盘加载（Full 状态）", pos);
                         self.listener.process_new_chunk(pos, data);
+                        self.generation_failures.remove(&pos);
                     }
                     Chunk::Proto(_) => {
                         if holder.public {
@@ -1128,6 +1146,7 @@ impl GenerationSchedule {
                                         new_pos
                                     );
                                     self.listener.process_new_chunk(new_pos, &chunk);
+                                    self.generation_failures.remove(&new_pos);
                                     holder.chunk = Some(Chunk::Level(chunk));
                                 } else {
                                     holder.chunk = Some(Chunk::Level(chunk));
@@ -1141,6 +1160,7 @@ impl GenerationSchedule {
                                     if let Some(pc) = self.public_chunk_map.get(&new_pos) {
                                         trace!("通知玩家：{:?} 处有新区块（生成完成）", new_pos);
                                         self.listener.process_new_chunk(new_pos, &pc);
+                                        self.generation_failures.remove(&new_pos);
                                     } else {
                                         error!(
                                             "严重：插入后立即从 public_chunk_map 获取区块 {:?} 失败！",
@@ -1211,9 +1231,17 @@ impl GenerationSchedule {
                     fail_pos, stage, error
                 );
 
-                if let Some(mut holder) = self.chunk_map.remove(&pos) {
-                    let target_stage = holder.target_stage;
+                // 连续失败计数：超过上限说明失败是确定性的（如插件
+                // 生成器对特定区块必崩），无限重排只会让等待该区块的
+                // 监听器/票据永久挂起并空烧生成流水线。
+                let failures = self.generation_failures.entry(pos).or_insert(0);
+                *failures += 1;
+                let give_up = *failures > MAX_GENERATION_RETRIES;
+                if self.generation_failures.len() > MAX_GENERATION_FAILURE_ENTRIES {
+                    self.generation_failures.clear();
+                }
 
+                if let Some(mut holder) = self.chunk_map.remove(&pos) {
                     if !holder.occupied.is_null() {
                         if self.graph.nodes.contains_key(holder.occupied) {
                             self.drop_node(holder.occupied);
@@ -1229,44 +1257,62 @@ impl GenerationSchedule {
                         }
                     }
 
-                    holder.current_stage = StagedChunkEnum::None;
-                    holder.dependency_stage = StagedChunkEnum::None;
-                    holder.chunk = None;
+                    if give_up {
+                        // 不重新排队、不回插持有者：等待该区块的
+                        // 监听器被失败化，fetch_chunk 等待方以空区块
+                        // 兜底并释放票据。失败计数保留——票据驱动再次
+                        // 创建持有者时，下一次失败会立即放弃，而不会
+                        // 重复完整重试序列；生成成功后计数被清除。
+                        error!(
+                            "区块 {:?} 已连续生成失败，放弃重排（等待方按空区块兜底）",
+                            pos
+                        );
+                        self.listener.fail_chunk_listeners(pos);
+                    } else {
+                        let target_stage = holder.target_stage;
 
-                    for i in (StagedChunkEnum::None as usize + 1)..=(target_stage as usize) {
-                        let stage_enum = StagedChunkEnum::from(i as u8);
-                        let task_node = Node::new(pos, stage_enum);
-                        holder.tasks[i] = self.graph.nodes.insert(task_node);
+                        holder.current_stage = StagedChunkEnum::None;
+                        holder.dependency_stage = StagedChunkEnum::None;
+                        holder.chunk = None;
 
-                        if i > (StagedChunkEnum::None as usize + 1) {
-                            self.graph.add_edge(holder.tasks[i - 1], holder.tasks[i]);
+                        for i in (StagedChunkEnum::None as usize + 1)..=(target_stage as usize) {
+                            let stage_enum = StagedChunkEnum::from(i as u8);
+                            let task_node = Node::new(pos, stage_enum);
+                            holder.tasks[i] = self.graph.nodes.insert(task_node);
+
+                            if i > (StagedChunkEnum::None as usize + 1) {
+                                self.graph.add_edge(holder.tasks[i - 1], holder.tasks[i]);
+                            }
                         }
-                    }
 
-                    if target_stage > StagedChunkEnum::None {
-                        let first_task = holder.tasks[StagedChunkEnum::None as usize + 1];
-                        if let Some(node) = self.graph.nodes.get_mut(first_task) {
-                            node.in_queue = true;
+                        if target_stage > StagedChunkEnum::None {
+                            let first_task = holder.tasks[StagedChunkEnum::None as usize + 1];
+                            if let Some(node) = self.graph.nodes.get_mut(first_task) {
+                                node.in_queue = true;
+                            }
+                            self.queue.push(TaskHeapNode(
+                                Self::calc_priority(
+                                    &self.last_level,
+                                    &self.last_high_priority,
+                                    pos,
+                                    StagedChunkEnum::from(1),
+                                ) - 50,
+                                first_task,
+                            ));
                         }
-                        self.queue.push(TaskHeapNode(
-                            Self::calc_priority(
-                                &self.last_level,
-                                &self.last_high_priority,
-                                pos,
-                                StagedChunkEnum::from(1),
-                            ) - 50,
-                            first_task,
-                        ));
+
+                        self.chunk_map.insert(pos, holder);
+
+                        warn!(
+                            "区块 {:?} 已重置为 None 并重新排队等待生成（目标: {:?}）",
+                            pos, target_stage
+                        );
                     }
-
-                    self.chunk_map.insert(pos, holder);
-
-                    warn!(
-                        "区块 {:?} 已重置为 None 并重新排队等待生成（目标: {:?}）",
-                        pos, target_stage
-                    );
                 } else {
                     error!("找不到失败区块 {:?} 对应的持有者", pos);
+                    if give_up {
+                        self.listener.fail_chunk_listeners(pos);
+                    }
                 }
             }
         }

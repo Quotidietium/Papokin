@@ -35,6 +35,16 @@ impl ChunkListener {
         rx
     }
 
+    /// 失败化 `pos` 的全部单区块监听器：移除并丢弃发送端，
+    /// 等待方（如 `fetch_chunk`）的 `recv` 以 Err 结束并按
+    /// 空区块兜底。用于生成被永久放弃时释放等待任务与票据。
+    pub fn fail_chunk_listeners(&self, pos: ChunkPos) {
+        self.single
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(listen_pos, _)| *listen_pos != pos);
+    }
+
     pub fn add_global_chunk_listener(&self) -> Receiver<(ChunkPos, Weak<crate::chunk::ChunkData>)> {
         let (tx, rx) = crossbeam::channel::unbounded();
         self.global
