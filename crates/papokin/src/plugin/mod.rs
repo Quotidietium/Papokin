@@ -37,6 +37,23 @@ pub const PLUGIN_API_VERSION: u32 = 6;
 
 pub(crate) const PLUGIN_DIR: &str = "./plugins";
 
+/// 将用户/插件输入的插件文件名解析为插件目录内的路径。
+/// 只接受裸文件名：拒绝空串、绝对路径以及任何含分隔符或
+/// `..` 的输入，防止目录穿越到插件目录之外。
+pub(crate) fn resolve_plugin_file(file_name: &str) -> Result<std::path::PathBuf, String> {
+    let mut components = std::path::Path::new(file_name).components();
+    let is_bare_name = !file_name.is_empty()
+        && matches!(components.next(), Some(std::path::Component::Normal(_)))
+        && components.next().is_none();
+    if is_bare_name {
+        Ok(std::path::Path::new(PLUGIN_DIR).join(file_name))
+    } else {
+        Err(format!(
+            "无效的插件文件名“{file_name}”：只允许插件目录内的裸文件名"
+        ))
+    }
+}
+
 /// 插件名会用作文件系统路径组件（`plugins/data/<name>/`）、
 /// 权限命名空间（`<name>:<node>`）以及注册表键。拒绝
 /// 可能越出数据目录或破坏上述用途的名称。
@@ -2055,6 +2072,31 @@ impl PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_plugin_file_accepts_bare_names() {
+        let path = resolve_plugin_file("myplugin.wasm").unwrap();
+        assert_eq!(
+            path,
+            std::path::Path::new(super::PLUGIN_DIR).join("myplugin.wasm")
+        );
+    }
+
+    #[test]
+    fn resolve_plugin_file_rejects_traversal_and_non_bare_names() {
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../evil.wasm",
+            "dir/plugin.wasm",
+            r"dir\plugin.wasm",
+            "/abs.wasm",
+            r"C:bs.wasm",
+        ] {
+            assert!(resolve_plugin_file(bad).is_err(), "应当拒绝: {bad}");
+        }
+    }
 
     #[tokio::test]
     async fn topological_sort() {

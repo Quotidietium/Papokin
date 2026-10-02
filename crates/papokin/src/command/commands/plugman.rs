@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::path::{Component, Path, PathBuf};
 
 use papokin_util::PermissionLvl;
 use papokin_util::permission::{Permission, PermissionDefault, PermissionRegistry};
@@ -13,27 +12,10 @@ use crate::command::node::dispatcher::CommandDispatcher;
 use crate::command::node::{CommandExecutor, CommandExecutorResult};
 use crate::command::suggestion::provider::{SuggestionProvider, SuggestionProviderResult};
 use crate::command::suggestion::suggestions::SuggestionsBuilder;
-use crate::plugin::PLUGIN_DIR;
+use crate::plugin::{PLUGIN_DIR, resolve_plugin_file};
 
 const DESCRIPTION: &str = "动态管理插件：启用、禁用、加载与卸载。";
 const PERMISSION: &str = "papokin:command.plugman";
-
-/// 将用户输入的插件文件名解析为插件目录内的路径。
-/// 只接受裸文件名：拒绝空串、绝对路径以及任何含分隔符或
-/// `..` 的输入，防止目录穿越到插件目录之外。
-fn resolve_plugin_file(file_name: &str) -> Result<PathBuf, String> {
-    let mut components = Path::new(file_name).components();
-    let is_bare_name = !file_name.is_empty()
-        && matches!(components.next(), Some(Component::Normal(_)))
-        && components.next().is_none();
-    if is_bare_name {
-        Ok(Path::new(PLUGIN_DIR).join(file_name))
-    } else {
-        Err(format!(
-            "无效的插件文件名“{file_name}”：只允许插件目录内的裸文件名"
-        ))
-    }
-}
 
 /// 建议当前处于启用状态的插件名（`disable` 用）。
 struct EnabledPluginSuggestions;
@@ -350,33 +332,4 @@ pub fn register(dispatcher: &mut CommandDispatcher, registry: &PermissionRegistr
                 ),
             ),
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_plugin_file;
-    use crate::plugin::PLUGIN_DIR;
-    use std::path::Path;
-
-    #[test]
-    fn resolve_plugin_file_accepts_bare_names() {
-        let path = resolve_plugin_file("myplugin.wasm").unwrap();
-        assert_eq!(path, Path::new(PLUGIN_DIR).join("myplugin.wasm"));
-    }
-
-    #[test]
-    fn resolve_plugin_file_rejects_traversal_and_non_bare_names() {
-        for bad in [
-            "",
-            ".",
-            "..",
-            "../evil.wasm",
-            "dir/plugin.wasm",
-            r"dir\plugin.wasm",
-            "/abs.wasm",
-            r"C:\abs.wasm",
-        ] {
-            assert!(resolve_plugin_file(bad).is_err(), "应当拒绝: {bad}");
-        }
-    }
 }
