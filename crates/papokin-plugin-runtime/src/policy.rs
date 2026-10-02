@@ -67,6 +67,28 @@ impl LegacySyncReentry {
         drop(admission);
         output
     }
+
+    /// 用当前准入链（若有）包裹 `future`，使派生任务继承同一
+    /// 因果链：链内的 Store 调用走重入路由，不再申请根准入
+    /// （根信号量容量为 1，链持有期间重复申请必然自锁——例如
+    /// 插件经宿主 API 动态加载新插件时，其初始化任务若申请
+    /// 根准入，便会与正持有根并等待加载完成的调用链互相等待）。
+    ///
+    /// 上下文在调用时立即捕获，因此包裹后的 future 可安全送入
+    /// 新任务；不在任何链中时是透明的直通包装。
+    pub fn wrap_inherited<T>(
+        self,
+        future: impl Future<Output = T> + Send,
+    ) -> impl Future<Output = T> + Send {
+        let context = self.inherited_context();
+        async move {
+            if let Some(context) = context {
+                scope(context, future).await
+            } else {
+                future.await
+            }
+        }
+    }
 }
 
 impl Default for LegacySyncReentry {

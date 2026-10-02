@@ -134,4 +134,8 @@ impl PluginLoader for WasmPluginLoader {
     fn can_unload(&self) -> bool {
         true
     }
+
+    fn reentry_policy(&self) -> Option<LegacySyncReentry> {
+        Some(self.legacy_sync_reentry.clone())
+    }
 }

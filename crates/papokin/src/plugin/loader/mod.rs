@@ -31,6 +31,15 @@ pub trait PluginLoader: Send + Sync {
 
     /// 检查插件能否被安全卸载。
     fn can_unload(&self) -> bool;
+
+    /// 该加载器创建的 Store 所属的重入准入策略（仅 Wasm 加载器有）。
+    /// 插件管理器用它把派生的初始化任务包进调用方的因果链：
+    /// 插件经宿主 API 动态加载新插件时，调用链正持有根准入，
+    /// 初始化任务若不继承该链而另行申请根准入（信号量容量为 1），
+    /// 双方会互相等待形成自锁。
+    fn reentry_policy(&self) -> Option<papokin_plugin_runtime::LegacySyncReentry> {
+        None
+    }
 }
 
 /// 统一的加载器错误类型

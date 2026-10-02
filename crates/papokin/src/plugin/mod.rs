@@ -752,7 +752,13 @@ impl PluginManager {
         // 下面的插件按名称查找，绝不按向量位置查找：
         // 并发卸载（如热重载）会移动索引，这可能
         // 否则会更新或移除错误的插件。
-        let task = server.spawn_task(async move {
+        //
+        // 初始化任务经 reentry_policy 继承调用方的因果链：插件经
+        // 宿主 API 动态加载时，调用链正持有根准入，任务内对 Store
+        // 的调用必须走重入路由而非重复申请根准入（信号量容量为 1，
+        // 重复申请会与等待加载完成的调用链互相等待而自锁）；
+        // 启动期/指令路径不在链中，包装是透明的直通。
+        let init_future = async move {
             // 初始化插件
             match instance.on_load(context.clone()).await {
                 Ok(()) => {
@@ -876,7 +882,12 @@ impl PluginManager {
                     error!("初始化插件 {plugin_name} 失败：{error_msg}",);
                 }
             }
-        });
+        };
+
+        let task = match loader.reentry_policy() {
+            Some(reentry) => server.spawn_task(reentry.wrap_inherited(init_future)),
+            None => server.spawn_task(init_future),
+        };
 
         Ok(task)
     }
