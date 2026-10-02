@@ -1548,6 +1548,16 @@ impl PluginManager {
 
     /// 按名称卸载插件
     pub async fn unload_plugin(&self, name: &str) -> Result<(), ManagerError> {
+        // 加载进行中的插件实例尚未就位（初始化任务仍在运行）：此时
+        // 卸载会在任务完成后留下半注册项指向已被销毁的存储，明确拒绝。
+        if matches!(
+            self.get_plugin_state(name).await,
+            Some(PluginState::Loading)
+        ) {
+            return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                format!("插件 \"{name}\" 正在加载，请稍后再试"),
+            )));
+        }
         let mut plugin = {
             let mut plugins = self
                 .plugins
@@ -1604,6 +1614,16 @@ impl PluginManager {
     /// 对应 Paper 的插件禁用：插件保持已加载状态，以便
     /// 仍可查看，但不再参与服务器运行。
     pub async fn disable_plugin(&self, name: &str) -> Result<(), ManagerError> {
+        // 与 unload 同理：加载进行中的插件没有可就位的实例，
+        // 明确拒绝而不是误报“未找到”。
+        if matches!(
+            self.get_plugin_state(name).await,
+            Some(PluginState::Loading)
+        ) {
+            return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                format!("插件 \"{name}\" 正在加载，请稍后再试"),
+            )));
+        }
         let (instance, context, is_active) = {
             let plugins = self
                 .plugins
@@ -1665,6 +1685,15 @@ impl PluginManager {
     /// # Errors
     /// 插件未加载、实例不存在或 `on-enable` 返回错误时以 `Err` 报告。
     pub async fn enable_plugin(&self, name: &str) -> Result<(), ManagerError> {
+        // 加载进行中的插件会由初始化任务自行完成启用，明确拒绝。
+        if matches!(
+            self.get_plugin_state(name).await,
+            Some(PluginState::Loading)
+        ) {
+            return Err(ManagerError::LoaderError(LoaderError::RuntimeError(
+                format!("插件 \"{name}\" 正在加载，请稍后再试"),
+            )));
+        }
         let (instance, context, is_active) = {
             let plugins = self
                 .plugins
