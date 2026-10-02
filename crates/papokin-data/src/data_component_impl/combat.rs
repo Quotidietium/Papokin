@@ -30,7 +30,10 @@ pub enum Operation {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Modifier {
     pub r#type: &'static Attributes,
-    pub id: &'static str,
+    /// 修饰符 ID。静态默认组件用 `Cow::Borrowed`（见生成代码），
+    /// 插件运行期生成的用 `Cow::Owned`——不能用 `&'static str`，
+    /// 那只能靠 `Box::leak` 构造，每次插件调用都永久泄漏一份。
+    pub id: Cow<'static, str>,
     pub amount: f64,
     pub operation: Operation,
     pub slot: crate::AttributeModifierSlot,

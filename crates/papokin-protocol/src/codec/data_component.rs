@@ -1812,7 +1812,7 @@ impl DataComponentCodec<Self> for AttributeModifiersImpl {
         seq.write_var_int(&VarInt::from(self.attribute_modifiers.len() as i32))?;
         for modifier in self.attribute_modifiers.iter() {
             seq.write_var_int(&VarInt::from(modifier.r#type.id as i32))?;
-            seq.write_string(modifier.id)?;
+            seq.write_string(&modifier.id)?;
             seq.write_f64(modifier.amount)?;
             seq.write_var_int(&VarInt::from(modifier.operation as i32))?;
             let slot_id = match modifier.slot {
