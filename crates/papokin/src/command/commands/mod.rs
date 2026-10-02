@@ -444,3 +444,120 @@ mod override_tests {
         assert_eq!(permission.default, PermissionDefault::Allow);
     }
 }
+
+/// 指令权限审计：把「服务器管理指令只有达到对应等级的 op
+/// 才能执行」固化为回归断言。等级划分对齐 vanilla（ban 系
+/// 3 级、stop/save 系 4 级、作弊类 2 级、玩家指令 0 级）。
+#[cfg(test)]
+mod permission_audit_tests {
+    use papokin_config::CommandsConfig;
+    use papokin_util::PermissionLvl;
+    use papokin_util::permission::PermissionManager;
+
+    use super::default_dispatcher;
+
+    /// 服务器管理类指令及其要求的 op 等级。
+    const MANAGEMENT_COMMANDS: &[(&str, PermissionLvl)] = &[
+        ("minecraft:command.stop", PermissionLvl::Four),
+        ("minecraft:command.save-all", PermissionLvl::Four),
+        ("minecraft:command.save-off", PermissionLvl::Four),
+        ("minecraft:command.save-on", PermissionLvl::Four),
+        ("minecraft:command.ban", PermissionLvl::Three),
+        ("minecraft:command.banip", PermissionLvl::Three),
+        ("minecraft:command.banlist", PermissionLvl::Three),
+        ("minecraft:command.debug", PermissionLvl::Three),
+        ("minecraft:command.deop", PermissionLvl::Three),
+        ("minecraft:command.kick", PermissionLvl::Three),
+        ("minecraft:command.op", PermissionLvl::Three),
+        ("minecraft:command.pardon", PermissionLvl::Three),
+        ("minecraft:command.pardonip", PermissionLvl::Three),
+        ("minecraft:command.raid", PermissionLvl::Three),
+        ("minecraft:command.setidletimeout", PermissionLvl::Three),
+        ("minecraft:command.tick", PermissionLvl::Three),
+        ("minecraft:command.transfer", PermissionLvl::Three),
+        ("minecraft:command.whitelist", PermissionLvl::Three),
+        // 插件动态管理属服务器管理面，与 ban/op 同级。
+        ("papokin:command.plugman", PermissionLvl::Three),
+        ("papokin:command.plugin", PermissionLvl::Three),
+        ("papokin:command.plugins", PermissionLvl::Three),
+    ];
+
+    /// 面向普通玩家的指令：0 级（非 op）必须可用。
+    const PLAYER_COMMANDS: &[&str] = &[
+        "minecraft:command.help",
+        "minecraft:command.list",
+        "minecraft:command.me",
+        "minecraft:command.msg",
+        "minecraft:command.random",
+        "minecraft:command.teammsg",
+        "minecraft:command.trigger",
+        "papokin:command.papokin",
+    ];
+
+    const ALL_LEVELS: [PermissionLvl; 5] = [
+        PermissionLvl::Zero,
+        PermissionLvl::One,
+        PermissionLvl::Two,
+        PermissionLvl::Three,
+        PermissionLvl::Four,
+    ];
+
+    #[test]
+    fn management_commands_require_op_at_their_level() {
+        let manager = PermissionManager::new();
+        let _dispatcher = default_dispatcher(&manager, &CommandsConfig::default());
+        let player = uuid::Uuid::new_v4();
+
+        for (node, required) in MANAGEMENT_COMMANDS {
+            assert!(
+                manager.has_registered_permission(node),
+                "管理指令权限节点 {node} 未注册"
+            );
+            for lvl in ALL_LEVELS {
+                assert_eq!(
+                    manager.has_permission(&player, node, lvl),
+                    lvl >= *required,
+                    "{node} 在 {lvl:?} 的权限判定错误（要求 {required:?}）"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn player_commands_stay_available_to_non_op() {
+        let manager = PermissionManager::new();
+        let _dispatcher = default_dispatcher(&manager, &CommandsConfig::default());
+        let player = uuid::Uuid::new_v4();
+
+        for node in PLAYER_COMMANDS {
+            assert!(
+                manager.has_registered_permission(node),
+                "玩家指令权限节点 {node} 未注册"
+            );
+            assert!(
+                manager.has_permission(&player, node, PermissionLvl::Zero),
+                "玩家指令 {node} 不得拒绝 0 级（非 op）玩家"
+            );
+        }
+    }
+
+    /// 任何根指令（含别名）都必须携带权限要求：新增指令忘记
+    /// `requires` 会在注册时静默变成全玩家可用，此测试把该
+    /// 回归挡在 CI。
+    #[test]
+    fn every_root_command_carries_a_requirement() {
+        let manager = PermissionManager::new();
+        let dispatcher = default_dispatcher(&manager, &CommandsConfig::default());
+
+        let roots = dispatcher.tree.get_root_children();
+        assert!(roots.len() >= 87, "根指令数量异常：{}", roots.len());
+        for id in roots {
+            let node = &dispatcher.tree[papokin_command::node::attached::NodeId(id.0)];
+            assert!(
+                !node.requirements().0.is_empty(),
+                "根指令 \"{}\" 缺少 requires 权限门",
+                node.name()
+            );
+        }
+    }
+}
