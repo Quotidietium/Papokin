@@ -293,6 +293,12 @@ const TORCH_BURNOUT_LOCK_TICKS: i64 = 1600;
 
 type TorchKey = (Uuid, BlockPos);
 
+/// 追踪表条目的摊销清扫阈值：超过该数量时在记录路径上全量清扫一次，
+/// 移除窗口外已无活动的条目。条目只在「该位置再次被查询」时才会被单独
+/// 回收，停止活动（电路停摆、火把拆除、世界卸载）的位置永不满足该条件，
+/// 不设全局清扫表会随运行时长只增不减
+const TORCH_TRACKER_SWEEP_THRESHOLD: usize = 4096;
+
 /// 单个火把位置的翻转追踪状态
 #[derive(Default)]
 struct TorchToggleTracker {
@@ -350,6 +356,7 @@ fn torch_lock_remaining(now: i64, key: &TorchKey) -> Option<i64> {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let tracker = trackers.get_mut(key)?;
+    tracker.prune(now);
     tracker.recover_if_due(now);
     if tracker.is_idle() {
         trackers.remove(key);
@@ -363,6 +370,15 @@ fn record_torch_toggle(now: i64, key: &TorchKey) -> bool {
     let mut trackers = TORCH_TRACKERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // 摊销全量清扫：窗口外已无活动的条目（含已卸载世界的残留）在此移除，
+    // 否则停止活动的位置会永久滞留表内
+    if trackers.len() > TORCH_TRACKER_SWEEP_THRESHOLD {
+        trackers.retain(|_, tracker| {
+            tracker.prune(now);
+            tracker.recover_if_due(now);
+            !tracker.is_idle()
+        });
+    }
     trackers.entry(*key).or_default().record_toggle(now)
 }
 
@@ -463,5 +479,53 @@ mod tests {
         // 上次翻转为 6；61 刻之后的新翻转到来时，历史已全部滑出窗口
         assert!(!tracker.record_toggle(6 + 61));
         assert_eq!(tracker.recent_toggles.len(), 1);
+    }
+
+    #[test]
+    fn lock_remaining_prunes_stale_history_and_reclaims_entry() {
+        let key: TorchKey = (Uuid::from_u128(0x70a1), BlockPos::new(1, 2, 3));
+        // 只翻过一次（未达烧毁阈值）且早已滑出窗口：旧实现永远不会回收该条目
+        {
+            let mut trackers = TORCH_TRACKERS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            trackers.entry(key).or_default().record_toggle(0)
+        };
+        let now = TORCH_TOGGLE_WINDOW_TICKS + 1;
+        assert_eq!(torch_lock_remaining(now, &key), None);
+        let trackers = TORCH_TRACKERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(!trackers.contains_key(&key));
+    }
+
+    #[test]
+    fn record_toggle_sweeps_stale_entries_over_threshold() {
+        let stale_world = Uuid::from_u128(0x70a2);
+        let active_key: TorchKey = (Uuid::from_u128(0x70a3), BlockPos::new(0, 0, 0));
+        let now = 10_000;
+        {
+            let mut trackers = TORCH_TRACKERS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // 超过阈值的历史条目：全部停止活动且滑出窗口
+            for i in 0..=TORCH_TRACKER_SWEEP_THRESHOLD {
+                let key = (stale_world, BlockPos::new(i as i32, 0, 0));
+                trackers.entry(key).or_default().record_toggle(0);
+            }
+            // 一个仍在窗口内的活跃条目必须被保留
+            trackers.entry(active_key).or_default().record_toggle(now)
+        };
+        assert!(!record_torch_toggle(now, &active_key));
+        let mut trackers = TORCH_TRACKERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(trackers.contains_key(&active_key));
+        assert!(!trackers.contains_key(&(stale_world, BlockPos::new(0, 0, 0))));
+        assert!(!trackers.contains_key(&(
+            stale_world,
+            BlockPos::new(TORCH_TRACKER_SWEEP_THRESHOLD as i32, 0, 0)
+        )));
+        trackers.remove(&active_key);
     }
 }
