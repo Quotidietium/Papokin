@@ -304,7 +304,13 @@ impl PluginRuntime {
             let plugin_pre = wit::v0_1::prepare_plugin(&instance_pre)
                 .map_err(PluginInitError::ApiVersionMismatch)?;
 
-            wit::v0_1::init_plugin(&self.engine, plugin_pre, &self.legacy_sync_reentry).await?
+            wit::v0_1::init_plugin(
+                &self.engine,
+                plugin_pre,
+                &self.legacy_sync_reentry,
+                Self::DEFAULT_CALL_TIMEOUT_SECONDS * 1000 / EPOCH_TICKER_INTERVAL_MS,
+            )
+            .await?
         };
 
         let store = concurrent_store::start_legacy_store(

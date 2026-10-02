@@ -125,9 +125,18 @@ pub async fn init_plugin(
     engine: &Engine,
     plugin_pre: PluginPre<PluginHostState>,
     legacy_sync_reentry: &LegacySyncReentry,
+    epoch_budget_ticks: u64,
 ) -> Result<(PluginInstance, Store<PluginHostState>, PluginMetadata), PluginInitError> {
     let mut store = Store::new(engine, PluginHostState::new());
     store.limiter(|state| &mut state.limits);
+    // 引擎开启 epoch 中断后新 store 的默认截止为 0：后台 ticker
+    // 每周期递增 epoch，组件编译耗时常已跨过若干周期，不设
+    // 截止会让实例化/start/init 元数据调用立即 trap（interrupt）。
+    // 此处的截止覆盖整个初始化阶段；初始化返回后
+    // `start_legacy_store` 的 call hook 会按预算原子量逐次重装。
+    if epoch_budget_ticks > 0 {
+        store.set_epoch_deadline(epoch_budget_ticks);
+    }
     let plugin = legacy_sync_reentry
         .scope_bootstrap(plugin_pre.instantiate_async(&mut store))
         .await
