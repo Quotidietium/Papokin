@@ -2,7 +2,7 @@
 
 > 基线：2026-09-19 由 codebase-analyzer 技能生成（采样深度分析模式），此后随代码演进持续修订。
 > 范围：`F:\Github\repo\Papokin` 全仓库，**排除 `REF/` 参考资料目录**（用户指定）
-> 规模：19 个 workspace 成员（17 crate + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2793 个 Rust 文件 · 约 150 万行 · 测试基线 1145 通过（2026-10-02）
+> 规模：19 个 workspace 成员（17 crate + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2801 个 Rust 文件 · 约 142.5 万行 · 测试基线 1185 通过（2026-10-03）
 >
 > **快照说明**：01–06 为架构分析文档，已随 Bedrock 移除与 Papokin 改名同步修订；其中 `文件:行号` 形式的证据标注可能随代码演进漂移，论断以就近代码为准。历史记录类文档（07–11、13–15）按成文时点保留，记录中的旧状态是其历史事实的一部分。
 
@@ -28,18 +28,19 @@
 | [12-插件API文档.md](12-插件API文档.md) | 插件开发者参考文档：架构总览、快速上手（wasm32-wasip2 构建/部署/热重载）、生命周期与依赖、事件系统（367 类型/优先级/取消语义）、调度器（含 EntityScheduler 与即时取消语义）、命令、双层权限（含运行时附件命名空间约束）、配置（原子写）、服务/IPC/插件消息、数据存储（数据文件夹+PersistentDataHolder）、Server/World/Entity/Player 方法面、AI 目标（内建 + AiGoalManager 自定义注册）、世界生成（GeneratorManager）、沙箱权限与日志、API 面统计与版本策略 | — |
 | [13-插件API覆盖复核-当前代码vs-Papo.md](13-插件API覆盖复核-当前代码vs-Papo.md) | 覆盖复核（锚定 b6af9b3c7）：11 的 12 项机制逐项验证属实；拉宽到 Papo 全 API 面的子系统覆盖矩阵（org.bukkit 1268 文件 + Paper 扩展）；896 WIT 函数/273 事件/288 fire 点实测；剩余缺口排序（Registry/Tag 体系最大）；勘误：world.spawn-entity/get-entities 存在，EntityScheduler 可无头 e2e | — |
 | [14-全仓汉化实现记录.md](14-全仓汉化实现记录.md) | 实现记录：全仓 Rust 源码注释+运行时文本汉化（2026-09-22）；范围/规则/管线、应用统计、门禁全绿、引出的 clippy/fmt/断言同步坑与修复清单；现行规范见仓库根 `tmp_i18n_guide.md` | — |
-| [15-安全与稳定性审计-入站包输入信任.md](15-安全与稳定性审计-入站包输入信任.md) | 持续审计（2026-09-26 起，十轮）：网络入界面（61 个 play 处理器+登录前网络面+RCON/代理/认证）、存档完整性（NBT 写侧/方块实体/实体快照/保存管线）、事件取消语义（413 fire 点全核）、写放大与关停、库存/容器并发（条带锁+原子槽位原语）、tick panic 隔离、实体高负载上界；§十五 反作弊职责边界调整（玩法稽查全部移交插件，两轮裁决）；§十六 部署后热修（纹理域名白名单归一化、挖掘阈值 0.8、旧版客户端挖掘工具对应错乱五连修：block_id_remap 生成器+UpdateTags 重映射+首条匹配语义、磁盘深度清理 24GB 与 tools/clean_stale_artifacts.py（二轮再清 16.44GB：修脚本漏扫根 target/指纹键名不匹配双 bug、新增被取代同单元产物规则、`~/.cargo` 修剪事故补记）、UpdateTags 全类别跨版本 id 审计（game_event 省略/fluid 换序，**fluid 换序后经勘误移除**——浸水岩浆红屏根因；二轮勘误：同步类注册表标签 id 此前全按 26_3 空间错发，已改按各版本同步表空间并按冻结/同步时代收紧门控）、挖掘速度水下/漂浮修正与世界生成双层植物补上半（向日葵只剩下半方块——simple_block 地物不走 placed 钩子，新增生成期伴随方块钩子；二轮数据驱动终检补小垂滴叶并确认其余灾区无恙））；最终基线 1145+ 测试通过 | — |
+| [15-安全与稳定性审计-入站包输入信任.md](15-安全与稳定性审计-入站包输入信任.md) | 持续审计（2026-09-26 起，十轮）：网络入界面（61 个 play 处理器+登录前网络面+RCON/代理/认证）、存档完整性（NBT 写侧/方块实体/实体快照/保存管线）、事件取消语义（413 fire 点全核）、写放大与关停、库存/容器并发（条带锁+原子槽位原语）、tick panic 隔离、实体高负载上界；§十五 反作弊职责边界调整（玩法稽查全部移交插件，两轮裁决）；§十六 部署后热修（纹理域名白名单归一化、挖掘阈值 0.8、旧版客户端挖掘工具对应错乱五连修：block_id_remap 生成器+UpdateTags 重映射+首条匹配语义、磁盘深度清理 24GB 与 tools/clean_stale_artifacts.py（二轮再清 16.44GB：修脚本漏扫根 target/指纹键名不匹配双 bug、新增被取代同单元产物规则、`~/.cargo` 修剪事故补记）、UpdateTags 全类别跨版本 id 审计（game_event 省略/fluid 换序，**fluid 换序后经勘误移除**——浸水岩浆红屏根因；二轮勘误：同步类注册表标签 id 此前全按 26_3 空间错发，已改按各版本同步表空间并按冻结/同步时代收紧门控；三轮勘误：POI 恢复全版本下发、game_event 经闭式 remap 对 1.21.11 恢复下发，省略收窄为 1.17-1.21.9+26.1）、挖掘速度水下/漂浮修正与世界生成双层植物补上半（向日葵只剩下半方块——simple_block 地物不走 placed 钩子，新增生成期伴随方块钩子；二轮数据驱动终检补小垂滴叶并确认其余灾区无恙））；最终基线 1145+ 测试通过 | — |
+| [16-CPU异常占用根因与修复.md](16-CPU异常占用根因与修复.md) | CPU 异常占用根因（2026-10-03）：rayon 全局池默认拉满核数，游戏刻每刻十余次池级 fork-join 的「唤醒→窃取空旋→驻留」固定开销在 Windows GNU 模拟 TLS 下被放大，1 个 AFK 玩家即烧 2.345 核；修复=池限容 `(核数/4).clamp(4,8)`（`PAPOKIN_RAYON_THREADS` 可调）+ 每刻 fork-join 粗化（小集合串行快路径全表），降至 0.192 核；含诊断工具链（进程 CPU 差值口径/线程栈采样）与 shell 环境坑 | — |
 
 ## 核心发现（十件事）
 
-1. **三执行域**：tokio（网络/IO/插件驱动）+ rayon 全局池（并行模拟）+ 每世界 `ChunkGen` 专用池；`main.rs:44` 的"rayon 不得阻塞 tokio"是全库并发纪律。
-2. **单一 tick 真源**：`Server-Ticker` 专用线程 50ms/tick，世界/玩家/实体/方块计划 tick/刷怪全部 rayon 分批并行；网络包在 `Player::tick` 开头消费（≤64/tick）。
+1. **三执行域**：tokio（网络/IO/插件驱动）+ rayon 全局池（并行模拟，限容 `(核数/4).clamp(4,8)`，根因见 16）+ 每世界 `ChunkGen` 专用池；`main.rs:44` 的"rayon 不得阻塞 tokio"是全库并发纪律。
+2. **单一 tick 真源**：`Server-Ticker` 专用线程 50ms/tick，世界/玩家/实体/方块计划 tick/刷怪全部 rayon 分批并行（小集合走串行快路径）；网络包在 `Player::tick` 开头消费（≤64/tick）。
 3. **红石双路径**：tick 开头 `flush_synced_block_events`（同步方块事件）+ `tick_chunks` 第一步计划 block tick（`world/mod.rs:1513,1963`）。
 4. **区块生成 DAG**：`StagedChunkEnum` 11 阶段（Empty→Biomes→…→Lighting→Spawn→Full），`Schedule` 专用线程 + 4 读 1 写 IO 任务 + 生成池；保存支持 anvil/linear/pump 三格式，实体区块按快照整写。
-5. **插件即 WASM 组件**：WIT world `papokin:plugin@0.1.0`（API v6；30+ host import/10+ guest export），宿主与插件两侧类型都从同一契约生成，CI 强制校验不漂移。
+5. **插件即 WASM 组件**：WIT world `papokin:plugin@0.1.0`（API v7；44 host import/18 guest export，57 个 .wit），宿主与插件两侧类型都从同一契约生成，CI 强制校验不漂移。
 6. **事件可否决**：`PluginManager::fire` 先串行 blocking handler（可修改/取消事件）再非 blocking；命令、聊天、包收发等关键路径均有 veto 点（取消语义经 15 §十二全量核修）。
 7. **Brigadier 克隆命令树**：`ArcSwap<CommandDispatcher>` 支持插件装卸时**无锁换树并全体重发**命令数据包；权限谓词在解析期过滤（无权限命令不可见）。
-8. **数据即代码**：`assets/*.json` → `tools/papokin-codegen` → 73MB 静态 Rust 数据，零运行时解析成本；`*_id_remap` feature 与 `sync_id_remap` 表服务存档版本重映射（1.21.11 存档重写）。
+8. **数据即代码**：`assets/*.json` → `tools/papokin-codegen` → 约 67MB 静态 Rust 数据，零运行时解析成本；`*_id_remap` feature 与 `sync_id_remap` 表服务存档版本重映射（1.21.11 存档重写）。
 9. **不信任用户输入**：网络入界面做完整性与资源校验（登录序列一次性门控、入站水位、协议状态机）；玩法层面的稽查（移动速度/交互距离执法）不在此列——反作弊职责已整体移交插件（见 [15 §十五](15-安全与稳定性审计-入站包输入信任.md)）；存档写侧带体积预算与原子替换。
 10. **生产级健壮性**：clippy deny unwrap/expect/panic；刻内 panic 隔离（坏包只踢当事人）；panic→崩溃报告→优雅关停；30s 登录超时、keep-alive、包限速、WASM 沙箱（内存/socket/目录/签名）层层设防。
 
@@ -49,6 +50,6 @@
 
 ## 分析方法说明
 
-- 大目录（`entity/` 290 文件、`net/java/play/` 61 处理器、`mob/` 50 文件）采用"全量目录扫描 + 代表文件精读"的采样策略。
+- 大目录（`entity/` 292 文件、`net/java/play/` 61 处理器、`mob/` 48 文件）采用"全量目录扫描 + 代表文件精读"的采样策略。
 - 深度追踪由 3 个并行子代理完成（服务器核心/插件系统/命令配置认证），网络、世界、实体、支撑库由主分析直接完成。
 - `REF/` 目录按要求完全未读取。
