@@ -1,9 +1,9 @@
 # Papokin 插件 API 文档
 
-> 版本：`papokin:plugin@0.1.0`（WIT 契约）· `PLUGIN_API_VERSION = 6` · 适用 MC Java **1.21.11**
-> SDK：`crates/papokin-plugin-api` · 契约：`crates/papokin-plugin-wit/v0.1`（56 个 WIT 文件）
+> 版本：`papokin:plugin@0.1.0`（WIT 契约）· `PLUGIN_API_VERSION = 7` · 适用 MC Java **1.21.11**
+> SDK：`crates/papokin-plugin-api` · 契约：`crates/papokin-plugin-wit/v0.1`（57 个 WIT 文件）
 > 实施背景见 [11-插件API强化实现记录](11-插件API强化实现记录-Papo机制级覆盖.md)；本文是插件开发者的**参考文档**。
-> 文中示例均取自/对齐已实跑验证的 `examples/e2e-plugin`（7 个日志标记基线）。
+> 文中示例均取自/对齐已实跑验证的 `examples/e2e-plugin`（标记基线见 §16.3）。
 
 ---
 
@@ -38,7 +38,7 @@ Papokin 插件是 **WASM 组件（Component Model）**，不是 JVM 字节码。
 │  依赖 papokin-plugin-api（SDK，对 WIT 的安全封装）     │
 ├────────────────────────────────────────────────────┤
 │ WIT 契约 papokin:plugin@0.1.0                       │
-│  宿主→插件：imports（scheduler/services/world…43 接口）│
+│  宿主→插件：imports（scheduler/services/world…44 接口）│
 │  插件→宿主：exports（on-load / handle-event …）       │
 ├────────────────────────────────────────────────────┤
 │ 服务器宿主（wasmtime），事件分发 / 调度 / 权限 / 沙箱    │
@@ -357,7 +357,7 @@ context.register_permission(Permission {
 })?;
 ```
 
-> **命名空间强制**：节点**必须**以 `插件名:` 开头（如插件叫 `my-plugin`，节点必须是 `my-plugin:xxx`），否则 `register_permission` 在 enable 阶段报错 `Permission <node> must use the plugin's namespace (<name>)` 并导致插件 enable 失败（宿主校验见 `plugin/api/context.rs`）。`register_command` 的权限参数同理。
+> **命名空间强制**：节点**必须**以 `插件名:` 开头（如插件叫 `my-plugin`，节点必须是 `my-plugin:xxx`），否则 `register_permission` 在 enable 阶段报错 `权限 <节点> 必须使用插件的命名空间（<插件名>）`（全仓汉化后中文文案，`plugin/api/context.rs:363`）并导致插件 enable 失败。`register_command` 的权限参数同理。
 >
 > **运行时附件写入同规则（2026-09-28 起）**：Player 资源的 `set-permission` / `unset-permission` 等权限附件写入同样受命名空间约束——裸名称（不含 `:`）自动补 `插件名:` 前缀；带其他命名空间前缀的节点（含 `minecraft:*` 内置节点）直接报错拒绝。这堵住了插件给自己之外的命名空间授予权限的提权路径。
 
@@ -487,7 +487,7 @@ entity.has_custom_data("myplugin", "title");          // bool
 
 ## 十一、世界 / 实体 / 玩家操作
 
-WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 107 · `item-stack` 28 · `inventory` 28 · `server` 70）。
+WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 107 · `item-stack` 28 · `inventory` 28 · `server` 71）。
 
 ### 11.1 Server（70 个方法）
 
@@ -509,7 +509,7 @@ WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 �
 - 表现：`broadcast_system_message`、`play_sound`、`get_scoreboard`
 - 尺寸：`get_dimension`
 
-> **实体获取途径**：`World::spawn_entity(entity_type, pos)` 生成实体、`World::get_entities()` 枚举全图实体（world.wit:901,904，宿主 `wit/v0_1/world.rs:952,1289` 真实实现），另有事件参数、`Entity::get_nearby_entities`（邻域查询）、车辆乘客链。无**按 ID/UUID 精确查询**的接口——需按 ID 定位时枚举 `get_entities()` 过滤。
+> **实体获取途径**：`World::spawn_entity(entity_type, pos)` 生成实体、`World::get_entities()` 枚举全图实体（world.wit:1124,1138，宿主 `wit/v0_1/world.rs:1448,1111` 真实实现），另有事件参数、`Entity::get_nearby_entities`（邻域查询）、车辆乘客链。无**按 ID/UUID 精确查询**的接口——需按 ID 定位时枚举 `get_entities()` 过滤。
 
 ### 11.3 Entity / LivingEntity / Mob
 
@@ -615,7 +615,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | SDK 模块 | 内容 |
 |---|---|
 | `team.rs` | 计分板队伍：`Team / TeamSettingsBuilder / PlayerTeamExt / ScoreboardTeamExt` |
-| `scoreboard`（WIT，28 函数） | 目标/分数/显示槽 |
+| `scoreboard`（WIT，19 函数） | 目标/分数/显示槽 |
 | `boss-bar`（14 函数） | Boss 血条创建与更新 |
 | `java-dialogs` | 1.21.6+ Java 对话框 |
 | `display.rs` | 展示实体（text display 等）builder |
@@ -648,7 +648,7 @@ world.set_chunk_generator(id);   // 挂到目标世界
 | 类别 | 常量 |
 |---|---|
 | 文件 | `FS_READ_DATA`、`FS_WRITE_DATA`（仅限插件私有数据文件夹） |
-| 网络 | `NETWORK_DNS/TCP/UDP`、`NETWORK_TCP_CONNECT/BIND`、`NETWORK_UDP_CONNECT/BIND`、`NETWORK_LOOPBACK`、`NETWORK_OUTBOUND`、`HTTP_OUTBOUND` |
+| 网络 | `NETWORK_DNS/TCP/UDP`、`NETWORK_TCP_CONNECT/BIND`、`NETWORK_UDP_CONNECT/BIND`、`NETWORK_UDP_OUTGOING_DATAGRAM`、`NETWORK_LOOPBACK`、`NETWORK_OUTBOUND`、`HTTP_OUTBOUND` |
 | 系统 | `SYS_ENV`、`SYS_ENV_PREFIX(<name>.)`、`SYS_INFO`、`SYS_INFO_CPU/RAM/OS` |
 
 ### 15.2 日志
@@ -666,26 +666,28 @@ INFO E2E on_load ok  plugin.target=papokin_e2e_plugin  plugin.module=papokin_e2e
 ### 16.1 WIT 接口函数数（当前 0.1.0）
 
 ```
-world 282 · block-entity 172 · player 107 · server 70 · display 62
+world 282 · block-entity 172 · player 107 · server 71 · display 62
 text 28 · item-stack 28 · inventory 28 · command 25 · scoreboard 19
 plugin(exports) 17 · map 17 · dragon 14 · boss-bar 14 · gui 11
-datapack 9 · scheduler 7 · recipe 7 · context 6 · registry 5
-tag 4 · structure 4 · services 4 · messaging 4 · merchant 4 · loot 4
-enchantments 4 · damage-types 4 · cookie 4 · uuid 3
+datapack 9 · scheduler 7 · recipe 7 · plugin-manager 6 · context 6
+registry 5 · tag 4 · structure 4 · services 4 · messaging 4 · merchant 4
+loot 4 · enchantments 4 · damage-types 4 · cookie 4 · uuid 3
 log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余为类型/枚举定义接口
 ```
 
-（计数口径：`grep -c ': func('`，含 resource 方法；2026-09-21 基岩版移除后复核，共 56 个 .wit 文件、975 个函数。战斗六查询为 world 接口 living-entity 资源方法，计入 world。）
+`plugin-manager`（6 函数，API v7 新增）：第三方插件动态管理——枚举/查询已加载插件、按 id 启用/禁用/重载（宿主 `wit/v0_1/plugin_manager.rs`，插件自禁/自卸有守卫）。
+
+（计数口径：`grep -c ': func('`，含 resource 方法；2026-10-03 复核，共 57 个 .wit 文件、982 个函数。战斗六查询为 world 接口 living-entity 资源方法，计入 world。）
 
 ### 16.2 版本与兼容策略
 
-- `PLUGIN_API_VERSION = 6`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：第三轮 WIT 大扩面 + 事件布局变更；4→5：基岩版移除——forms/bedrock-packets 接口删除，player/event/scoreboard/text 的 Bedrock 成员摘除。）
+- `PLUGIN_API_VERSION = 7`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：第三轮 WIT 大扩面 + 事件布局变更；4→5：基岩版移除——forms/bedrock-packets 接口删除，player/event/scoreboard/text 的 Bedrock 成员摘除；6→7：新增 `plugin-manager` 接口，第三方插件动态管理。）
 - WIT 采用 **v0.1 直接演进**：允许破坏性变更（用户决策记录于 note/11）；新增函数对旧组件向后兼容（组件只导入其所需子集）。
-- 服务端版本：`0.3.0+1.21.11`；i18n 翻译按客户端版本执行。
+- 服务端版本：`0.3.13+1.21.11`；i18n 翻译按客户端版本执行。
 
 ### 16.3 端到端验证基线
 
-`examples/e2e-plugin` 实跑，无头起跑日志 **41 个去重 `E2E` 标记（2026-09-22 实测；`dragon-fight-none` 按世界发射，单世界配置下日志 42 行）**、零失败类（`*-broken/-failed/-mismatch` 等）即 API 链路健康。机制标记（新增于本轮）：
+`examples/e2e-plugin` 实跑，无头起跑日志 **`E2E` 标记零失败类（`*-broken/-failed/-mismatch` 等）即 API 链路健康**；2026-10-03 源码口径：唯一标记模板 129 个（成功路径 94，其余为失败/错误分支；较 2026-09-22 基线的 41 个去重日志标记大幅扩面）。机制标记示例：
 
 ```
 E2E registry-summary damage-type=true tag=true entry=true   ← 三管理器
