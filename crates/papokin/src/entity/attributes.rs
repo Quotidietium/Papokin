@@ -133,6 +133,46 @@ pub fn send_attribute_updates_for_living(
     world.broadcast_packet_all(&je_packet);
 }
 
+/// 为生物实体构建「全部已声明属性」的完整同步包：实体进入客户端
+/// 追踪范围时随 spawn 下发（原版 ServerEntity 行为），客户端依此
+/// 渲染骑乘血条（最大生命）与移动/攻击动画速度；玩家自身在登录
+/// 突发中也收到一份。属性 id 按升序排列以保证线格式稳定。
+#[must_use]
+pub fn full_sync_packet_for_living(
+    living: &crate::entity::living::LivingEntity,
+) -> papokin_protocol::java::client::play::CUpdateAttributes {
+    use papokin_protocol::codec::var_int::VarInt;
+    use papokin_protocol::java::client::play::AttributeModifier as JeAttrMod;
+    use papokin_protocol::java::client::play::CUpdateAttributes as JePacket;
+    use papokin_protocol::java::client::play::Property as JeProperty;
+
+    let map = living
+        .attributes
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut je_properties: Vec<JeProperty> = Vec::with_capacity(map.len());
+    for (&attr_id, inst) in map.iter() {
+        let modifiers = inst
+            .modifiers
+            .iter()
+            .map(|mod_inst| {
+                JeAttrMod::new(
+                    mod_inst.id.clone(),
+                    mod_inst.amount,
+                    mod_inst.operation as i8,
+                )
+            })
+            .collect();
+        je_properties.push(JeProperty::new(
+            VarInt(i32::from(attr_id)),
+            inst.base_value,
+            modifiers,
+        ));
+    }
+    je_properties.sort_by_key(|prop| prop.id.0);
+    JePacket::new(living.entity.entity_id.into(), je_properties)
+}
+
 impl Clone for AttributeInstance {
     fn clone(&self) -> Self {
         Self {

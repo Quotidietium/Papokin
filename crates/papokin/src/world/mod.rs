@@ -3080,6 +3080,15 @@ impl World {
             player.experience_points.load(Ordering::Relaxed).into(),
         ));
         player.last_sent_xp.store(xp_level, Ordering::Relaxed);
+        // 同步玩家自身属性：原版在登录突发中下发自身属性包（攻击
+        // 速度/交互距离等驱动客户端动画与可达判定）。
+        {
+            let packet =
+                crate::entity::attributes::full_sync_packet_for_living(&player.living_entity);
+            if !packet.properties.is_empty() {
+                player.client.try_send_packet(&packet);
+            }
+        }
         self.send_player_equipment(player);
         player
             .living_entity

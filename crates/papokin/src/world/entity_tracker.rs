@@ -374,6 +374,17 @@ impl TrackedEntity {
             }
         }
 
+        // 属性同步：原版在配对数据里随 spawn 下发实体的全部属性，
+        // 客户端依此渲染骑乘血条（最大生命）与移动/攻击动画速度。
+        if let Some(living) = self.entity.get_living_entity() {
+            let packet = crate::entity::attributes::full_sync_packet_for_living(living);
+            if !packet.properties.is_empty()
+                && let Ok(data) = client.serialize_packet(&packet)
+            {
+                client.try_enqueue_packet(data);
+            }
+        }
+
         if let Some(living) = self.entity.get_living_entity()
             && let Ok(equipment_guard) = living.entity_equipment.try_lock()
         {
