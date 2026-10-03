@@ -52,8 +52,22 @@ async fn main() {
     // wasmtime-wasi-http/rtc 已强制要求的那些）之后，才能构造任何客户端。
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // 使用具名工作线程初始化全局 Rayon 线程池
+    // 使用具名工作线程初始化全局 Rayon 线程池。
+    // 池容量刻意不拉满核数：游戏刻流水线每刻发起十余次池级 fork-join，
+    // 工作线程越多，唤醒-窃取-驻留的固定开销越大（在 Windows GNU 工具链上
+    // 因模拟 TLS 与原子操作昂贵而被放大，32 线程时实测空耗超过 2 个核，
+    // 而真实并行工作量不足 0.3 核）。少量线程即可覆盖游戏刻与区块 IO 的
+    // 并行需求；特大型服务器可用 PAPOKIN_RAYON_THREADS 环境变量调高。
+    let rayon_threads = std::env::var("PAPOKIN_RAYON_THREADS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            let cpus = thread::available_parallelism().map_or(4, std::num::NonZero::get);
+            (cpus / 4).clamp(4, 8)
+        });
     let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(rayon_threads)
         .thread_name(|i| format!("Rayon-Worker-{i}"))
         .build_global();
 
