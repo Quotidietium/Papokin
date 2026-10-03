@@ -150,3 +150,19 @@ AI 目标自定义注册（host 接线已活）· 区块生成阶段挂钩 · �
 1. 用 §七.2 的路径补 EntityScheduler 无头 e2e（spawn → 绑定任务 → remove → 断言停止），把最后一个"需真机"标记转为自动化。
 2. §五.1 的 Registry/Tag 体系若立项，先做只读 `RegistryAccess` + Startup 相位 `WritableRegistry` 两个接口，enchantment 现有注册口迁移其上。
 3. join/chat 优先级实机验证（笔记 11 §六.1）仍待真实客户端；与 1 一起构成下一轮插件轮的收尾清单。
+
+## 九、勘误（2026-10-03）
+
+本文锚定 b6af9b3c7，此后两轮覆盖工程落地， headline 数字与 §四/§五 缺口清单已过时，现行值以 note/12 为准：
+
+| 项 | 本文（2026-09-21） | 现行（2026-10-03 实测） |
+|----|----|----|
+| WIT 文件 | 51 | **57**（新增 plugin-manager 等） |
+| 函数总数 | 896 | **982**（同口径 `grep -c ': func('`） |
+| 事件类型 | 273 | **367**（event.wit variant 实测） |
+| fire 调用点 | 288 | **404**（`grep -rn '\.fire(\|fire_blocking(\|send_cancellable!'` 原始口径；note/15 §十二业务口径 413） |
+| API 版本 | 3 | **7**（4→5 基岩版移除；6→7 新增 plugin-manager 接口） |
+
+**§四缺口矩阵中已落地的行**（均经 e2e 标记实证，见 note/11 后续章节与 note/12 §11.7-11.9/§16.1）：地图（`map` 17 函数，MapView 渲染管线）、结构模板（`structure` 4 函数）、战利品表（`loot` 4 函数，查询/fill/纯数据生成）、村民交易（`merchant` 4 函数 + TradeOfferBuilder）、战斗履历（world 接口 living-entity 战斗六查询）、龙战（`dragon` 14 函数）、Cookie（`cookie` 4 函数）。§五.4 的四个独立面（LootTable/Merchant/MapView/StructureManager）相应全部消化。
+
+**仍成立的结论**：剩余最大缺口仍是通用 Registry/Tag 注册修改体系（§五.1）；Paper-only 事件族补挂（§五.2）仍只覆盖一部分（273→367 已大幅收窄，对 ~395 的剩余差距主要在 Paper-only 族）。
