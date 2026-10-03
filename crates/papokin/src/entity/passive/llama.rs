@@ -24,10 +24,12 @@ use crate::entity::{
         active_target::ActiveTargetGoal, breed::BreedGoal, escape_danger::EscapeDangerGoal,
         follow_parent::FollowParentGoal, look_around::RandomLookAroundGoal,
         look_at_entity::LookAtEntityGoal, ranged_attack::RangedAttackGoal, revenge::RevengeGoal,
-        swim::SwimGoal, tempt::TemptGoal, wander_around::WanderAroundGoal,
+        run_around_like_crazy::RunAroundLikeCrazyGoal, swim::SwimGoal, tempt::TemptGoal,
+        wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity, RangedAttackMob},
     passive::animal::{Animal, get_carpet_color_from_item},
+    passive::equine::EquineTaming,
     player::Player,
     projectile::llama_spit::LlamaSpitEntity,
 };
@@ -91,6 +93,8 @@ pub struct LlamaEntity {
     pub has_chest: AtomicBool,
     pub temper: AtomicI32,
     pub owner: AtomicCell<Option<Uuid>>,
+    /// 驯化状态机（见 `EquineTaming`），不入 NBT。
+    pub taming_timer: AtomicI32,
 }
 
 impl LlamaEntity {
@@ -110,6 +114,7 @@ impl LlamaEntity {
             has_chest: AtomicBool::new(false),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
+            taming_timer: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(llama);
         let mob_weak: Weak<dyn Mob> = {
@@ -142,6 +147,7 @@ impl LlamaEntity {
             );
             goal_selector.add_goal(4, Box::new(TemptGoal::new(1.25, TEMPT_ITEMS, false)));
             goal_selector.add_goal(5, Box::new(FollowParentGoal::new(1.0)));
+            goal_selector.add_goal(6, Box::new(RunAroundLikeCrazyGoal::new(1.2)));
             goal_selector.add_goal(7, Box::new(WanderAroundGoal::new(0.7)));
             goal_selector.add_goal(
                 8,
@@ -312,6 +318,41 @@ impl Animal for LlamaEntity {
     }
 }
 
+impl EquineTaming for LlamaEntity {
+    fn equine_temper(&self) -> &AtomicI32 {
+        &self.temper
+    }
+
+    fn equine_owner(&self) -> &AtomicCell<Option<Uuid>> {
+        &self.owner
+    }
+
+    fn equine_taming_timer(&self) -> &AtomicI32 {
+        &self.taming_timer
+    }
+
+    /// 原版羊驼温顺度上限为 30（比马低，驯化更快）。
+    fn equine_max_temper(&self) -> i32 {
+        30
+    }
+
+    fn is_equine_tamed(&self) -> bool {
+        self.is_tame()
+    }
+
+    fn equine_set_tame(&self, tame: bool) {
+        self.set_tame(tame);
+    }
+
+    fn equine_set_standing(&self, standing: bool) {
+        self.set_flag(FLAG_STANDING, standing);
+    }
+
+    fn equine_angry_sound(&self) -> Sound {
+        Sound::EntityLlamaAngry
+    }
+}
+
 impl Mob for LlamaEntity {
     fn open_rider_inventory(&self, player: &Arc<Player>) {
         let world = player.world();
@@ -331,6 +372,10 @@ impl Mob for LlamaEntity {
 
     fn as_animal(&self) -> Option<&dyn Animal> {
         Some(self)
+    }
+
+    fn is_tamed(&self) -> bool {
+        self.is_tame()
     }
 
     fn mob_write_nbt(&self, nbt: &mut NbtCompound) {
@@ -401,6 +446,7 @@ impl Mob for LlamaEntity {
     }
 
     fn mob_tick(&self, _caller: &dyn EntityBase) {
+        self.equine_taming_tick();
         self.ageable_ai_step();
     }
 
@@ -468,23 +514,39 @@ impl Mob for LlamaEntity {
         }
 
         if !self.is_baby() && !self.is_food(item_stack) {
-            // 原版交互分流：已驯服且非潜行打开驼物界面（装/卸地毯与
-            // 驮箱存取），潜行或未驯服时上马（羊驼无需鞍即可骑）。
+            // 原版交互分流：已驯服潜行打开驼物界面（装/卸地毯与驮箱），
+            // 未驯服空手上马发起驯化尝试，持非食物物品则被发怒拒绝。
             let world = player.world();
             let ent = &self.mob_entity.living_entity.entity;
-            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
-                if self.is_tame() && !player.get_entity().is_sneaking() {
+            if self.is_tame() && player.get_entity().is_sneaking() {
+                if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                     let chest_slots = if self.has_chest() {
                         LlamaScreenHandler::get_chest_slot_count(self.get_strength())
                     } else {
                         0
                     };
                     open_llama_screen(&vehicle, player, self.chest_inventory.clone(), chest_slots);
-                } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
-                    ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }
                 return true;
             }
+            // 已被骑乘时不再触发上马/界面（对齐原版 isVehicle 早退）
+            if ent.has_passengers() {
+                return true;
+            }
+            if !self.is_tame() && !item_stack.is_empty() {
+                self.equine_make_mad();
+                return true;
+            }
+            if let (Some(vehicle), Some(passenger)) = (
+                world.get_entity_by_id(ent.entity_id),
+                world.get_player_by_id(player.entity_id()),
+            ) {
+                ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
+                if !self.is_tame() {
+                    self.start_equine_taming_attempt();
+                }
+            }
+            return true;
         }
 
         self.animal_interact(player, item_stack, Sound::EntityLlamaAmbient)
