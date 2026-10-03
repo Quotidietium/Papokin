@@ -104,6 +104,10 @@ pub use advancement::*;
 #[path = "generated/recipes.rs"]
 pub mod recipes;
 
+/// 配方属性集与切石机选项的静态表（1.21.2+ UPDATE_RECIPES 同步）。
+#[cfg(feature = "recipes")]
+pub mod recipe_property_sets;
+
 #[cfg(feature = "data_component")]
 #[rustfmt::skip]
 #[path = "generated/data_component.rs"]

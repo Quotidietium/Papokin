@@ -84,7 +84,7 @@ use papokin_protocol::java::client::play::{
 };
 use papokin_protocol::java::client::play::{
     CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CServerData, CSetChunkCacheRadius,
-    CSetExperience, CSetHealth, CSetSimulationDistance, CSystemChatMessage,
+    CSetExperience, CSetHealth, CSetSimulationDistance, CSystemChatMessage, CUpdateRecipes,
 };
 use papokin_protocol::java::client::play::{CSetEntityMetadata, Metadata};
 use papokin_protocol::{
@@ -3098,6 +3098,11 @@ impl World {
         if server.advanced_config.recipe.send_recipes
             && java_client.version.load() >= JavaMinecraftVersion::V_1_21_2
         {
+            // 配方同步三件套按原版顺序下发：UPDATE_RECIPES（属性集与
+            // 切石机选项）→ RECIPE_BOOK_SETTINGS → RECIPE_BOOK_ADD。
+            if let Ok(payload) = CUpdateRecipes::build_payload(java_client.version.load()) {
+                java_client.try_send_packet(&CUpdateRecipes::new(&payload));
+            }
             let settings_packet = CRecipeBookSettings::default_closed();
             if let Ok(data) = java_client.serialize_packet(&settings_packet) {
                 java_client.send_packet_now(data).await;

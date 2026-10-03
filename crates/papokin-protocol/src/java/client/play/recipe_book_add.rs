@@ -68,7 +68,7 @@ impl<'a> CRecipeBookAdd<'a> {
     }
 }
 
-fn item_id_versioned(item: &Item, version: JavaMinecraftVersion) -> i32 {
+pub(super) fn item_id_versioned(item: &Item, version: JavaMinecraftVersion) -> i32 {
     remap_item_id_for_version(item.id, version) as i32
 }
 
@@ -94,7 +94,7 @@ fn write_item_slot_display(
     Ok(())
 }
 
-fn write_item_stack_slot_display(
+pub(super) fn write_item_stack_slot_display(
     write: &mut impl Write,
     item: &Item,
     count: u8,
