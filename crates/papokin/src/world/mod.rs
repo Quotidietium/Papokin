@@ -2557,9 +2557,9 @@ impl World {
                     self.sea_level.into(),
                 ),
                 server.advanced_config.networking.java.online_mode,
-                // 即使报告功能被禁用，这里也应保持为真。
-                // 它防止加入服务器时弹出烦人的提示。
-                true,
+                // 原版 enforce-secure-profile 默认为 false；离线服发 true
+                // 会让客户端把未签名聊天全部标记为不可信，表现反而更差。
+                false,
             ))
             .await;
 
