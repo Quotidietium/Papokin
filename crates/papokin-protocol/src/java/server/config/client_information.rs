@@ -28,6 +28,8 @@ pub struct SClientInformationConfig<'a> {
     pub text_filtering: bool,
     /// 玩家是否应出现在服务器的在线玩家列表中
     pub server_listing: bool,
+    /// 客户端的粒子显示偏好（0：全部，1：减少，2：最少；1.21.2 加入）
+    pub particle_status: VarInt,
 }
 
 impl<'a> ServerPacket<'a> for SClientInformationConfig<'a> {
@@ -52,6 +54,11 @@ impl<'a> ServerPacket<'a> for SClientInformationConfig<'a> {
         } else {
             true
         };
+        let particle_status = if version >= &JavaMinecraftVersion::V_1_21_2 {
+            bytebuf.get_var_int()?
+        } else {
+            VarInt(0)
+        };
 
         Ok(Self {
             locale,
@@ -62,6 +69,7 @@ impl<'a> ServerPacket<'a> for SClientInformationConfig<'a> {
             main_hand,
             text_filtering,
             server_listing,
+            particle_status,
         })
     }
 }
@@ -86,6 +94,9 @@ impl crate::ClientPacket for SClientInformationConfig<'_> {
         }
         if version >= &JavaMinecraftVersion::V_1_18 {
             write.write_bool(self.server_listing)?;
+        }
+        if version >= &JavaMinecraftVersion::V_1_21_2 {
+            write.write_var_int(&self.particle_status)?;
         }
         Ok(())
     }
