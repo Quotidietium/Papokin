@@ -2,10 +2,14 @@ use papokin_data::item::Item;
 use papokin_data::item_id_remap::remap_item_id_for_version;
 use papokin_data::item_stack::ItemStack;
 use papokin_data::packet::clientbound::play::RECIPE_BOOK_ADD;
+use papokin_data::recipe_property_sets::{
+    SMITHING_RECIPES, STONECUTTER_OPTIONS, SmithingBookEntry,
+};
 use papokin_data::recipes::{
     CookingRecipeType, CraftingRecipeTypes, RECIPES_COOKING, RECIPES_CRAFTING, RecipeCategoryTypes,
     RecipeIngredientTypes, RecipeResultStruct,
 };
+use papokin_data::sync_id_remap::remap_trim_pattern_id_for_version;
 use papokin_macros::java_packet;
 use papokin_util::version::JavaMinecraftVersion;
 use std::borrow::Cow;
@@ -28,6 +32,10 @@ const SLOT_DISPLAY_EMPTY: u32 = 0;
 const SLOT_DISPLAY_ANY_FUEL: u32 = 1;
 const SLOT_DISPLAY_ITEM: u32 = 4;
 const SLOT_DISPLAY_ITEM_STACK: u32 = 5;
+// 26.3 空间 id；对 1.21.11 分别重映射为 4（tag）与 5（smithing_trim），
+// 权威序取自 paper-1.21.11.jar 内建 slot_display 注册表转储
+const SLOT_DISPLAY_TAG: u32 = 6;
+const SLOT_DISPLAY_SMITHING_TRIM: u32 = 8;
 const SLOT_DISPLAY_COMPOSITE: u32 = 10;
 
 const ENTRY_FLAG_NOTIFICATION: u8 = 0x01;
@@ -523,6 +531,10 @@ impl ClientPacket for CRecipeBookAdd<'_> {
             .ok_or_else(|| WritingError::Message("smoker item must exist".into()))?;
         let campfire = Item::from_registry_key("campfire")
             .ok_or_else(|| WritingError::Message("campfire item must exist".into()))?;
+        let stonecutter = Item::from_registry_key("stonecutter")
+            .ok_or_else(|| WritingError::Message("stonecutter item must exist".into()))?;
+        let smithing_table = Item::from_registry_key("smithing_table")
+            .ok_or_else(|| WritingError::Message("smithing_table item must exist".into()))?;
 
         // 第一遍——统计并跳过 CraftingSpecial 与 CraftingDecoratedPot 条目
         let crafting_count: usize = RECIPES_CRAFTING
@@ -536,7 +548,11 @@ impl ClientPacket for CRecipeBookAdd<'_> {
             })
             .count();
         let dynamic_count = self.dynamic_recipes.len();
-        let total = crafting_count + RECIPES_COOKING.len() + dynamic_count;
+        let total = crafting_count
+            + RECIPES_COOKING.len()
+            + STONECUTTER_OPTIONS.len()
+            + SMITHING_RECIPES.len()
+            + dynamic_count;
 
         // 条目计数（VarInt）
         write.write_var_int(&VarInt(total as i32))?;
@@ -622,6 +638,36 @@ impl ClientPacket for CRecipeBookAdd<'_> {
                 campfire,
                 None,
                 Some((recipe, book_category)),
+            )?;
+            display_id += 1;
+        }
+
+        // 写入原版切石配方（静态表与 UPDATE_RECIPES 切石机选项同源，254 条）
+        for (inputs, result, count) in STONECUTTER_OPTIONS {
+            let flags = entry_flags(self.replace, true, highlight);
+            write_static_stonecutting_entry(
+                &mut write,
+                display_id,
+                *version,
+                flags,
+                stonecutter,
+                inputs,
+                result,
+                *count,
+            )?;
+            display_id += 1;
+        }
+
+        // 写入原版锻造配方（12 升级 + 18 纹饰）
+        for entry in SMITHING_RECIPES {
+            let flags = entry_flags(self.replace, true, highlight);
+            write_static_smithing_entry(
+                &mut write,
+                display_id,
+                *version,
+                flags,
+                smithing_table,
+                entry,
             )?;
             display_id += 1;
         }
@@ -1073,6 +1119,118 @@ fn write_dynamic_smithing_entry(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn write_static_stonecutting_entry(
+    write: &mut impl Write,
+    display_id: i32,
+    version: JavaMinecraftVersion,
+    flags: u8,
+    stonecutter: &Item,
+    inputs: &'static [&'static str],
+    result: &str,
+    count: u8,
+) -> Result<(), WritingError> {
+    // 静态表输入不带命名空间前缀，与 OneOf 写入器的键解析兼容
+    let ingredient = RecipeIngredientTypes::OneOf(inputs);
+
+    write.write_var_int(&VarInt(display_id))?;
+    write.write_var_int(&VarInt(RECIPE_DISPLAY_STONECUTTER))?;
+    // 配料
+    write_ingredient_slot_display(write, &ingredient, version)?;
+    // 结果
+    if let Some(item) = Item::from_registry_key(result) {
+        write_item_stack_slot_display(write, item, count, version)?;
+    } else {
+        write_empty_slot_display(write, version)?;
+    }
+    // 合成工作站（craftingStation）
+    write_item_slot_display(write, stonecutter, version)?;
+    // 组：none
+    write_optional_var_int(write, None)?;
+    // 类别（category）
+    write.write_var_int(&VarInt(CATEGORY_STONECUTTER))?;
+    // craftingRequirements：单一原料
+    write_crafting_requirements(write, &[&ingredient], version)?;
+    write.write_u8(flags)?;
+    Ok(())
+}
+
+fn write_static_smithing_entry(
+    write: &mut impl Write,
+    display_id: i32,
+    version: JavaMinecraftVersion,
+    flags: u8,
+    smithing_table: &Item,
+    entry: &SmithingBookEntry,
+) -> Result<(), WritingError> {
+    write.write_var_int(&VarInt(display_id))?;
+    write.write_var_int(&VarInt(RECIPE_DISPLAY_SMITHING))?;
+    // 模板、基底、附加物
+    write_ingredient_slot_display(write, &entry.template, version)?;
+    write_ingredient_slot_display(write, &entry.base, version)?;
+    write_ingredient_slot_display(write, &entry.addition, version)?;
+    // 结果：升级配方为物品堆；纹饰配方写纹饰演示显示（原版行为）
+    if let Some(result) = entry.result {
+        let key = result.strip_prefix("minecraft:").unwrap_or(result);
+        if let Some(item) = Item::from_registry_key(key) {
+            write_item_stack_slot_display(write, item, 1, version)?;
+        } else {
+            write_empty_slot_display(write, version)?;
+        }
+    } else {
+        write_smithing_trim_demo(write, entry.trim_pattern_id, version)?;
+    }
+    // 合成工作站（craftingStation）
+    write_item_slot_display(write, smithing_table, version)?;
+    // 组：none
+    write_optional_var_int(write, None)?;
+    // 类别（category）
+    write.write_var_int(&VarInt(CATEGORY_SMITHING))?;
+    // craftingRequirements：模板 + 基底 + 添加物
+    write_crafting_requirements(
+        write,
+        &[&entry.template, &entry.base, &entry.addition],
+        version,
+    )?;
+    write.write_u8(flags)?;
+    Ok(())
+}
+
+/// 写入标签槽位显示（`SlotDisplay.TagSlotDisplay`）：类型 id + 标签 `ResourceLocation`。
+fn write_tag_slot_display(
+    write: &mut impl Write,
+    tag: &str,
+    version: JavaMinecraftVersion,
+) -> Result<(), WritingError> {
+    write.write_var_int(&VarInt(
+        remap_slot_display_id_for_version(SLOT_DISPLAY_TAG, version) as i32,
+    ))?;
+    write.write_string(tag)?;
+    Ok(())
+}
+
+/// 写入纹饰配方的结果槽显示（`SlotDisplay.SmithingTrimDemoSlotDisplay`）。
+///
+/// 线上格式经 paper-1.21.11.jar 的记录组件与 `ByteBufCodecs.holder`
+/// 实测钉死：`base`、`material` 两个槽位显示后跟图案 `Holder`；
+/// 通用 `Holder` 编码为 id + 1（0 保留给命名引用），图案 id 即我方
+/// 登录同步的 `trim_pattern` 注册表线序。
+fn write_smithing_trim_demo(
+    write: &mut impl Write,
+    trim_pattern_id: u16,
+    version: JavaMinecraftVersion,
+) -> Result<(), WritingError> {
+    write.write_var_int(&VarInt(remap_slot_display_id_for_version(
+        SLOT_DISPLAY_SMITHING_TRIM,
+        version,
+    ) as i32))?;
+    write_tag_slot_display(write, "minecraft:trimmable_armor", version)?;
+    write_tag_slot_display(write, "minecraft:trim_materials", version)?;
+    let pattern = remap_trim_pattern_id_for_version(trim_pattern_id, version);
+    write.write_var_int(&VarInt(i32::from(pattern) + 1))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1195,6 +1353,159 @@ mod tests {
         let packet = CRecipeBookAdd::new(true, &recipes);
         for version in [JavaMinecraftVersion::V_1_21_2, JavaMinecraftVersion::V_26_3] {
             packet.write_packet_data(Vec::new(), &version).unwrap();
+        }
+    }
+
+    fn read_var_int(bytes: &[u8], pos: &mut usize) -> i32 {
+        let mut value = 0i32;
+        let mut shift = 0;
+        loop {
+            let byte = bytes[*pos];
+            *pos += 1;
+            value |= i32::from(byte & 0x7F) << shift;
+            if byte & 0x80 == 0 {
+                return value;
+            }
+            shift += 7;
+        }
+    }
+
+    #[test]
+    fn packet_entry_count_includes_static_stonecutter_and_smithing() {
+        assert_eq!(STONECUTTER_OPTIONS.len(), 254, "切石静态表应为 254 条");
+        assert_eq!(SMITHING_RECIPES.len(), 30, "锻造静态表应为 30 条");
+        let crafting_count = RECIPES_CRAFTING
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r,
+                    CraftingRecipeTypes::CraftingSpecial
+                        | CraftingRecipeTypes::CraftingDecoratedPot { .. }
+                )
+            })
+            .count();
+        let expected = crafting_count + RECIPES_COOKING.len() + 254 + 30;
+
+        let packet = CRecipeBookAdd::new(true, &[]);
+        for version in [
+            JavaMinecraftVersion::V_1_21_11,
+            JavaMinecraftVersion::V_26_3,
+        ] {
+            let mut bytes = Vec::new();
+            packet.write_packet_data(&mut bytes, &version).unwrap();
+            let mut pos = 0;
+            let total = read_var_int(&bytes, &mut pos);
+            assert_eq!(total as usize, expected, "条目计数应含切石/锻造静态表");
+        }
+    }
+
+    #[test]
+    fn trim_demo_bytes_match_vanilla_layout() {
+        // bolt（线序 id 0）在 1.21.11 下的逐字节布局：
+        // 类型 5（smithing_trim），base/material 为标签槽显示（类型 4 + 标签名），
+        // 图案 Holder = id + 1
+        let mut expected = vec![5u8, 4, 25];
+        expected.extend_from_slice(b"minecraft:trimmable_armor");
+        expected.extend_from_slice(&[4, 24]);
+        expected.extend_from_slice(b"minecraft:trim_materials");
+        expected.push(1);
+
+        let mut bytes = Vec::new();
+        write_smithing_trim_demo(&mut bytes, 0, JavaMinecraftVersion::V_1_21_11).unwrap();
+        assert_eq!(bytes, expected);
+
+        // 26.3 原生 id 空间：smithing_trim = 8、tag = 6，wild（id 17）→ 18
+        let mut expected_26 = vec![8u8, 6, 25];
+        expected_26.extend_from_slice(b"minecraft:trimmable_armor");
+        expected_26.extend_from_slice(&[6, 24]);
+        expected_26.extend_from_slice(b"minecraft:trim_materials");
+        expected_26.push(18);
+
+        let mut bytes_26 = Vec::new();
+        write_smithing_trim_demo(&mut bytes_26, 17, JavaMinecraftVersion::V_26_3).unwrap();
+        assert_eq!(bytes_26, expected_26);
+    }
+
+    #[test]
+    fn static_stonecutting_entry_uses_stonecutter_display_and_category() {
+        let (inputs, result, count) = STONECUTTER_OPTIONS
+            .iter()
+            .find(|(inputs, _, _)| inputs.len() == 1)
+            .expect("切石静态表应含单原料条目");
+        let stonecutter = Item::from_registry_key("stonecutter").unwrap();
+
+        for version in [
+            JavaMinecraftVersion::V_1_21_11,
+            JavaMinecraftVersion::V_26_3,
+        ] {
+            let mut bytes = Vec::new();
+            write_static_stonecutting_entry(
+                &mut bytes,
+                0,
+                version,
+                0,
+                stonecutter,
+                inputs,
+                result,
+                *count,
+            )
+            .unwrap();
+            // 显示 id 0，然后是切石机显示类型
+            assert_eq!(bytes[0], 0);
+            assert_eq!(bytes[1], RECIPE_DISPLAY_STONECUTTER as u8);
+            // 组为 none (0)，类别为切石（stonecutter），craftingRequirements 一个一元 holder 集
+            assert!(
+                bytes
+                    .windows(5)
+                    .any(|w| w == [0, CATEGORY_STONECUTTER as u8, 1, 1, 2]),
+                "missing stonecutter category in {bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_smithing_transform_entry_uses_smithing_display_and_category() {
+        let entry = &SMITHING_RECIPES[0]; // netherite_axe_smithing
+        assert!(entry.result.is_some());
+        let smithing_table = Item::from_registry_key("smithing_table").unwrap();
+
+        for version in [
+            JavaMinecraftVersion::V_1_21_11,
+            JavaMinecraftVersion::V_26_3,
+        ] {
+            let mut bytes = Vec::new();
+            write_static_smithing_entry(&mut bytes, 0, version, 0, smithing_table, entry).unwrap();
+            assert_eq!(bytes[0], 0);
+            assert_eq!(bytes[1], RECIPE_DISPLAY_SMITHING as u8);
+            // 组为 none (0)，类别为锻造（smithing），craftingRequirements 三个 holder 集
+            assert!(
+                bytes
+                    .windows(5)
+                    .any(|w| w == [0, CATEGORY_SMITHING as u8, 1, 3, 2]),
+                "missing smithing category in {bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn static_smithing_trim_entry_carries_trim_demo_result() {
+        let entry = SMITHING_RECIPES
+            .iter()
+            .find(|e| e.result.is_none())
+            .expect("锻造静态表应含纹饰条目");
+        let smithing_table = Item::from_registry_key("smithing_table").unwrap();
+
+        for (version, demo_type) in [
+            (JavaMinecraftVersion::V_1_21_11, 5u8),
+            (JavaMinecraftVersion::V_26_3, 8u8),
+        ] {
+            let mut bytes = Vec::new();
+            write_static_smithing_entry(&mut bytes, 0, version, 0, smithing_table, entry).unwrap();
+            assert_eq!(bytes[1], RECIPE_DISPLAY_SMITHING as u8);
+            assert!(
+                bytes.contains(&demo_type),
+                "纹饰条目应含纹饰演示显示类型 {demo_type}: {bytes:?}"
+            );
         }
     }
 }

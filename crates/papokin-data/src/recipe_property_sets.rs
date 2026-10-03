@@ -1,4 +1,4 @@
-//! 配方属性集与切石机选项的静态数据（1.21.2+ 配方同步）。
+//! 配方属性集、切石机选项与锻造配方书的静态数据（1.21.2+ 配方同步）。
 //!
 //! `ClientboundUpdateRecipesPacket`（1.21.2 起）由两段组成：
 //! - **itemSets**：7 个配方属性集（烧炼/营火输入、锻造三槽），
@@ -7,8 +7,12 @@
 //! - **stonecutterRecipes**：切石机选项列表（输入原料 → 结果
 //!   物品堆），驱动切石机 UI 的结果网格。
 //!
-//! 本表的线序与内容逐字节取自 Papo 1.21.11 实抓
-//! （UPDATE_RECIPES，全长 2819B，经 vanilla 编解码器解码核对）；
+//! [`SMITHING_RECIPES`] 则是配方书（`RECIPE_BOOK_ADD`）缺口的
+//! 另一半：原版锻造配方（升级 + 纹饰）的静态全集。
+//!
+//! 属性集与切石表的线序和内容逐字节取自 Papo 1.21.11 实抓
+//! （UPDATE_RECIPES，全长 2819B，经 vanilla 编解码器解码核对），
+//! 锻造表逐条取自 paper-1.21.11.jar 内原版数据包；
 //! 以物品名存储，发送时经 [`crate::item_id_remap`] 换算到客户端
 //! 版本的冻结 id 空间。
 
@@ -697,3 +701,337 @@ pub const STONECUTTER_OPTIONS: &[(&[&str], &str, u8)] = &[
     (&["weathered_copper"], "weathered_cut_copper_stairs", 4),
     (&["weathered_cut_copper"], "weathered_cut_copper_stairs", 1),
 ];
+
+/// 纹饰图案注册表条目名（26.3 线序，与生成注册表数据一致）。
+///
+/// 1.21.11 的 `trim_pattern` 同步 id 与 26.3 恒等（仅 1.20.2
+/// 需要重映射，见 [`crate::sync_id_remap::remap_trim_pattern_id_for_version`]）。
+pub const TRIM_PATTERN_NAMES: &[&str] = &[
+    "bolt",
+    "coast",
+    "dune",
+    "eye",
+    "flow",
+    "host",
+    "raiser",
+    "rib",
+    "sentry",
+    "shaper",
+    "silence",
+    "snout",
+    "spire",
+    "tide",
+    "vex",
+    "ward",
+    "wayfinder",
+    "wild",
+];
+
+/// 锻造配方书条目（1.21.11 原版全集：12 个下界合金升级 + 18 个盔甲纹饰）。
+///
+/// 逐条取自 paper-1.21.11.jar 内原版数据包（`data/minecraft/recipe/`
+/// 下 `smithing_transform` × 12、`smithing_trim` × 18），按配方 id
+/// 字典序排列；配料字符串沿用生成配方表约定
+/// （物品 `minecraft:*`、标签 `#minecraft:*`）。
+pub struct SmithingBookEntry {
+    /// 模板槽配料。
+    pub template: crate::recipes::RecipeIngredientTypes,
+    /// 基底槽配料。
+    pub base: crate::recipes::RecipeIngredientTypes,
+    /// 附加物槽配料。
+    pub addition: crate::recipes::RecipeIngredientTypes,
+    /// 升级配方的结果物品（`minecraft:*`）；纹饰配方为 `None`，
+    /// 此时结果槽改写纹饰演示显示（`SmithingTrimDemo`）。
+    pub result: Option<&'static str>,
+    /// 纹饰图案在 [`TRIM_PATTERN_NAMES`] 中的下标（升级配方不使用，恒为 0）。
+    pub trim_pattern_id: u16,
+}
+
+use crate::recipes::RecipeIngredientTypes::{Simple, Tagged};
+
+/// 原版锻造配方静态表，用于配方书（`RECIPE_BOOK_ADD`）条目生成。
+pub const SMITHING_RECIPES: &[SmithingBookEntry] = &[
+    // —— 下界合金升级（smithing_transform）——
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_axe"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_axe"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_boots"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_boots"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_chestplate"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_chestplate"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_helmet"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_helmet"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_hoe"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_hoe"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_horse_armor"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_horse_armor"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_leggings"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_leggings"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_nautilus_armor"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_nautilus_armor"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_pickaxe"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_pickaxe"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_shovel"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_shovel"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_spear"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_spear"),
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:netherite_upgrade_smithing_template"),
+        base: Simple("minecraft:diamond_sword"),
+        addition: Tagged("#minecraft:netherite_tool_materials"),
+        result: Some("minecraft:netherite_sword"),
+        trim_pattern_id: 0,
+    },
+    // —— 盔甲纹饰（smithing_trim）——
+    SmithingBookEntry {
+        template: Simple("minecraft:bolt_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 0,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:coast_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 1,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:dune_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 2,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:eye_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 3,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:flow_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 4,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:host_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 5,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:raiser_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 6,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:rib_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 7,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:sentry_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 8,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:shaper_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 9,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:silence_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 10,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:snout_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 11,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:spire_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 12,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:tide_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 13,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:vex_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 14,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:ward_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 15,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:wayfinder_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 16,
+    },
+    SmithingBookEntry {
+        template: Simple("minecraft:wild_armor_trim_smithing_template"),
+        base: Tagged("#minecraft:trimmable_armor"),
+        addition: Tagged("#minecraft:trim_materials"),
+        result: None,
+        trim_pattern_id: 17,
+    },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::Item;
+
+    #[test]
+    fn smithing_table_covers_vanilla_1_21_11_set() {
+        assert_eq!(SMITHING_RECIPES.len(), 30);
+        assert_eq!(
+            SMITHING_RECIPES
+                .iter()
+                .filter(|e| e.result.is_some())
+                .count(),
+            12,
+            "升级配方应为 12 条"
+        );
+        assert_eq!(
+            SMITHING_RECIPES
+                .iter()
+                .filter(|e| e.result.is_none())
+                .count(),
+            18,
+            "纹饰配方应为 18 条"
+        );
+    }
+
+    #[test]
+    fn smithing_simple_items_and_results_resolve() {
+        use crate::recipes::RecipeIngredientTypes;
+        for entry in SMITHING_RECIPES {
+            for slot in [&entry.template, &entry.base, &entry.addition] {
+                if let RecipeIngredientTypes::Simple(id) = slot {
+                    let key = id.strip_prefix("minecraft:").unwrap_or(id);
+                    assert!(
+                        Item::from_registry_key(key).is_some(),
+                        "配料物品不存在: {id}"
+                    );
+                }
+            }
+            if let Some(result) = entry.result {
+                let key = result.strip_prefix("minecraft:").unwrap_or(result);
+                assert!(
+                    Item::from_registry_key(key).is_some(),
+                    "结果物品不存在: {result}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn trim_pattern_id_matches_template_name_position() {
+        for entry in SMITHING_RECIPES.iter().filter(|e| e.result.is_none()) {
+            let crate::recipes::RecipeIngredientTypes::Simple(template) = entry.template else {
+                panic!("纹饰模板应为单物品");
+            };
+            let pattern = template
+                .strip_prefix("minecraft:")
+                .and_then(|t| t.strip_suffix("_armor_trim_smithing_template"))
+                .expect("纹饰模板名应符合 <图案>_armor_trim_smithing_template");
+            let expected = TRIM_PATTERN_NAMES
+                .iter()
+                .position(|n| *n == pattern)
+                .unwrap_or_else(|| panic!("未知纹饰图案: {pattern}"));
+            assert_eq!(
+                entry.trim_pattern_id as usize, expected,
+                "{template} 的图案 id 与注册表线序不符"
+            );
+        }
+    }
+}
