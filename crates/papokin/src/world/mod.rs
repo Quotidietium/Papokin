@@ -83,8 +83,8 @@ use papokin_protocol::java::client::play::{
     PlayerSpawnData,
 };
 use papokin_protocol::java::client::play::{
-    CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CSetExperience, CSetHealth,
-    CSystemChatMessage,
+    CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CServerData, CSetChunkCacheRadius,
+    CSetExperience, CSetHealth, CSetSimulationDistance, CSystemChatMessage,
 };
 use papokin_protocol::java::client::play::{CSetEntityMetadata, Metadata};
 use papokin_protocol::{
@@ -2647,6 +2647,49 @@ impl World {
 
         debug!("正在向 {} 发送玩家传送", player.gameprofile.name);
         player.request_teleport(position, yaw, pitch);
+
+        // 服务器信息（MOTD/图标）与视距同步：原版在登录突发中随传送
+        // 下发 SERVER_DATA 与两个距离包。CLogin 的视距字段只初始化
+        // 客户端的区块缓存，单独的距离包才驱动区块追踪半径与客户端
+        // 选项界面里的模拟距离显示。
+        let join_version = client.version.load();
+        if join_version >= JavaMinecraftVersion::V_1_19 {
+            let (motd, icon) = {
+                let status = server
+                    .get_status()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                (
+                    status.status_response.description.clone(),
+                    status.status_response.favicon.clone(),
+                )
+            };
+            client
+                .send_packet(&CServerData::new(&motd, icon.as_deref()))
+                .await;
+        }
+        if join_version >= JavaMinecraftVersion::V_1_14 {
+            client
+                .send_packet(&CSetChunkCacheRadius::new(
+                    i32::from(server.advanced_config.networking.java.view_distance.get()).into(),
+                ))
+                .await;
+        }
+        if join_version >= JavaMinecraftVersion::V_1_18 {
+            client
+                .send_packet(&CSetSimulationDistance::new(
+                    i32::from(
+                        server
+                            .advanced_config
+                            .networking
+                            .java
+                            .simulation_distance
+                            .get(),
+                    )
+                    .into(),
+                ))
+                .await;
+        }
 
         let gameprofile = &player.gameprofile;
         let player_actions = [
