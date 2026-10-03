@@ -408,9 +408,9 @@ impl TagManager {
 /// 静态标签表所用的 id 基准，因此调用方的版本重映射
 /// 对它的处理方式与对静态表 ID 完全相同。
 ///
-/// `point_of_interest_type` 没有内置名称表，因此原版新增的
-/// 其标签无法解析（它们会伴随警告被跳过）；自定义
-/// 新增内容仍能正常工作。
+/// `point_of_interest_type` 为非同步冻结注册表，不在
+/// `REGISTRY_V_26_3` 中，用下方的硬编码名称表（17 项注册序
+/// 自 1.19 起跨版本稳定，与静态标签表同基准）。
 fn vanilla_entry_id(key: RegistryKey, path: &str) -> Option<u16> {
     match key {
         RegistryKey::Block => {
@@ -426,6 +426,10 @@ fn vanilla_entry_id(key: RegistryKey, path: &str) -> Option<u16> {
         RegistryKey::GameEvent => {
             papokin_data::game_event::GameEvent::from_name(path).map(|event| event as u16)
         }
+        RegistryKey::PointOfInterestType => POINT_OF_INTEREST_NAMES
+            .iter()
+            .position(|name| *name == path)
+            .and_then(|index| u16::try_from(index).ok()),
         RegistryKey::Potion => {
             papokin_data::potion::Potion::from_name(path).map(|potion| u16::from(potion.id))
         }
@@ -437,15 +441,41 @@ fn vanilla_entry_id(key: RegistryKey, path: &str) -> Option<u16> {
     }
 }
 
+/// 兴趣点注册表（非同步冻结注册表）的原版注册序：13 种职业站点、
+/// home、meeting、beehive、bee_nest。该序自 1.19 起跨版本稳定
+/// （各版本静态标签表 id 全等，且与 Papo 1.21.11 实抓一致）。
+const POINT_OF_INTEREST_NAMES: [&str; 17] = [
+    "armorer",
+    "butcher",
+    "cartographer",
+    "cleric",
+    "farmer",
+    "fisherman",
+    "fletcher",
+    "leatherworker",
+    "librarian",
+    "mason",
+    "shepherd",
+    "toolsmith",
+    "weaponsmith",
+    "home",
+    "meeting",
+    "beehive",
+    "bee_nest",
+];
+
 /// 应用于内置注册表 id 的版本重映射，与
-/// 标签包内的静态路径重映射：物品、方块与实体类型 id 会
-/// 跨版本重映射，其余所有注册表的 id 原样透传。
+/// 标签包内的静态路径重映射：物品、方块、实体类型与游戏事件 id
+/// 会跨版本重映射，其余所有注册表的 id 原样透传。
 fn remap_tag_entry_id(key: RegistryKey, id: u16, version: JavaMinecraftVersion) -> u16 {
     match key {
         RegistryKey::Item => papokin_data::item_id_remap::remap_item_id_for_version(id, version),
         RegistryKey::Block => papokin_data::block_id_remap::remap_block_id_for_version(id, version),
         RegistryKey::EntityType => {
             papokin_data::entity_id_remap::remap_entity_id_for_version(id, version)
+        }
+        RegistryKey::GameEvent => {
+            papokin_data::game_event_id_remap::remap_game_event_id_for_version(id, version)
         }
         _ => id,
     }
@@ -849,5 +879,55 @@ mod tests {
             .position(|entry| entry.name == "arrow")
             .unwrap();
         assert!(ids.contains(&(arrow as u16)));
+    }
+
+    /// poi 为非同步冻结注册表（不在 `REGISTRY_V_26_3`），原版新增项
+    /// 靠硬编码名称表解析：beehive=15、bee_nest=16、meeting=14。
+    #[test]
+    fn point_of_interest_vanilla_names_resolve() {
+        let (_registries, tags) = manager();
+        tags.add_to_tag(
+            RegistryKey::PointOfInterestType,
+            "myplugin:pollinators",
+            "minecraft:bee_nest",
+        )
+        .unwrap();
+        tags.add_to_tag(
+            RegistryKey::PointOfInterestType,
+            "myplugin:pollinators",
+            "minecraft:meeting",
+        )
+        .unwrap();
+        let snapshot = tags.snapshot(JavaMinecraftVersion::V_1_21_11).unwrap();
+        let entries = snapshot.get(RegistryKey::PointOfInterestType).unwrap();
+        let (_, ids) = entries
+            .iter()
+            .find(|(name, _)| name == "myplugin:pollinators")
+            .unwrap();
+        assert_eq!(ids, &vec![16, 14]);
+    }
+
+    /// game_event 覆盖层新增项在 1.21.11 走与静态表一致的重映射：
+    /// shriek 数据集 id 40 → 1.21.11 空间 39。
+    #[test]
+    fn game_event_overlay_entries_remap_for_1_21_11() {
+        let (_registries, tags) = manager();
+        tags.add_to_tag(RegistryKey::GameEvent, "myplugin:loud", "minecraft:shriek")
+            .unwrap();
+        let snapshot = tags.snapshot(JavaMinecraftVersion::V_1_21_11).unwrap();
+        let entries = snapshot.get(RegistryKey::GameEvent).unwrap();
+        let (_, ids) = entries
+            .iter()
+            .find(|(name, _)| name == "myplugin:loud")
+            .unwrap();
+        assert_eq!(ids, &vec![39]);
+        // 26.3 原生客户端保持数据集 id。
+        let native = tags.snapshot(JavaMinecraftVersion::V_26_3).unwrap();
+        let native_entries = native.get(RegistryKey::GameEvent).unwrap();
+        let (_, native_ids) = native_entries
+            .iter()
+            .find(|(name, _)| name == "myplugin:loud")
+            .unwrap();
+        assert_eq!(native_ids, &vec![40]);
     }
 }

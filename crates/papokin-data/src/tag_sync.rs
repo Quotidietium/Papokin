@@ -19,20 +19,27 @@
 //!   数据集一致），据此加入的 2↔3 换序反而把 water 装进了
 //!   `minecraft:lava` 标签——客户端的眼睛入液判定走 FluidTags，导致
 //!   旧客户端浸水时渲染岩浆红屏且不掉血（见 note/15 热修章节勘误）；
-//! - **game_event**：冻结注册表且无逐版本真值。26.2 新增的 `bounce`
-//!   插在 26.3 序第 9 位（非尾部追加），26.1 客户端其余事件 id 整体
-//!   偏移一位；26.2 与 26.3 事件集合零漂移视为同序。26.2 之前整体
-//!   省略（1.17+ 为按名寻址的变长格式，可安全省略）——客户端保留
-//!   自身内建的原版标签，天然正确；
+//! - **game_event**：冻结注册表。26.2 新增的 `bounce` 插在 26.3 序
+//!   第 9 位（非尾部追加）、`jukebox_stop_play` 占第 32 位，1.21.11
+//!   与 26.3 之间仅差这两处插入（1.21.11 的 `mob_interact` 在 26.x
+//!   已删除）——[`crate::game_event_id_remap`] 以闭式规则换算，
+//!   已对照 Papo 1.21.11 实抓标签逐 id 验证，故 1.21.11 正常下发；
+//!   26.2 与 26.3 事件集合零漂移视为同序。其余版本（1.17–1.21.9、
+//!   26.1）整体省略（1.17+ 为按名寻址的变长格式，可安全省略）——
+//!   客户端保留自身内建的原版标签，天然正确；
 //! - **potion**：冻结注册表，`assets/potion.json` 即原版序（经典序 +
 //!   1.20.5 尾部追加的 4 种），26.1 起才有标签文件夹，更早版本无
 //!   标签可发（`network_tag_keys` 自然排除），id 无需换算；
-//! - **point_of_interest_type / cat_variant / 1.20.5 前的
-//!   banner_pattern、painting_variant 与 1.21.2 前的 instrument**：
-//!   这些组合下注册表在客户端为冻结内建（本服不发送同步表），
-//!   内建注册序无逐版本真值，下发必然引入不可验证的 id 猜测——
-//!   一律整体省略，客户端保留内建标签（内建标签与内建注册表同源，
-//!   天然一致）。cat_variant 在 1.21.5 起原版自身也不再同步标签。
+//! - **point_of_interest_type**：冻结注册表，但 17 项注册序自 1.19
+//!   起跨版本稳定（职业站点 0..12、home=13、meeting=14、beehive=15、
+//!   bee_nest=16），各版本静态表 id 全等且与 Papo 1.21.11 实抓一致，
+//!   故全版本正常下发；
+//! - **cat_variant / 1.20.5 前的 banner_pattern、painting_variant 与
+//!   1.21.2 前的 instrument**：这些组合下注册表在客户端为冻结内建
+//!   （本服不发送同步表），内建注册序无逐版本真值，下发必然引入
+//!   不可验证的 id 猜测——一律整体省略，客户端保留内建标签（内建
+//!   标签与内建注册表同源，天然一致）。cat_variant 在 1.21.5 起
+//!   原版自身也不再同步标签。
 
 use papokin_util::version::JavaMinecraftVersion;
 
@@ -47,12 +54,16 @@ use crate::tag::RegistryKey;
 #[must_use]
 pub fn tag_registry_sendable_for_version(key: RegistryKey, version: JavaMinecraftVersion) -> bool {
     match key {
-        // 冻结注册表：26.2 的 bounce 插入 26.3 序第 9 位，26.1 及更早
-        // 的客户端 id 整体偏移且无逐版本映射数据，整体省略。
-        RegistryKey::GameEvent => version >= JavaMinecraftVersion::V_26_2,
-        // 冻结注册表且无逐版本真值（硬编码表无从对证），原版客户端
-        // 也没有兴趣点标签的消费方，整体省略以保留内建标签。
-        RegistryKey::PointOfInterestType => false,
+        // 冻结注册表：1.21.11 有闭式重映射规则（game_event_id_remap，
+        // 已对 Papo 实抓验证）正常下发；26.2 起与数据集同集合。26.1 及
+        // 更早（含 1.17–1.21.9）因 bounce 插入位整体偏移、无逐版本
+        // 真值，整体省略。
+        RegistryKey::GameEvent => {
+            version == JavaMinecraftVersion::V_1_21_11 || version >= JavaMinecraftVersion::V_26_2
+        }
+        // 冻结注册表，但 17 项注册序自 1.19 起跨版本稳定，各版本静态
+        // 表 id 全等且与 Papo 1.21.11 实抓一致，正常下发。
+        RegistryKey::PointOfInterestType => true,
         // 1.19–1.21.4 为冻结内建注册表（无真值）；1.21.5 起原版自身
         // 不再同步 cat_variant 标签（各版本数据包 tags 文件夹消失），
         // 省略即原版行为。
@@ -79,15 +90,18 @@ mod tests {
     /// 冻结注册表无真值的组合整体省略；同步类注册表自同步起始版本起可发。
     #[test]
     fn sendable_gates_match_registry_sync_eras() {
-        // game_event：26.1 客户端因 bounce 插入位错位，26.2 起与数据集同集合。
-        assert!(!sendable(RegistryKey::GameEvent, V::V_1_21_11));
+        // game_event：1.21.11 有验证过的闭式重映射可发；26.1 客户端因
+        // bounce 插入位错位省略，26.2 起与数据集同集合。
+        assert!(sendable(RegistryKey::GameEvent, V::V_1_21_11));
         assert!(!sendable(RegistryKey::GameEvent, V::V_1_17));
+        assert!(!sendable(RegistryKey::GameEvent, V::V_1_21_9));
         assert!(!sendable(RegistryKey::GameEvent, V::V_26_1));
         assert!(sendable(RegistryKey::GameEvent, V::V_26_2));
         assert!(sendable(RegistryKey::GameEvent, V::V_26_3));
-        // 兴趣点与猫变种：任何版本都无逐版本真值，全省略。
-        assert!(!sendable(RegistryKey::PointOfInterestType, V::V_1_21_11));
-        assert!(!sendable(RegistryKey::PointOfInterestType, V::V_26_3));
+        // 兴趣点：17 项注册序跨版本稳定（实抓验证），全版本可发；
+        // 猫变种无逐版本真值，全省略。
+        assert!(sendable(RegistryKey::PointOfInterestType, V::V_1_21_11));
+        assert!(sendable(RegistryKey::PointOfInterestType, V::V_26_3));
         assert!(!sendable(RegistryKey::CatVariant, V::V_26_1));
         // 冻结时代省略、同步时代下发的三类。
         assert!(!sendable(RegistryKey::BannerPattern, V::V_1_19_4));

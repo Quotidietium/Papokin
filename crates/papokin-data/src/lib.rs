@@ -158,6 +158,11 @@ pub mod chunk {
 #[path = "generated/game_event.rs"]
 pub mod game_event;
 
+/// 游戏事件注册表 id 的跨版本重映射：26.3 与 1.21.11 之间仅差
+/// bounce/jukebox_stop_play 两处插入，规则为闭式换算（详见模块文档）。
+#[cfg(feature = "game_event")]
+pub mod game_event_id_remap;
+
 #[cfg(feature = "game_rules")]
 #[rustfmt::skip]
 #[path ="generated/game_rules.rs"]
