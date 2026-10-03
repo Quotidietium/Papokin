@@ -3514,6 +3514,15 @@ impl Entity {
             .any(|passenger| passenger.get_entity().entity_id == id)
     }
 
+    /// 返回首位乘客（若有）。坐骑的驯化/控制逻辑只需要首位骑手。
+    pub fn get_first_passenger(&self) -> Option<Arc<dyn EntityBase>> {
+        self.passengers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .first()
+            .cloned()
+    }
+
     pub fn has_vehicle(&self) -> bool {
         self.vehicle
             .lock()
