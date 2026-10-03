@@ -16,10 +16,12 @@ use crate::entity::{
     ageable::{AgeableData, AgeableMob},
     ai::goal::{
         escape_danger::EscapeDangerGoal, look_around::RandomLookAroundGoal,
-        look_at_entity::LookAtEntityGoal, swim::SwimGoal, wander_around::WanderAroundGoal,
+        look_at_entity::LookAtEntityGoal, run_around_like_crazy::RunAroundLikeCrazyGoal,
+        swim::SwimGoal, wander_around::WanderAroundGoal,
     },
     mob::{Mob, MobEntity},
     passive::animal::Animal,
+    passive::equine::EquineTaming,
     player::Player,
 };
 
@@ -35,6 +37,8 @@ pub struct SkeletonHorseEntity {
     pub flags: AtomicU8,
     pub temper: AtomicI32,
     pub owner: AtomicCell<Option<Uuid>>,
+    /// 驯化状态机（见 `EquineTaming`），不入 NBT。
+    pub taming_timer: AtomicI32,
 }
 
 impl SkeletonHorseEntity {
@@ -46,6 +50,7 @@ impl SkeletonHorseEntity {
             flags: AtomicU8::new(0),
             temper: AtomicI32::new(0),
             owner: AtomicCell::new(None),
+            taming_timer: AtomicI32::new(0),
         };
         let mob_arc = Arc::new(horse);
         let mob_weak: Weak<dyn Mob> = {
@@ -62,6 +67,7 @@ impl SkeletonHorseEntity {
 
             goal_selector.add_goal(0, Box::new(SwimGoal::default()));
             goal_selector.add_goal(1, EscapeDangerGoal::new(1.2));
+            goal_selector.add_goal(5, Box::new(RunAroundLikeCrazyGoal::new(1.2)));
             goal_selector.add_goal(6, Box::new(WanderAroundGoal::new(0.7)));
             goal_selector.add_goal(
                 7,
@@ -120,6 +126,37 @@ impl Animal for SkeletonHorseEntity {
     }
 }
 
+impl EquineTaming for SkeletonHorseEntity {
+    fn equine_temper(&self) -> &AtomicI32 {
+        &self.temper
+    }
+
+    fn equine_owner(&self) -> &AtomicCell<Option<Uuid>> {
+        &self.owner
+    }
+
+    fn equine_taming_timer(&self) -> &AtomicI32 {
+        &self.taming_timer
+    }
+
+    fn is_equine_tamed(&self) -> bool {
+        self.is_tame()
+    }
+
+    fn equine_set_tame(&self, tame: bool) {
+        self.set_tame(tame);
+    }
+
+    fn equine_set_standing(&self, standing: bool) {
+        self.set_flag(FLAG_STANDING, standing);
+    }
+
+    fn equine_angry_sound(&self) -> Sound {
+        // 原版骷髅马无专属愤怒音效，沿用马的
+        Sound::EntityHorseAngry
+    }
+}
+
 impl Mob for SkeletonHorseEntity {
     fn open_rider_inventory(&self, player: &Arc<Player>) {
         let world = player.world();
@@ -134,6 +171,10 @@ impl Mob for SkeletonHorseEntity {
 
     fn as_animal(&self) -> Option<&dyn Animal> {
         Some(self)
+    }
+
+    fn is_tamed(&self) -> bool {
+        self.is_tame()
     }
 
     fn mob_write_nbt(&self, nbt: &mut NbtCompound) {
@@ -176,6 +217,7 @@ impl Mob for SkeletonHorseEntity {
     }
 
     fn mob_tick(&self, _caller: &dyn EntityBase) {
+        self.equine_taming_tick();
         self.ageable_ai_step();
     }
 
@@ -217,16 +259,34 @@ impl Mob for SkeletonHorseEntity {
         }
 
         if !self.is_baby() {
+            // 原版交互分流：已驯服潜行打开装备界面（装/卸鞍），未驯服
+            // 空手上马发起驯化尝试，持物品则被发怒拒绝。
             let world = player.world();
             let ent = &self.mob_entity.living_entity.entity;
-            if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
-                if !player.get_entity().is_sneaking() {
+            if self.is_tame() && player.get_entity().is_sneaking() {
+                if let Some(vehicle) = world.get_entity_by_id(ent.entity_id) {
                     super::horse::open_equipment_screen(&vehicle, player, None, false);
-                } else if let Some(passenger) = world.get_player_by_id(player.entity_id()) {
-                    ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
                 }
                 return true;
             }
+            // 已被骑乘时不再触发上马/界面（对齐原版 isVehicle 早退）
+            if ent.has_passengers() {
+                return true;
+            }
+            if !self.is_tame() && !item_stack.is_empty() {
+                self.equine_make_mad();
+                return true;
+            }
+            if let (Some(vehicle), Some(passenger)) = (
+                world.get_entity_by_id(ent.entity_id),
+                world.get_player_by_id(player.entity_id()),
+            ) {
+                ent.add_passenger(vehicle, passenger as Arc<dyn EntityBase>);
+                if !self.is_tame() {
+                    self.start_equine_taming_attempt();
+                }
+            }
+            return true;
         }
 
         self.animal_interact(player, item_stack, Sound::EntitySkeletonHorseAmbient)
