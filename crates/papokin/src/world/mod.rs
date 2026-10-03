@@ -119,7 +119,10 @@ use papokin_util::{
 use papokin_world::world::{GetBlockError, WorldPortalExt};
 use papokin_world::{biome, chunk::io::Dirtiable};
 use papokin_world::{chunk::ChunkData, world::BlockAccessor};
-use papokin_world::{level::Level, tick::TickPriority};
+use papokin_world::{
+    level::{Level, RandomTickSample, SyncChunk},
+    tick::{OrderedTick, TickPriority},
+};
 pub use papokin_world::{world::BlockFlags, world_info::LevelData};
 use rand::seq::SliceRandom;
 use rand::{RngExt, rng};
@@ -1282,6 +1285,7 @@ impl World {
     #[expect(clippy::too_many_lines)]
     pub fn tick(self: &Arc<Self>, server: &Arc<Server>) {
         const ENTITY_TICK_BATCH_SIZE: usize = 16;
+        const BLOCK_ENTITY_TICK_BATCH_SIZE: usize = 16;
         let start = std::time::Instant::now();
 
         self.flush_block_updates();
@@ -1332,7 +1336,7 @@ impl World {
 
         let t_players = std::time::Instant::now();
         let player_handle = handle.clone();
-        players.par_iter().for_each(|player| {
+        let tick_player = |player: &Arc<crate::entity::player::Player>| {
             let _guard = player_handle.enter();
             // 玩家 tick（含入站包处理与插件事件）panic 隔离：坏包或
             // 插件缺陷只断开该玩家，不再沿 rayon 传播触发全服关停
@@ -1350,7 +1354,14 @@ impl World {
                     .client
                     .try_kick(&TextComponent::text("处理时发生内部错误"));
             }
-        });
+        };
+        // 玩家人数很少时并行调度（唤醒整个 Rayon 池）比直接串行更贵：
+        // 逐个 fork-join 的固定开销在小集合上远超并行收益
+        if players.len() <= 2 {
+            players.iter().for_each(tick_player);
+        } else {
+            players.par_iter().for_each(tick_player);
+        }
         let player_elapsed = t_players.elapsed();
 
         let entities_to_tick = self.entities.load();
@@ -1363,66 +1374,80 @@ impl World {
         let entity_handle = handle.clone();
 
         let t_entities = std::time::Instant::now();
-        let tickable: Vec<_> = entities_to_tick
-            .par_iter()
-            .filter_map(|entity| {
-                let entity_pos = entity.get_entity().pos.load();
-                let entity_chunk = Vector2::new(
-                    get_section_cord(entity_pos.x.floor() as i32),
-                    get_section_cord(entity_pos.z.floor() as i32),
-                );
-                if !active_chunks.contains(&entity_chunk) {
-                    return None;
-                }
-                if !level_for_entities.is_chunk_loaded(&entity_chunk) {
-                    return None;
-                }
-                Some((entity, entity_chunk))
-            })
-            .collect();
+        let in_active_loaded_chunk = |entity: &Arc<dyn EntityBase>| {
+            let entity_pos = entity.get_entity().pos.load();
+            let entity_chunk = Vector2::new(
+                get_section_cord(entity_pos.x.floor() as i32),
+                get_section_cord(entity_pos.z.floor() as i32),
+            );
+            if !active_chunks.contains(&entity_chunk) {
+                return None;
+            }
+            if !level_for_entities.is_chunk_loaded(&entity_chunk) {
+                return None;
+            }
+            Some((entity.clone(), entity_chunk))
+        };
+        // 小集合上并行过滤的池调度开销高于过滤本身
+        let tickable: Vec<_> = if entities_to_tick.len() <= 256 {
+            entities_to_tick
+                .iter()
+                .filter_map(in_active_loaded_chunk)
+                .collect()
+        } else {
+            entities_to_tick
+                .par_iter()
+                .filter_map(in_active_loaded_chunk)
+                .collect()
+        };
 
         let server_ref = server.as_ref();
-        tickable
-            .par_chunks(ENTITY_TICK_BATCH_SIZE)
-            .for_each(|batch| {
-                let _guard = entity_handle.enter();
+        let tick_batch = |batch: &[(Arc<dyn EntityBase>, Vector2<i32>)]| {
+            let _guard = entity_handle.enter();
 
-                for (entity, entity_chunk) in batch {
-                    // 实体 tick（含插件事件）panic 隔离：坏实体只被
-                    // 移除，不再沿 rayon 传播触发全服关停
-                    let _isolation = TickIsolationGuard::new();
-                    let tick_result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            entity.get_entity().age.fetch_add(1, Relaxed);
-                            entity.tick(entity.as_ref(), server_ref);
+            for (entity, entity_chunk) in batch {
+                // 实体 tick（含插件事件）panic 隔离：坏实体只被
+                // 移除，不再沿 rayon 传播触发全服关停
+                let _isolation = TickIsolationGuard::new();
+                let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    entity.get_entity().age.fetch_add(1, Relaxed);
+                    entity.tick(entity.as_ref(), server_ref);
 
-                            let entity_inner = entity.get_entity();
-                            let entity_pos = entity_inner.pos.load();
-                            let entity_bb = entity_inner.bounding_box.load();
+                    let entity_inner = entity.get_entity();
+                    let entity_pos = entity_inner.pos.load();
+                    let entity_bb = entity_inner.bounding_box.load();
 
-                            for (player, player_pos, player_bb, player_chunk) in &players_cache {
-                                if (player_chunk.x - entity_chunk.x).abs() <= 1
-                                    && (player_chunk.y - entity_chunk.y).abs() <= 1
-                                    && (player_pos.x - entity_pos.x).abs() < 5.0
-                                    && (player_pos.y - entity_pos.y).abs() < 5.0
-                                    && (player_pos.z - entity_pos.z).abs() < 5.0
-                                    && player_bb.intersects(&entity_bb)
-                                {
-                                    entity.on_player_collision(player);
-                                    break;
-                                }
-                            }
-                        }));
-                    if tick_result.is_err() {
-                        tracing::error!(
-                            "实体 {}（类型 {}）的 tick 发生 panic，已移除该实体以保护服务器",
-                            entity.get_entity().entity_id,
-                            entity.get_entity().entity_type.resource_name
-                        );
-                        entity.get_entity().remove();
+                    for (player, player_pos, player_bb, player_chunk) in &players_cache {
+                        if (player_chunk.x - entity_chunk.x).abs() <= 1
+                            && (player_chunk.y - entity_chunk.y).abs() <= 1
+                            && (player_pos.x - entity_pos.x).abs() < 5.0
+                            && (player_pos.y - entity_pos.y).abs() < 5.0
+                            && (player_pos.z - entity_pos.z).abs() < 5.0
+                            && player_bb.intersects(&entity_bb)
+                        {
+                            entity.on_player_collision(player);
+                            break;
+                        }
                     }
+                }));
+                if tick_result.is_err() {
+                    tracing::error!(
+                        "实体 {}（类型 {}）的 tick 发生 panic，已移除该实体以保护服务器",
+                        entity.get_entity().entity_id,
+                        entity.get_entity().entity_type.resource_name
+                    );
+                    entity.get_entity().remove();
                 }
-            });
+            }
+        };
+        // 小集合上并行调度的池唤醒开销高于 tick 本身
+        if tickable.len() <= 2 * ENTITY_TICK_BATCH_SIZE {
+            tickable.chunks(ENTITY_TICK_BATCH_SIZE).for_each(tick_batch);
+        } else {
+            tickable
+                .par_chunks(ENTITY_TICK_BATCH_SIZE)
+                .for_each(tick_batch);
+        }
         let entity_elapsed = t_entities.elapsed();
 
         self.entity_tracker.update_all(self);
@@ -1445,12 +1470,22 @@ impl World {
 
         let t_be = std::time::Instant::now();
         let be_handle = handle;
-        block_entities.par_chunks(16).for_each(|batch| {
+        let tick_be_batch = |batch: &[Arc<dyn BlockEntity>]| {
             let _guard = be_handle.enter();
             for be in batch {
                 be.tick(self);
             }
-        });
+        };
+        // 小集合上并行调度的池唤醒开销高于 tick 本身
+        if block_entities.len() <= 2 * BLOCK_ENTITY_TICK_BATCH_SIZE {
+            block_entities
+                .chunks(BLOCK_ENTITY_TICK_BATCH_SIZE)
+                .for_each(tick_be_batch);
+        } else {
+            block_entities
+                .par_chunks(BLOCK_ENTITY_TICK_BATCH_SIZE)
+                .for_each(tick_be_batch);
+        }
         // 在所有刻之后排空，因此变化（漏斗 -> 箱子）落在同一刻内。
         let guard = be_handle.enter();
         self.flush_comparator_updates(&block_entities);
@@ -1694,6 +1729,7 @@ impl World {
     #[expect(clippy::too_many_lines)]
     pub fn tick_chunks(self: &Arc<Self>, server: &Arc<Server>) {
         const BATCH_SIZE: usize = 32;
+        const SPAWN_BATCH_SIZE: usize = 32;
         const INHABITED_TIME_BATCH_SIZE: usize = 1024;
         // 单刻执行的方块刻/流体刻上限（对齐原版 65536）：超出部分按原
         // 优先级以 0 延迟顺延到下一游戏刻。缺少上限时，敌意构造的刻积压
@@ -1727,87 +1763,108 @@ impl World {
         }
         let handle = server.runtime.clone();
 
-        // 1. 通过 Rayon 并行执行方块刻
+        // 1. 方块刻：少量时刻直接串行，唤醒 Rayon 池的固定开销反而更贵
         let world = self.clone();
         let block_handle = handle.clone();
-        tick_data
-            .block_ticks
-            .par_chunks(BATCH_SIZE)
-            .for_each(|batch| {
-                let _guard = block_handle.enter();
-                let world = world.clone();
-                for scheduled_tick in batch {
-                    let pos = scheduled_tick.position;
-                    let block = world.get_block(&pos);
-                    if let Some(pumpkin_block) = world.block_registry.get_pumpkin_block(block.id) {
-                        pumpkin_block.on_scheduled_tick(OnScheduledTickArgs {
-                            world: &world,
-                            block,
-                            position: &pos,
-                        });
-                    }
+        let tick_block_batch = |batch: &[OrderedTick<&'static Block>]| {
+            let _guard = block_handle.enter();
+            let world = world.clone();
+            for scheduled_tick in batch {
+                let pos = scheduled_tick.position;
+                let block = world.get_block(&pos);
+                if let Some(pumpkin_block) = world.block_registry.get_pumpkin_block(block.id) {
+                    pumpkin_block.on_scheduled_tick(OnScheduledTickArgs {
+                        world: &world,
+                        block,
+                        position: &pos,
+                    });
                 }
-            });
+            }
+        };
+        if tick_data.block_ticks.len() <= 2 * BATCH_SIZE {
+            tick_data
+                .block_ticks
+                .chunks(BATCH_SIZE)
+                .for_each(tick_block_batch);
+        } else {
+            tick_data
+                .block_ticks
+                .par_chunks(BATCH_SIZE)
+                .for_each(tick_block_batch);
+        }
 
-        // 2. 通过 Rayon 并行执行流体刻
+        // 2. 流体刻：同样按集合大小选择串行或并行
         let world = self.clone();
         let fluid_handle = handle.clone();
-        tick_data
-            .fluid_ticks
-            .par_chunks(BATCH_SIZE)
-            .for_each(|batch| {
-                let _guard = fluid_handle.enter();
-                let world = world.clone();
-                for scheduled_tick in batch {
-                    let pos = scheduled_tick.position;
-                    let fluid = world.get_fluid(&pos);
-                    if let Some(pumpkin_fluid) = world.block_registry.get_pumpkin_fluid(fluid.id) {
-                        pumpkin_fluid.on_scheduled_tick(&world, fluid, &pos);
-                    }
+        let tick_fluid_batch = |batch: &[OrderedTick<&'static Fluid>]| {
+            let _guard = fluid_handle.enter();
+            let world = world.clone();
+            for scheduled_tick in batch {
+                let pos = scheduled_tick.position;
+                let fluid = world.get_fluid(&pos);
+                if let Some(pumpkin_fluid) = world.block_registry.get_pumpkin_fluid(fluid.id) {
+                    pumpkin_fluid.on_scheduled_tick(&world, fluid, &pos);
                 }
-            });
+            }
+        };
+        if tick_data.fluid_ticks.len() <= 2 * BATCH_SIZE {
+            tick_data
+                .fluid_ticks
+                .chunks(BATCH_SIZE)
+                .for_each(tick_fluid_batch);
+        } else {
+            tick_data
+                .fluid_ticks
+                .par_chunks(BATCH_SIZE)
+                .for_each(tick_fluid_batch);
+        }
 
-        // 3. 通过 Rayon 并行执行随机刻
+        // 3. 随机刻：同样按集合大小选择串行或并行
         let world = self.clone();
         let random_handle = handle.clone();
-        tick_data
-            .random_ticks
-            .par_chunks(BATCH_SIZE)
-            .for_each(|batch| {
-                let _guard = random_handle.enter();
-                let world = world.clone();
-                for scheduled_tick in batch {
-                    let pos = scheduled_tick.position;
-                    let (block, fluid) =
-                        match (scheduled_tick.tick_block, scheduled_tick.tick_fluid) {
-                            (true, true) => {
-                                let (b, f) = world.get_block_and_fluid(&pos);
-                                (Some(b), Some(f))
-                            }
-                            (true, false) => (Some(world.get_block(&pos)), None),
-                            (false, true) => (None, Some(world.get_fluid(&pos))),
-                            (false, false) => (None, None),
-                        };
-
-                    if let Some(block) = block
-                        && let Some(pumpkin_block) =
-                            world.block_registry.get_pumpkin_block(block.id)
-                    {
-                        pumpkin_block.random_tick(RandomTickArgs {
-                            world: &world,
-                            block,
-                            position: &pos,
-                        });
+        let tick_random_batch = |batch: &[RandomTickSample]| {
+            let _guard = random_handle.enter();
+            let world = world.clone();
+            for scheduled_tick in batch {
+                let pos = scheduled_tick.position;
+                let (block, fluid) = match (scheduled_tick.tick_block, scheduled_tick.tick_fluid) {
+                    (true, true) => {
+                        let (b, f) = world.get_block_and_fluid(&pos);
+                        (Some(b), Some(f))
                     }
+                    (true, false) => (Some(world.get_block(&pos)), None),
+                    (false, true) => (None, Some(world.get_fluid(&pos))),
+                    (false, false) => (None, None),
+                };
 
-                    if let Some(fluid) = fluid
-                        && let Some(pumpkin_fluid) =
-                            world.block_registry.get_pumpkin_fluid(fluid.id)
-                    {
-                        pumpkin_fluid.random_tick(fluid, &world, &pos);
-                    }
+                if let Some(block) = block
+                    && let Some(pumpkin_block) = world.block_registry.get_pumpkin_block(block.id)
+                {
+                    pumpkin_block.random_tick(RandomTickArgs {
+                        world: &world,
+                        block,
+                        position: &pos,
+                    });
                 }
-            });
+
+                if let Some(fluid) = fluid
+                    && let Some(pumpkin_fluid) = world.block_registry.get_pumpkin_fluid(fluid.id)
+                {
+                    pumpkin_fluid.random_tick(fluid, &world, &pos);
+                }
+            }
+        };
+        if tick_data.random_ticks.len() <= 2 * BATCH_SIZE {
+            tick_data
+                .random_ticks
+                .chunks(BATCH_SIZE)
+                .for_each(tick_random_batch);
+        } else {
+            tick_data
+                .random_ticks
+                .par_chunks(BATCH_SIZE)
+                .for_each(tick_random_batch);
+        }
 
         // 4. 计算生成列表（顺序设置）
         let spawn_state = self.spawn_state.load();
@@ -1843,7 +1900,7 @@ impl World {
 
             let world = self.clone();
             let spawn_handle = handle;
-            spawning_chunks.par_chunks(8).for_each(|batch| {
+            let spawn_batch = |batch: &[(Vector2<i32>, SyncChunk)]| {
                 let _guard = spawn_handle.enter();
                 let world = world.clone();
                 let s_list = spawn_list.clone();
@@ -1851,21 +1908,39 @@ impl World {
                 for (pos, chunk) in batch {
                     world.tick_spawning_chunk(*pos, chunk, &s_list, &s_state);
                 }
-            });
+            };
+            // 少量候选区块直接串行；大批次再摊给 Rayon 池
+            if spawning_chunks.len() <= 2 * SPAWN_BATCH_SIZE {
+                spawning_chunks
+                    .chunks(SPAWN_BATCH_SIZE)
+                    .for_each(spawn_batch);
+            } else {
+                spawning_chunks
+                    .par_chunks(SPAWN_BATCH_SIZE)
+                    .for_each(spawn_batch);
+            }
         }
 
         // 批量执行这些开销小的查找和原子自增，避免唤醒 Rayon
         // 为每个刻的微小任务生成工作线程，同时对大集合保留并行性。
         let loaded_chunks = self.level.loaded_chunks.clone();
         let active_chunks_vec: Vec<_> = active_chunks.iter().copied().collect();
-        active_chunks_vec
-            .par_iter()
-            .with_min_len(INHABITED_TIME_BATCH_SIZE)
-            .for_each(|pos| {
+        if active_chunks_vec.len() <= 2 * INHABITED_TIME_BATCH_SIZE {
+            for pos in &active_chunks_vec {
                 if let Some(chunk) = loaded_chunks.get(pos) {
                     chunk.inhabited_time.fetch_add(1, Relaxed);
                 }
-            });
+            }
+        } else {
+            active_chunks_vec
+                .par_iter()
+                .with_min_len(INHABITED_TIME_BATCH_SIZE)
+                .for_each(|pos| {
+                    if let Some(chunk) = loaded_chunks.get(pos) {
+                        chunk.inhabited_time.fetch_add(1, Relaxed);
+                    }
+                });
+        }
     }
 
     pub fn check_fluid_collision(&self, bounding_box: BoundingBox) -> bool {
