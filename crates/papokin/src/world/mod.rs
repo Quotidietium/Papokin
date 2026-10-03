@@ -83,7 +83,8 @@ use papokin_protocol::java::client::play::{
     PlayerSpawnData,
 };
 use papokin_protocol::java::client::play::{
-    CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CSystemChatMessage,
+    CPlayerSpawnPosition, CRecipeBookAdd, CRecipeBookSettings, CSetExperience, CSetHealth,
+    CSystemChatMessage,
 };
 use papokin_protocol::java::client::play::{CSetEntityMetadata, Metadata};
 use papokin_protocol::{
@@ -3022,6 +3023,20 @@ impl World {
 
         player.send_active_effects();
         player.breath_manager.send_air_supply(player);
+        // 初始血量/饥饿与经验同步：老玩家上线即显示存档值；send_health
+        // 带 has_client_loaded 门（此刻尚未置位），故此处直发包。
+        player.client.try_send_packet(&CSetHealth::new(
+            player.living_entity.health.load(),
+            player.hunger_manager.level.load().into(),
+            player.hunger_manager.saturation.load(),
+        ));
+        let xp_level = player.experience_level.load(Ordering::Relaxed);
+        player.client.try_send_packet(&CSetExperience::new(
+            player.experience_progress.load().clamp(0.0, 1.0),
+            xp_level.into(),
+            player.experience_points.load(Ordering::Relaxed).into(),
+        ));
+        player.last_sent_xp.store(xp_level, Ordering::Relaxed);
         self.send_player_equipment(player);
         player
             .living_entity
