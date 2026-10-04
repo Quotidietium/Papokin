@@ -1,0 +1,27 @@
+{
+  "integrity_ok": true,
+  "new": {
+    "encode_ms": 4,
+    "live_bytes": 11852427,
+    "live_count": 627,
+    "rss_mib": 31.58203125,
+    "total_allocs": 1329
+  },
+  "old": {
+    "encode_ms": 5,
+    "live_bytes": 24847627,
+    "live_count": 1231,
+    "rss_mib": 35.52734375,
+    "total_allocs": 1329
+  },
+  "round": 3,
+  "saved_bytes": 12995200,
+  "saved_percent": 52.29956164425681,
+  "subject": "区块编码缓存负载容量裁剪（Bytes 移交前 shrink_to_fit）",
+  "workload": {
+    "chunks": 625,
+    "content_bytes": 11827427,
+    "initial_capacity": 32768,
+    "size_profile": "70% 3-15KiB / 25% 15-50KiB / 5% 50-200KiB"
+  }
+}
