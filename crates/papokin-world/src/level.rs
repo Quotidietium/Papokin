@@ -641,25 +641,29 @@ impl Level {
         }
 
         // 2. 处理带有计划刻的区块
-        // 我们先收集键，以避免访问 loaded_chunks 时持有 DashSet 分片锁（有死锁风险）
-        let scheduled_chunk_pos: Vec<_> = self
-            .chunks_with_scheduled_ticks
-            .iter()
-            .map(|p| *p)
-            .collect();
-        for pos in scheduled_chunk_pos {
+        // 仅把「本 tick 需移除」的键收集到小 Vec（常态为空、零分配），
+        // 遍历后统一移除。相比逐 tick 全量 collect，消去常态下每次
+        // 一次的全集合 Vec 分配与拷贝；移除仍推迟到 `loaded_chunks`
+        // 访问之外进行，死锁规避（不持 DashSet 分片锁访问 loaded_chunks）
+        // 语义不变。
+        let mut chunks_to_remove: Vec<Vector2<i32>> = Vec::new();
+        for pos_ref in self.chunks_with_scheduled_ticks.iter() {
+            let pos = *pos_ref;
             if let Some(chunk) = self.loaded_chunks.get(&pos) {
                 let chunk = chunk.value();
                 ticks.block_ticks.append(&mut chunk.block_ticks.step_tick());
                 ticks.fluid_ticks.append(&mut chunk.fluid_ticks.step_tick());
 
-                // 如果它不再有刻，则从集合中移除
+                // 如果它不再有刻，则标记移除（本 tick 结束后统一删）
                 if !chunk.block_ticks.has_ticks() && !chunk.fluid_ticks.has_ticks() {
-                    self.chunks_with_scheduled_ticks.remove(&pos);
+                    chunks_to_remove.push(pos);
                 }
             } else {
-                self.chunks_with_scheduled_ticks.remove(&pos); // 区块已卸载
+                chunks_to_remove.push(pos); // 区块已卸载
             }
+        }
+        for pos in chunks_to_remove {
+            self.chunks_with_scheduled_ticks.remove(&pos);
         }
 
         ticks.block_ticks.sort_unstable();
