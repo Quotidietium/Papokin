@@ -97,13 +97,13 @@ impl Rng {
 
 /// 模拟并发连接数
 const CONNECTIONS: usize = 128;
-/// 每连接发送的数据包数（总包数 = CONNECTIONS × PACKETS_PER_CONN）
+/// 每连接发送的数据包数（总包数 = `CONNECTIONS` × `PACKETS_PER_CONN`）
 const PACKETS_PER_CONN: usize = 300;
 /// 压缩级别（与生产默认一致）
 const LEVEL: u32 = 6;
-/// 暂存驻留上限（与生产 MAX_RETAINED_SCRATCH 一致）
+/// 暂存驻留上限（与生产 `MAX_RETAINED_SCRATCH` 一致）
 const MAX_RETAINED_SCRATCH: usize = 256 * 1024;
-/// 全局池驻留上限（与生产 MAX_POOLED_COMPRESSION_RESOURCES 一致）
+/// 全局池驻留上限（与生产 `MAX_POOLED_COMPRESSION_RESOURCES` 一致）
 const GLOBAL_POOL_CAP: usize = 16;
 /// 线程局部池驻留上限（轮次 8 语义）
 const THREAD_POOL_CAP: usize = 4;
@@ -120,7 +120,7 @@ const fn packet_size(rng: &mut Rng) -> usize {
 /// 由 (conn, seq) 确定性派生一个数据包负载（不落语料库，三模式
 /// 各自现算、逐包一致；半数可压缩内容半数随机字节，同轮次 8）
 fn gen_packet(conn: usize, seq: usize) -> Vec<u8> {
-    let seed = (conn as u64) * 0x9E37_79B9_7F4A_7C15 ^ (seq as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1;
+    let seed = ((conn as u64) * 0x9E37_79B9_7F4A_7C15) ^ ((seq as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
     let mut rng = Rng(seed);
     let size = packet_size(&mut rng);
     let mut data = Vec::with_capacity(size);
@@ -244,13 +244,10 @@ fn run_workers(
                         for seq in 0..PACKETS_PER_CONN {
                             let packet = gen_packet(conn, seq);
                             bytes += packet.len();
-                            let mut resources = match pool.pop() {
-                                Some(r) => r,
-                                None => {
-                                    local_created += 1;
-                                    Resources::new()
-                                }
-                            };
+                            let mut resources = pool.pop().unwrap_or_else(|| {
+                                local_created += 1;
+                                Resources::new()
+                            });
                             let hash = resources.compress_one(&packet);
                             give_back_governance(&mut resources);
                             if pool.len() < THREAD_POOL_CAP {
@@ -318,7 +315,8 @@ fn run_global(workers: usize) -> ModeResult {
                         let packet = gen_packet(conn, seq);
                         bytes += packet.len();
                         let mut resources = {
-                            let mut guard = pool.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut guard =
+                                pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             guard.pop()
                         }
                         .unwrap_or_else(|| {
@@ -328,7 +326,8 @@ fn run_global(workers: usize) -> ModeResult {
                         let hash = resources.compress_one(&packet);
                         give_back_governance(&mut resources);
                         {
-                            let mut guard = pool.lock().unwrap_or_else(|e| e.into_inner());
+                            let mut guard =
+                                pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                             if guard.len() < GLOBAL_POOL_CAP {
                                 guard.push(resources);
                             }

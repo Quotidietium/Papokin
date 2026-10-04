@@ -427,10 +427,8 @@ async fn run_new(
     // 检查点 A：空闲窗口末端的留存账
     let enc_scratch_a: usize = encoders
         .iter()
-        .map(|enc| {
-            let (comp, frame) = enc.scratch_capacity();
-            comp + frame
-        })
+        // 轮次 9 起压缩暂存改全局池检出，编码器侧仅剩组帧暂存驻留
+        .map(TCPNetworkEncoder::frame_scratch_capacity)
         .sum();
     let dec_retained_a: usize = decoders
         .iter()
@@ -463,10 +461,8 @@ async fn run_new(
     // 检查点 B：稳态末端的留存账
     let enc_scratch_b: usize = encoders
         .iter()
-        .map(|enc| {
-            let (comp, frame) = enc.scratch_capacity();
-            comp + frame
-        })
+        // 轮次 9 起压缩暂存改全局池检出，编码器侧仅剩组帧暂存驻留
+        .map(TCPNetworkEncoder::frame_scratch_capacity)
         .sum();
     let dec_retained_b: usize = decoders
         .iter()
