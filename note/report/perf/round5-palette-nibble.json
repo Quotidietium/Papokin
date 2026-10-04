@@ -1,0 +1,21 @@
+{
+  "integrity_ok": true,
+  "new": {
+    "elapsed_ms": 162,
+    "live_bytes": 2960000
+  },
+  "old": {
+    "elapsed_ms": 171,
+    "live_bytes": 4857744
+  },
+  "round": 5,
+  "saved_bytes": 1897744,
+  "saved_pct": 39.06636496283048,
+  "subject": "区块调色板半字节索引存储：≤16 态区段 u8→4bit",
+  "workload": {
+    "live_scope": "仅区段容器（闸门数据落盘比对，不占内存记账）",
+    "mutations_per_section": 4608,
+    "palette_size_distribution": "55% 同质 / 25% 2-8 态 / 12% 9-16 态 / 6% 17-64 态 / 2% 65-300 态",
+    "sections": 2400
+  }
+}

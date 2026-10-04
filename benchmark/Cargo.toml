@@ -7,6 +7,7 @@ description = "Papokin 性能基准程序（内存/CPU 量化对比，报告输�
 
 [dependencies]
 papokin-world = { path = "../crates/papokin-world" }
+papokin-data = { path = "../crates/papokin-data" }
 papokin-config = { path = "../crates/papokin-config" }
 papokin-util = { path = "../crates/papokin-util" }
 papokin-protocol = { path = "../crates/papokin-protocol" }
