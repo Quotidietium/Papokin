@@ -5,7 +5,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 
 use crate::{
     Aes128Cfb8Dec, CompressionThreshold, MAX_PACKET_DATA_SIZE, MAX_PACKET_SIZE, PacketDecodeError,
-    RawPacket, ReadingError, StreamDecryptor, VarInt,
+    RawPacket, ReadingError, StreamDecryptor, VarInt, java::packet_encoder::MAX_RETAINED_SCRATCH,
 };
 
 // 解密 -> 解压 -> 原始
@@ -193,10 +193,25 @@ impl<R: AsyncRead + Unpin> TCPNetworkDecoder<R> {
             .split_to(self.payload_scratch.len())
             .freeze();
 
+        // 容量治理：大包读完后 scratch 仍引用着为其扩张的整块
+        // 分配（split_to 共享同一底层缓冲），若继续复用，该分配将
+        // 随连接存活期驻留。超过留存上限即换一个新 scratch——
+        // 旧分配随已入队负载被消费后自然释放（入队量另有高水位
+        // 上限），小包路径零额外分配。
+        if payload_len_hint > MAX_RETAINED_SCRATCH {
+            self.payload_scratch = bytes::BytesMut::new();
+        }
+
         Ok(RawPacket {
             id: packet_id,
             payload,
         })
+    }
+
+    /// 当前负载 scratch 的容量（诊断与基准观测用）。
+    #[must_use]
+    pub fn payload_scratch_capacity(&self) -> usize {
+        self.payload_scratch.capacity()
     }
 }
 
@@ -489,6 +504,79 @@ mod tests {
         assert_eq!(
             cap_after_p2, cap_after_p1,
             "Buffer capacity should be retained and reused without new heap allocations"
+        );
+        Ok(())
+    }
+
+    /// 大包读完后负载 scratch 必须被换新，不再引用负载的底层
+    /// 分配（否则连接空闲、只来零负载心跳包时，该分配会随连接
+    /// 存活期驻留）；恰好处于留存上限的包仍走保留复用路径。
+    #[tokio::test]
+    async fn payload_scratch_replaced_after_large_packet() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // 简单 LCG 生成确定性内容，便于逐字节校验
+        let mut state = 0x2F6E_2B1Eu32;
+        let mut big_payload = vec![0u8; MAX_RETAINED_SCRATCH + 64 * 1024];
+        for byte in &mut big_payload {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *byte = (state >> 24) as u8;
+        }
+
+        let big = build_packet(9, &big_payload, false, None, None)?;
+        // 空闲连接的典型流量：零负载心跳包
+        let heartbeat = build_packet(10, b"", false, None, None)?;
+        let small = build_packet(11, b"pong", false, None, None)?;
+
+        let mut stream = Vec::new();
+        stream.extend_from_slice(&big);
+        stream.extend_from_slice(&heartbeat);
+        stream.extend_from_slice(&small);
+
+        let mut decoder = TCPNetworkDecoder::new(stream.as_slice());
+
+        let p1 = decoder.get_raw_packet().await?;
+        assert_eq!(p1.id, 9);
+
+        // 判别依据：scratch 视图指针是否仍落在大包负载的分配区间内。
+        // 换新后它是全新空缓冲（悬垂指针），绝不在该区间。
+        let big_range =
+            p1.payload.as_ptr() as usize..=p1.payload.as_ptr() as usize + p1.payload.len();
+        assert!(
+            !big_range.contains(&(decoder.payload_scratch.as_ptr() as usize)),
+            "超过留存上限的大包读完后 scratch 不应再引用其底层分配"
+        );
+
+        // 心跳（零负载）路径：旧的驻留缺陷正是在这里暴露——空负载
+        // 不触发 reserve/realloc，scratch 会一直抱住大分配不放。
+        let p2 = decoder.get_raw_packet().await?;
+        assert_eq!(p2.id, 10);
+        assert!(p2.payload.is_empty());
+        assert!(
+            !big_range.contains(&(decoder.payload_scratch.as_ptr() as usize)),
+            "心跳包之后 scratch 仍不得引用大包分配"
+        );
+
+        // 换新后的小包路径仍须正确解码
+        let p3 = decoder.get_raw_packet().await?;
+        assert_eq!(p3.id, 11);
+        assert_eq!(p3.payload.as_ref(), b"pong");
+
+        // 大包的冻结负载与旧分配共享，scratch 换新不得影响其内容
+        assert_eq!(p1.payload.as_ref(), big_payload.as_slice());
+        drop(p1);
+
+        // 边界：恰好等于留存上限的包不触发换新，scratch 继续
+        // 与负载共享同一分配（保留复用语义不变）
+        let boundary_payload = vec![0x5Au8; MAX_RETAINED_SCRATCH];
+        let boundary = build_packet(12, &boundary_payload, false, None, None)?;
+        let mut boundary_decoder = TCPNetworkDecoder::new(boundary.as_slice());
+        let p4 = boundary_decoder.get_raw_packet().await?;
+        assert_eq!(p4.payload.as_ref(), boundary_payload.as_slice());
+        let boundary_range =
+            p4.payload.as_ptr() as usize..=p4.payload.as_ptr() as usize + p4.payload.len();
+        assert!(
+            boundary_range.contains(&(boundary_decoder.payload_scratch.as_ptr() as usize)),
+            "恰好触及留存上限的包应保留 scratch 复用（仍共享底层分配）"
         );
         Ok(())
     }
