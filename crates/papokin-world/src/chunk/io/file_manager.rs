@@ -1,7 +1,10 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use futures::future::join_all;
@@ -43,6 +46,12 @@ pub struct ChunkFileManager<S: ChunkSerializer<WriteBackend = PathBuf>> {
     file_locks: RwLock<BTreeMap<PathBuf, Arc<ChunkSerializerLazyLoader<S>>>>,
     watchers: RwLock<BTreeMap<PathBuf, usize>>,
     chunk_config: S::ChunkConfig,
+    /// 缓存字节预算（0 = 不设上限，恢复旧行为）。
+    max_cache_bytes: usize,
+    /// LRU 序号：每次取用加载器单调递增。
+    usage_seq: AtomicU64,
+    /// 字节预算执法累计驱逐的条目数（观测用）。
+    evicted_total: AtomicU64,
 }
 
 /// `file_locks` 缓存条目数上限。
@@ -55,7 +64,12 @@ pub struct ChunkFileManager<S: ChunkSerializer<WriteBackend = PathBuf>> {
 /// 下次插入再试。
 const MAX_CACHED_SERIALIZERS: usize = 1024;
 
-pub(crate) trait PathFromLevelFolder {
+/// 把区块/实体数据映射到其在关卡目录下的磁盘文件。
+///
+/// 公开供基准与外部工具按真实路径布局驱动
+/// `ChunkFileManager`（`benchmark/` 的内存基准即经此接口
+/// 复现 region 目录组织）。
+pub trait PathFromLevelFolder {
     fn file_path(folder: &LevelFolder, file_name: &str) -> PathBuf;
 }
 
@@ -63,6 +77,8 @@ struct ChunkSerializerLazyLoader<S: ChunkSerializer<WriteBackend = PathBuf>> {
     path: PathBuf,
     /// 至多初始化一次；后续调用复用同一个 Arc。
     internal: OnceCell<Arc<RwLock<S>>>,
+    /// 最近一次取用时的 LRU 序号（0 = 尚未取用）。
+    last_used: AtomicU64,
 }
 
 impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLoader<S> {
@@ -70,6 +86,7 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLo
         Self {
             path,
             internal: OnceCell::new(),
+            last_used: AtomicU64::new(0),
         }
     }
 
@@ -151,11 +168,108 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf> + 'static> ChunkSerializerLazyLo
 }
 
 impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
-    pub fn new(chunk_config: S::ChunkConfig) -> Self {
+    /// `max_cache_bytes` 为缓存字节预算（0 = 不设上限）。
+    pub fn new(chunk_config: S::ChunkConfig, max_cache_bytes: usize) -> Self {
         Self {
             file_locks: RwLock::new(BTreeMap::new()),
             watchers: RwLock::new(BTreeMap::new()),
             chunk_config,
+            max_cache_bytes,
+            usage_seq: AtomicU64::new(0),
+            evicted_total: AtomicU64::new(0),
+        }
+    }
+
+    /// 记录一次取用，返回该加载器当前的 LRU 序号。
+    fn touch(&self, loader: &ChunkSerializerLazyLoader<S>) {
+        let seq = self.usage_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        loader.last_used.store(seq, Ordering::Relaxed);
+    }
+
+    /// 字节预算执法累计驱逐的缓存条目数。
+    #[must_use]
+    pub fn evicted_total(&self) -> u64 {
+        self.evicted_total.load(Ordering::Relaxed)
+    }
+
+    /// 当前缓存条目的内存总账（字节；锁忙条目按 0 计入）。
+    pub async fn cached_bytes_total(&self) -> usize {
+        let locks = self.file_locks.read().await;
+        locks
+            .values()
+            .map(|loader| {
+                loader
+                    .internal
+                    .get()
+                    .and_then(|arc| arc.try_read().ok())
+                    .map_or(0, |serializer| serializer.cached_bytes())
+            })
+            .sum()
+    }
+}
+
+impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
+    /// 在 `file_locks` 写锁内执行缓存字节预算驱逐。
+    ///
+    /// 只驱逐满足 `can_remove`（无存活引用、无未落盘更新——磁盘
+    /// 已是最新状态）的条目，因此驱逐既不丢数据也不需要额外
+    /// 写盘；被驱逐条目下次访问时从磁盘重读，状态完全一致。
+    /// watched 条目同样可被驱逐（其语义仅是"保存先合并进内存"，
+    /// 而干净条目内存与磁盘等价），但带有未落盘更改的 watched
+    /// 条目被 `has_pending_writes` 挡下，留待自动保存清理。
+    ///
+    /// 为降低抖动采用滞回：超限时驱逐到预算的 80%。锁忙（正在
+    /// 读写）的条目本轮按 0 字节计入并跳过，留给下一轮执法。
+    fn enforce_byte_budget(
+        &self,
+        locks: &mut BTreeMap<PathBuf, Arc<ChunkSerializerLazyLoader<S>>>,
+    ) {
+        if self.max_cache_bytes == 0 {
+            return;
+        }
+
+        let mut total_bytes = 0usize;
+        let mut entries: Vec<(PathBuf, usize, u64)> = Vec::with_capacity(locks.len());
+        for (path, loader) in locks.iter() {
+            let bytes = loader
+                .internal
+                .get()
+                .and_then(|arc| arc.try_read().ok())
+                .map_or(0, |serializer| serializer.cached_bytes());
+            total_bytes += bytes;
+            entries.push((
+                path.clone(),
+                bytes,
+                loader.last_used.load(Ordering::Relaxed),
+            ));
+        }
+
+        if total_bytes <= self.max_cache_bytes {
+            return;
+        }
+
+        let target = self.max_cache_bytes / 5 * 4;
+        // 最近最少使用优先驱逐
+        entries.sort_by_key(|(_, _, last_used)| *last_used);
+        for (path, bytes, _) in entries {
+            if total_bytes <= target {
+                break;
+            }
+            if bytes == 0 {
+                continue;
+            }
+            let removable = locks
+                .get(&path)
+                .is_some_and(ChunkSerializerLazyLoader::can_remove);
+            if removable {
+                locks.remove(&path);
+                total_bytes -= bytes;
+                self.evicted_total.fetch_add(1, Ordering::Relaxed);
+                trace!(
+                    "缓存字节超限，已驱逐 {} 的序列化器（{bytes} 字节，磁盘已是最新）",
+                    path.display()
+                );
+            }
         }
     }
 }
@@ -172,6 +286,7 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
                 // 在释放锁*之前*克隆 Arc，使其保持存活。
                 let loader = loader.clone();
                 drop(locks);
+                self.touch(&loader);
                 return loader.get().await;
             }
         }
@@ -183,6 +298,7 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
                 .entry(path_key)
                 .or_insert_with(|| Arc::new(ChunkSerializerLazyLoader::new(path.into())))
                 .clone();
+            self.touch(&loader);
             if locks.len() > MAX_CACHED_SERIALIZERS {
                 // 超出缓存上限：在写锁内驱逐一切当前可安全移除的
                 // 条目（判定与 maybe_evict 一致；刚插入的条目持有
@@ -198,6 +314,7 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
                     trace!("缓存超限，已驱逐 {} 的序列化器", p.display());
                 }
             }
+            self.enforce_byte_budget(&mut locks);
             loader
             // 写锁在此处释放 —— `loader.get()` 可能因 I/O 而阻塞，且
             // 不得持有地图锁。
@@ -343,7 +460,16 @@ impl<S: ChunkSerializer<WriteBackend = PathBuf>> ChunkFileManager<S> {
 
         // 收集所有 region 结果；上报遇到的第一个错误。
         let results: Vec<Result<(), ChunkWritingError>> = join_all(tasks).await;
-        results.into_iter().find(Result::is_err).unwrap_or(Ok(()))
+        let first_err = results.into_iter().find(Result::is_err);
+
+        // 保存会让序列化器吞入新区块字节（watched 区域先合并进
+        // 内存），是缓存增长的另一条路径；在全部区域任务收尾后
+        // 统一做一次预算执法，避免并发任务间的锁车队。
+        let mut locks = self.file_locks.write().await;
+        self.enforce_byte_budget(&mut locks);
+        drop(locks);
+
+        first_err.unwrap_or(Ok(()))
     }
 }
 
@@ -643,5 +769,386 @@ where
             Self::Anvil(io) => io.flush_pending_writes().await,
             Self::Pump(io) => io.flush_pending_writes().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chunk::ChunkSerializingError;
+    use crate::chunk::format::anvil::{AnvilChunkFile, SingleChunkDataSerializer};
+    use bytes::Bytes;
+    use papokin_config::chunk::AnvilChunkConfig;
+    use std::sync::atomic::AtomicBool;
+
+    /// 纯逻辑测试用的占位区块数据。
+    struct MockData;
+
+    impl Dirtiable for MockData {
+        fn is_dirty(&self) -> bool {
+            false
+        }
+        fn mark_dirty(&self, _flag: bool) {}
+    }
+
+    /// 字节量与待写状态可由测试直接操控的模拟序列化器。
+    #[derive(Default)]
+    struct MockSerializer {
+        bytes: usize,
+        pending: bool,
+    }
+
+    impl ChunkSerializer for MockSerializer {
+        type Data = MockData;
+        type WriteBackend = PathBuf;
+        type ChunkConfig = ();
+
+        fn get_chunk_key(chunk: &Vector2<i32>) -> String {
+            format!("./r.{}.{}.mock", chunk.x >> 5, chunk.y >> 5)
+        }
+
+        async fn write(&self, _backend: &PathBuf) -> Result<(), std::io::Error> {
+            Ok(())
+        }
+
+        fn read(_r: Bytes) -> Result<Self, ChunkReadingError> {
+            Ok(Self::default())
+        }
+
+        fn has_pending_writes(&self) -> bool {
+            self.pending
+        }
+
+        fn cached_bytes(&self) -> usize {
+            self.bytes
+        }
+
+        async fn update_chunk(
+            &mut self,
+            _chunk_data: Arc<Self::Data>,
+            _chunk_config: &Self::ChunkConfig,
+        ) -> Result<(), ChunkWritingError> {
+            Ok(())
+        }
+
+        async fn get_chunks(
+            &self,
+            _chunks: Vec<Vector2<i32>>,
+            _stream: mpsc::Sender<LoadedData<Self::Data, ChunkReadingError>>,
+        ) {
+        }
+    }
+
+    async fn insert_with_bytes(
+        manager: &ChunkFileManager<MockSerializer>,
+        dir: &Path,
+        name: &str,
+        bytes: usize,
+        pending: bool,
+    ) {
+        let path = dir.join(name);
+        let serializer = manager.get_serializer(&path).await.expect("取序列化器");
+        let mut guard = serializer.write().await;
+        guard.bytes = bytes;
+        guard.pending = pending;
+        drop(guard);
+        // 必须丢弃句柄，否则存活引用会挡住驱逐
+        drop(serializer);
+    }
+
+    async fn cached_names(manager: &ChunkFileManager<MockSerializer>) -> Vec<String> {
+        manager
+            .file_locks
+            .read()
+            .await
+            .keys()
+            .map(|p| {
+                p.file_name()
+                    .expect("文件名")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn budget_evicts_least_recently_used_clean_entries() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let manager = ChunkFileManager::<MockSerializer>::new((), 100);
+
+        // 逐个插入；每次插入都会在写锁内做预算执法，
+        // 预期最旧的干净条目依次被驱逐、最新三条留存。
+        for (name, bytes) in [("f0", 40), ("f1", 40), ("f2", 40), ("f3", 40), ("f4", 40)] {
+            insert_with_bytes(&manager, dir.path(), name, bytes, false).await;
+        }
+
+        let mut names = cached_names(&manager).await;
+        names.sort_unstable();
+        assert_eq!(names, vec!["f2", "f3", "f4"]);
+    }
+
+    #[tokio::test]
+    async fn budget_never_evicts_pending_writes() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let manager = ChunkFileManager::<MockSerializer>::new((), 100);
+
+        // f0 体积超预算但持有未落盘更新：绝不可驱逐
+        insert_with_bytes(&manager, dir.path(), "f0", 200, true).await;
+        insert_with_bytes(&manager, dir.path(), "f1", 50, false).await;
+        insert_with_bytes(&manager, dir.path(), "f2", 0, false).await;
+
+        let mut names = cached_names(&manager).await;
+        names.sort_unstable();
+        assert_eq!(names, vec!["f0", "f2"]);
+    }
+
+    #[tokio::test]
+    async fn zero_budget_disables_enforcement() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let manager = ChunkFileManager::<MockSerializer>::new((), 0);
+
+        for i in 0..4 {
+            insert_with_bytes(&manager, dir.path(), &format!("f{i}"), 1_000_000, false).await;
+        }
+
+        assert_eq!(cached_names(&manager).await.len(), 4);
+    }
+
+    /// 真实 Anvil 格式下的端到端往返：干净区域被驱逐后，
+    /// 数据仍可从磁盘原样读回；驱逐后再写入能正确重读合并。
+    #[derive(Debug)]
+    struct PayloadChunk {
+        x: i32,
+        z: i32,
+        payload: Vec<u8>,
+        dirty: AtomicBool,
+    }
+
+    impl PayloadChunk {
+        fn new(x: i32, z: i32, payload: Vec<u8>) -> Arc<Self> {
+            Arc::new(Self {
+                x,
+                z,
+                payload,
+                dirty: AtomicBool::new(true),
+            })
+        }
+    }
+
+    impl Dirtiable for PayloadChunk {
+        fn is_dirty(&self) -> bool {
+            self.dirty.load(Ordering::Relaxed)
+        }
+        fn mark_dirty(&self, flag: bool) {
+            self.dirty.store(flag, Ordering::Relaxed);
+        }
+    }
+
+    impl SingleChunkDataSerializer for PayloadChunk {
+        fn to_bytes(&self) -> Result<Bytes, ChunkSerializingError> {
+            Ok(Bytes::copy_from_slice(&self.payload))
+        }
+
+        fn from_bytes(bytes: &Bytes, pos: Vector2<i32>) -> Result<Self, ChunkReadingError> {
+            Ok(Self {
+                x: pos.x,
+                z: pos.y,
+                payload: bytes.to_vec(),
+                dirty: AtomicBool::new(false),
+            })
+        }
+
+        fn position(&self) -> (i32, i32) {
+            (self.x, self.z)
+        }
+    }
+
+    impl PathFromLevelFolder for PayloadChunk {
+        fn file_path(folder: &LevelFolder, file_name: &str) -> PathBuf {
+            folder.region_folder.join(file_name)
+        }
+    }
+
+    /// 不可压缩的伪随机负载（压缩后体积≈原文，便于控制预算账）。
+    fn pseudo_random_bytes(len: usize, seed: u64) -> Vec<u8> {
+        let mut state = seed | 1;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 32) as u8
+            })
+            .collect()
+    }
+
+    fn test_folder(dir: &Path) -> Arc<LevelFolder> {
+        let region_folder = dir.join("region");
+        std::fs::create_dir_all(&region_folder).expect("建 region 目录");
+        Arc::new(LevelFolder {
+            root_folder: dir.to_path_buf(),
+            dim_folder: dir.to_path_buf(),
+            region_folder,
+            entities_folder: dir.join("entities"),
+            poi_folder: dir.join("poi"),
+        })
+    }
+
+    type PayloadManager = ChunkFileManager<AnvilChunkFile<PayloadChunk>>;
+
+    async fn save_region(
+        manager: &PayloadManager,
+        folder: &Arc<LevelFolder>,
+        region_x: i32,
+        seeds: &[u64],
+    ) {
+        let chunks: Vec<(Vector2<i32>, Arc<PayloadChunk>)> = seeds
+            .iter()
+            .enumerate()
+            .map(|(i, seed)| {
+                let at = Vector2::new(region_x * 32 + i as i32, 0);
+                (
+                    at,
+                    PayloadChunk::new(at.x, at.y, pseudo_random_bytes(600, *seed)),
+                )
+            })
+            .collect();
+        manager
+            .save_chunks_forced(folder, chunks)
+            .await
+            .expect("强制保存");
+    }
+
+    async fn fetch_payloads(
+        manager: &PayloadManager,
+        folder: &Arc<LevelFolder>,
+        coords: &[Vector2<i32>],
+    ) -> Vec<(Vector2<i32>, Vec<u8>)> {
+        let (send, mut recv) = mpsc::channel(64);
+        manager.fetch_chunks(folder, coords, send).await;
+        let mut out = Vec::new();
+        while let Some(data) = recv.recv().await {
+            match data {
+                LoadedData::Loaded(chunk) => {
+                    out.push((Vector2::new(chunk.x, chunk.z), chunk.payload.clone()));
+                }
+                other => panic!("期望 Loaded，得到 {other:?}"),
+            }
+        }
+        out.sort_by_key(|(pos, _)| (pos.x, pos.y));
+        out
+    }
+
+    #[tokio::test]
+    async fn evicted_clean_region_roundtrips_from_disk() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let folder = test_folder(dir.path());
+        // 预算 2 KiB：每区域约 1.3 KiB（两块 × 600 字节级压缩负载）
+        let manager = PayloadManager::new(AnvilChunkConfig::default(), 2048);
+
+        // 模拟运行中服务器：三个区域的区块都处于加载（watched）
+        // 状态，强制保存落盘后序列化器转为干净但仍驻留内存——
+        // 这正是预算执法要收口的内存。
+        for region_x in 0..3 {
+            let coords: Vec<Vector2<i32>> =
+                (0..2).map(|i| Vector2::new(region_x * 32 + i, 0)).collect();
+            manager.watch_chunks(&folder, &coords).await;
+        }
+
+        save_region(&manager, &folder, 0, &[11, 12]).await;
+        save_region(&manager, &folder, 1, &[21, 22]).await;
+        // 第三次保存后总账超预算：执法按 LRU 驱逐最旧的干净区域
+        save_region(&manager, &folder, 2, &[31, 32]).await;
+
+        let (names, total) = {
+            let locks = manager.file_locks.read().await;
+            let names: Vec<String> = locks
+                .keys()
+                .map(|p| {
+                    p.file_name()
+                        .expect("文件名")
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            let mut total = 0usize;
+            for loader in locks.values() {
+                if let Some(arc) = loader.internal.get()
+                    && let Ok(serializer) = arc.try_read()
+                {
+                    total += serializer.cached_bytes();
+                }
+            }
+            (names, total)
+        };
+        // 不变式 1：最旧的区域 0 必须已被驱逐
+        assert!(
+            !names.contains(&"r.0.0.mca".to_string()),
+            "区域 0 应已被驱逐: {names:?}"
+        );
+        // 不变式 2：最新的区域 2 必须仍在缓存
+        assert!(
+            names.contains(&"r.2.0.mca".to_string()),
+            "区域 2 应仍在缓存: {names:?}"
+        );
+        // 不变式 3：缓存总账不得超预算
+        assert!(total <= 2048, "缓存总账 {total} 超预算");
+
+        // 被驱逐区域的磁盘数据必须原样可读
+        let got =
+            fetch_payloads(&manager, &folder, &[Vector2::new(0, 0), Vector2::new(1, 0)]).await;
+        assert_eq!(
+            got,
+            vec![
+                (Vector2::new(0, 0), pseudo_random_bytes(600, 11)),
+                (Vector2::new(1, 0), pseudo_random_bytes(600, 12)),
+            ]
+        );
+
+        // 向已被驱逐的区域再写入：管理器重读磁盘并合并，
+        // 新旧区块都必须完好
+        save_region(&manager, &folder, 0, &[13]).await;
+        let got =
+            fetch_payloads(&manager, &folder, &[Vector2::new(0, 0), Vector2::new(1, 0)]).await;
+        assert_eq!(
+            got,
+            vec![
+                (Vector2::new(0, 0), pseudo_random_bytes(600, 13)),
+                (Vector2::new(1, 0), pseudo_random_bytes(600, 12)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn dirty_watched_region_is_never_evicted_before_flush() {
+        let dir = tempfile::tempdir().expect("临时目录");
+        let folder = test_folder(dir.path());
+        let manager = PayloadManager::new(AnvilChunkConfig::default(), 100);
+
+        // 模拟运行中服务器：区块被 watch（加载中），普通保存只
+        // 合并进内存不写盘 → 序列化器带未落盘更新
+        let at = Vector2::new(0, 0);
+        manager.watch_chunks(&folder, &[at]).await;
+        manager
+            .save_chunks(
+                &folder,
+                vec![(at, PayloadChunk::new(0, 0, pseudo_random_bytes(600, 7)))],
+            )
+            .await
+            .expect("保存");
+        // 再触碰另一文件触发执法；带 pending 的条目必须存活
+        let other = dir.path().join("region").join("r.9.9.mca");
+        let _ = manager.get_serializer(&other).await.expect("取序列化器");
+
+        assert!(
+            manager
+                .file_locks
+                .read()
+                .await
+                .keys()
+                .any(|p| p.ends_with("r.0.0.mca")),
+            "带未落盘更新的条目绝不可被驱逐"
+        );
+        manager.unwatch_chunks(&folder, &[at]).await;
     }
 }

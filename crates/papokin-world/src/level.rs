@@ -254,19 +254,37 @@ impl Level {
             structure_overrides.as_deref(),
         ));
 
+        // 序列化器缓存字节预算（0 = 无界，旧行为）。region 与
+        // entities 两个管理器各自独立记账。
+        let cache_max_bytes = usize::try_from(level_config.cache_max_mb)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(1024 * 1024);
         let chunk_saver = match &level_config.chunk {
-            ChunkConfig::Linear => Arc::new(ChunkSaver::Linear(ChunkFileManager::new(()))),
-            ChunkConfig::Anvil(config) => {
-                Arc::new(ChunkSaver::Anvil(ChunkFileManager::new(config.clone())))
+            ChunkConfig::Linear => Arc::new(ChunkSaver::Linear(ChunkFileManager::new(
+                (),
+                cache_max_bytes,
+            ))),
+            ChunkConfig::Anvil(config) => Arc::new(ChunkSaver::Anvil(ChunkFileManager::new(
+                config.clone(),
+                cache_max_bytes,
+            ))),
+            ChunkConfig::Pump => {
+                Arc::new(ChunkSaver::Pump(ChunkFileManager::new((), cache_max_bytes)))
             }
-            ChunkConfig::Pump => Arc::new(ChunkSaver::Pump(ChunkFileManager::new(()))),
         };
         let entity_saver = match &level_config.chunk {
-            ChunkConfig::Linear => Arc::new(EntitySaver::Linear(ChunkFileManager::new(()))),
-            ChunkConfig::Anvil(config) => {
-                Arc::new(EntitySaver::Anvil(ChunkFileManager::new(config.clone())))
-            }
-            ChunkConfig::Pump => Arc::new(EntitySaver::Pump(ChunkFileManager::new(()))),
+            ChunkConfig::Linear => Arc::new(EntitySaver::Linear(ChunkFileManager::new(
+                (),
+                cache_max_bytes,
+            ))),
+            ChunkConfig::Anvil(config) => Arc::new(EntitySaver::Anvil(ChunkFileManager::new(
+                config.clone(),
+                cache_max_bytes,
+            ))),
+            ChunkConfig::Pump => Arc::new(EntitySaver::Pump(ChunkFileManager::new(
+                (),
+                cache_max_bytes,
+            ))),
         };
 
         let pending_entity_generations = Arc::new(DashMap::new());
