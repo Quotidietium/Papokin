@@ -171,6 +171,22 @@ impl PapokinError for GetBlockError {
     }
 }
 
+/// 玩家快照条目（`player`, `pos`, `bb`, `chunk_pos`），实体碰撞检测用
+type PlayerSnapshot = (Arc<Player>, Vector3<f64>, BoundingBox, Vector2<i32>);
+
+/// tick 复用缓冲（轮次 14）：玩家快照与方块实体活跃集跨 tick 驻留容量。
+///
+/// 两者每 tick 重建、tick 结束即弃；驻留容量、逐 tick `clear()` 重填，
+/// 消去逐 tick 新建 `Vec` 的分配流失。tick 单线程顺序执行，经
+/// `Mutex` 独占访问，不会并发。
+#[derive(Default)]
+struct TickScratch {
+    /// 玩家快照，实体碰撞检测用
+    players_cache: Vec<PlayerSnapshot>,
+    /// 活跃区块的方块实体，本 tick 统一 tick 与比较器输出排空用
+    block_entities: Vec<Arc<dyn BlockEntity>>,
+}
+
 /// 表示一个 Minecraft 世界，包含实体、玩家以及底层的世界数据。
 ///
 /// 每个维度（主世界、下界、末地）通常都有各自的 `World`。
@@ -235,6 +251,11 @@ pub struct World {
     pub custom_data: std::sync::Mutex<NbtCompound>,
     /// 特定位置方块实体的持久自定义数据
     pub custom_block_entity_data: DashMap<BlockPos, NbtCompound>,
+    /// tick 复用缓冲：玩家快照（碰撞检测用）与方块实体活跃集。
+    /// 两者每 tick 重建、tick 结束即弃；跨 tick 驻留容量、逐 tick
+    /// `clear()` 重填，消去逐 tick 新建 `Vec` 的分配流失（轮次 14）。
+    /// tick 单线程顺序执行，缓冲不会并发访问。
+    tick_scratch: std::sync::Mutex<TickScratch>,
     /// 实体追踪器，负责跟踪实体可见性，并向观察者发送增量/状态数据包。
     pub entity_tracker: entity_tracker::EntityTracker,
 }
@@ -372,6 +393,7 @@ impl World {
             pending_block_entity_migrations: crossbeam::queue::SegQueue::new(),
             custom_data: std::sync::Mutex::new(custom_data),
             custom_block_entity_data: DashMap::new(),
+            tick_scratch: std::sync::Mutex::new(TickScratch::default()),
             entity_tracker: entity_tracker::EntityTracker::new(),
             chunk_encode_cache: crate::net::chunk_sender::SharedChunkEncodeCache::new(),
         }
@@ -1325,19 +1347,23 @@ impl World {
 
         let players = self.players.load();
         let player_count = players.len();
-        let players_cache: Vec<_> = players
-            .par_iter()
-            .map(|player| {
-                let entity = player.get_entity();
-                let pos = entity.pos.load();
-                let bb = entity.bounding_box.load().expand(1.0, 0.5, 1.0);
-                let chunk_pos = Vector2::new(
-                    get_section_cord(pos.x.floor() as i32),
-                    get_section_cord(pos.z.floor() as i32),
-                );
-                (player, pos, bb, chunk_pos)
-            })
-            .collect();
+        // 轮次 14：玩家快照跨 tick 复用（clear 重填，消逐 tick 新建 Vec）。
+        // tick 单线程顺序执行，锁仅此一处获取、tick 结束归还。
+        let mut tick_scratch = self
+            .tick_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tick_scratch.players_cache.clear();
+        tick_scratch.players_cache.extend(players.iter().map(|player| {
+            let entity = player.get_entity();
+            let pos = entity.pos.load();
+            let bb = entity.bounding_box.load().expand(1.0, 0.5, 1.0);
+            let chunk_pos = Vector2::new(
+                get_section_cord(pos.x.floor() as i32),
+                get_section_cord(pos.z.floor() as i32),
+            );
+            (player.clone(), pos, bb, chunk_pos)
+        }));
 
         let t_players = std::time::Instant::now();
         let player_handle = handle.clone();
@@ -1422,7 +1448,9 @@ impl World {
                     let entity_pos = entity_inner.pos.load();
                     let entity_bb = entity_inner.bounding_box.load();
 
-                    for (player, player_pos, player_bb, player_chunk) in &players_cache {
+                    for (player, player_pos, player_bb, player_chunk) in
+                        &tick_scratch.players_cache
+                    {
                         if (player_chunk.x - entity_chunk.x).abs() <= 1
                             && (player_chunk.y - entity_chunk.y).abs() <= 1
                             && (player_pos.x - entity_pos.x).abs() < 5.0
@@ -1457,21 +1485,26 @@ impl World {
 
         self.entity_tracker.update_all(self);
 
-        let mut block_entities: Vec<Arc<dyn BlockEntity>> = Vec::new();
+        // 轮次 14：方块实体活跃集跨 tick 复用（与玩家快照同一守卫）
+        tick_scratch.block_entities.clear();
         if self.block_entities.len() < active_chunks.len() {
             for chunk_block_entities in &self.block_entities {
                 if active_chunks.contains(chunk_block_entities.key()) {
-                    block_entities.extend(chunk_block_entities.values().cloned());
+                    tick_scratch
+                        .block_entities
+                        .extend(chunk_block_entities.values().cloned());
                 }
             }
         } else {
             for chunk_pos in active_chunks.iter() {
                 if let Some(chunk_block_entities) = self.block_entities.get(chunk_pos) {
-                    block_entities.extend(chunk_block_entities.values().cloned());
+                    tick_scratch
+                        .block_entities
+                        .extend(chunk_block_entities.values().cloned());
                 }
             }
         }
-        let block_entity_count = block_entities.len();
+        let block_entity_count = tick_scratch.block_entities.len();
 
         let t_be = std::time::Instant::now();
         let be_handle = handle;
@@ -1482,18 +1515,20 @@ impl World {
             }
         };
         // 小集合上并行调度的池唤醒开销高于 tick 本身
-        if block_entities.len() <= 2 * BLOCK_ENTITY_TICK_BATCH_SIZE {
-            block_entities
+        if tick_scratch.block_entities.len() <= 2 * BLOCK_ENTITY_TICK_BATCH_SIZE {
+            tick_scratch
+                .block_entities
                 .chunks(BLOCK_ENTITY_TICK_BATCH_SIZE)
                 .for_each(tick_be_batch);
         } else {
-            block_entities
+            tick_scratch
+                .block_entities
                 .par_chunks(BLOCK_ENTITY_TICK_BATCH_SIZE)
                 .for_each(tick_be_batch);
         }
         // 在所有刻之后排空，因此变化（漏斗 -> 箱子）落在同一刻内。
         let guard = be_handle.enter();
-        self.flush_comparator_updates(&block_entities);
+        self.flush_comparator_updates(&tick_scratch.block_entities);
         drop(guard);
         let block_entity_elapsed = t_be.elapsed();
 
