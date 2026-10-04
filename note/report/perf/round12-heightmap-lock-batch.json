@@ -6,7 +6,7 @@
   },
   "per_block_lock": {
     "locks": 65537,
-    "wall_ms": 2.5374999999999996
+    "wall_ms": 2.4952
   },
   "per_column_lock": {
     "locks": 2,
