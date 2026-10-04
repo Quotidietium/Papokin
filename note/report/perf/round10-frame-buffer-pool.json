@@ -1,0 +1,50 @@
+{
+  "gates": {
+    "all_pass": true
+  },
+  "round": 10,
+  "scenarios": {
+    "w128": {
+      "gates": {
+        "wire_bytes_equal": true,
+        "wire_hash_equal": true
+      },
+      "global_pool": {
+        "buffers_created": 23,
+        "standing_bytes": 4194688,
+        "wall_ms": 528.555
+      },
+      "legacy": {
+        "buffers_created": 128,
+        "standing_bytes": 33557504,
+        "wall_ms": 541.9406
+      },
+      "workers": 128
+    },
+    "w16": {
+      "gates": {
+        "wire_bytes_equal": true,
+        "wire_hash_equal": true
+      },
+      "global_pool": {
+        "buffers_created": 11,
+        "standing_bytes": 2883968,
+        "wall_ms": 726.97
+      },
+      "legacy": {
+        "buffers_created": 128,
+        "standing_bytes": 33557504,
+        "wall_ms": 708.4288
+      },
+      "workers": 16
+    }
+  },
+  "topic": "组帧缓冲全局池化（每连接常驻 scratch 与批路径逐批分配的统一池化）",
+  "workload": {
+    "big_packet_bytes": 1048576,
+    "connections": 128,
+    "global_pool_cap": 16,
+    "login_packets": 40,
+    "play_packets": 260
+  }
+}
