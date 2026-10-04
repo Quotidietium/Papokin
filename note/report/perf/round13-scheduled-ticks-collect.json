@@ -1,0 +1,29 @@
+{
+  "full_collect": {
+    "allocs": 1200,
+    "bytes": 9849600
+  },
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "on_demand_collect": {
+    "allocs": 600,
+    "bytes": 19200
+  },
+  "per_tick": {
+    "full_allocs": 2.0,
+    "full_bytes": 16416.0,
+    "on_demand_allocs": 1.0,
+    "on_demand_bytes": 32.0
+  },
+  "round": 13,
+  "topic": "计划刻区块集合逐 tick 全量 collect 改按需收集（消常态分配流失）",
+  "workload": {
+    "removed_per_tick": 4,
+    "scheduled_chunks": 2048,
+    "ticks": 600
+  }
+}
