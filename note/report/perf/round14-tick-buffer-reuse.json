@@ -1,0 +1,30 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_tick": {
+    "fresh_allocs": 2.0,
+    "fresh_bytes": 13024.0,
+    "reused_allocs": 0.0,
+    "reused_bytes": 0.0
+  },
+  "per_tick_fresh": {
+    "allocs": 1200,
+    "bytes": 7814400
+  },
+  "reused_buffers": {
+    "allocs": 0,
+    "bytes": 0
+  },
+  "round": 14,
+  "topic": "世界 tick 玩家快照与方块实体活跃集跨 tick 复用（消逐 tick 分配流失）",
+  "workload": {
+    "block_entities": 1500,
+    "entities": 800,
+    "players": 32,
+    "ticks": 600
+  }
+}
