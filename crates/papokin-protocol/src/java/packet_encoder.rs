@@ -2,7 +2,7 @@ use aes::cipher::KeyIvInit;
 use bytes::Bytes;
 use flate2::{Compress, Compression, FlushCompress, Status};
 use papokin_util::version::JavaMinecraftVersion;
-use std::cell::RefCell;
+use std::sync::Mutex;
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -24,64 +24,99 @@ use crate::{
 /// 稳态下收缩条件不成立，不产生收缩/重分配振荡。
 pub(crate) const MAX_RETAINED_SCRATCH: usize = 256 * 1024;
 
-/// 每线程池化的 zlib 压缩上下文数量上限（防御性约束；
-/// 稳态下每线程在役压缩级别仅一种）。
-const MAX_POOLED_COMPRESSORS_PER_THREAD: usize = 4;
+/// 压缩资源全局池的驻留上限（份）。上限只约束驻留、不约束并发：
+/// 池空时检出永远新建，压缩路径绝不因池化而阻塞。
+const MAX_POOLED_COMPRESSION_RESOURCES: usize = 16;
 
-thread_local! {
-    /// 按线程复用的 zlib 压缩上下文池。
-    ///
-    /// 压缩上下文（字典窗口 + 哈希/链表 + 待决缓冲，实测单个逾
-    /// 百 KiB）原本作为字段随每条连接的编码器常驻，而连接的压缩
-    /// 流量是间歇的——大量空闲连接各自白占一份状态。协议线上行为
-    /// 逐包无状态（每包 `reset()` 后以 `FlushCompress::Finish`
-    /// 完整收尾，等价于一条全新压缩流），上下文在连接间可互换、
-    /// 输出字节全等，故按线程检出复用。检出/归还均在
-    /// `compress_packet_data` 单次同步调用内完成，不跨 await、
-    /// 不跨线程。
-    // 已是 const 初始化，clippy 1.98 对 RefCell<Vec<_>> 形式仍误报
-    //（与 density_volume 同例）
-    #[allow(clippy::missing_const_for_thread_local)]
-    static COMPRESSOR_POOL: RefCell<Vec<(CompressionLevel, Compress)>> =
-        const { RefCell::new(Vec::new()) };
+/// 压缩资源捆绑：一份 zlib 压缩上下文 + 一块压缩暂存缓冲。
+/// 两者在 `frame_packet` 的压缩分支中成对使用，捆绑检出省去
+/// 两次池查找。
+struct CompressionResources {
+    level: CompressionLevel,
+    compressor: Compress,
+    scratch: Vec<u8>,
 }
 
-/// 池化压缩上下文守卫：存活期间独占一份上下文，析构时归还
-/// 线程池（池满则直接释放）。
-struct PooledCompressor(Option<(CompressionLevel, Compress)>);
+/// 全局（跨线程）压缩资源池。
+///
+/// 压缩上下文（实测单个约 313 KiB）与压缩暂存（每连接 ≤ 256 KiB）
+/// 原本随每条连接的编码器常驻。压缩实际发生在
+/// `frame_batch_maybe_offload` 投出的 `spawn_blocking` 线程上——
+/// tokio 阻塞池按需扩张（上限 512 线程），tick 齐发的批量压缩会让
+/// 大量阻塞线程各沾一次压缩：若按线程局部驻留（轮次 8 初版），
+/// 驻留量 ≈ 沾过压缩的线程数 × 单份大小，满负载时池化收益归零。
+/// 协议线上行为逐包无状态（每包 `reset()` 后以
+/// `FlushCompress::Finish` 完整收尾，等价于全新流；暂存内容在
+/// 组帧时即拷出），资源在连接/线程间可互换、输出字节全等，故
+/// 全局池化并把驻留封顶为常数份。每包一次的检出/归还锁持有
+/// 仅为一次入出队，竞争可忽略。
+static COMPRESSION_RESOURCE_POOL: Mutex<Vec<CompressionResources>> = Mutex::new(Vec::new());
 
-impl PooledCompressor {
-    /// 按压缩级别检出上下文：池中有同级条目则复用，否则新建。
-    fn checkout(level: CompressionLevel) -> Self {
-        let entry = COMPRESSOR_POOL.with(|pool| {
-            let mut pool = pool.borrow_mut();
+/// 池化压缩资源守卫：存活期间独占一份资源，析构时归还来源池
+/// （池满则直接释放）。归还前做暂存治理：容量逾
+/// `2 × MAX_RETAINED_SCRATCH` 时收缩回留存上限——归还时无从预知
+/// 下一包尺寸，以 2 倍余量近似轮次 2 的半量规则，规避常规尺寸
+/// 附近的收缩/重分配振荡。
+///
+/// 守卫以来源池的引用为参数而非硬编码全局静态：生产传全局池，
+/// 测试传栈上局部池，池状态断言因此与并发测试天然隔离。
+struct PooledCompressionResources<'a> {
+    entry: Option<CompressionResources>,
+    pool: &'a Mutex<Vec<CompressionResources>>,
+}
+
+impl<'a> PooledCompressionResources<'a> {
+    /// 按压缩级别检出资源：池中有同级条目则复用，否则新建。
+    fn checkout(level: CompressionLevel, pool: &'a Mutex<Vec<CompressionResources>>) -> Self {
+        let entry = {
+            let mut pool = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pool.iter()
-                .position(|(pooled_level, _)| *pooled_level == level)
+                .position(|resources| resources.level == level)
                 .map(|index| pool.swap_remove(index))
-        });
-        Self(Some(entry.unwrap_or_else(|| {
-            (level, Compress::new(Compression::new(level), true))
-        })))
+        };
+        Self {
+            entry: Some(entry.unwrap_or_else(|| CompressionResources {
+                level,
+                compressor: Compress::new(Compression::new(level), true),
+                scratch: Vec::new(),
+            })),
+            pool,
+        }
     }
 
-    /// 取得内部压缩器的可变引用（上下文仅在 `Drop` 中交出，
+    /// 取得压缩器与暂存的可变引用（资源仅在 `Drop` 中交出，
     /// 守卫存活期间必为 `Some`）。
-    fn compressor_mut(&mut self) -> Option<&mut Compress> {
-        self.0.as_mut().map(|(_, compressor)| compressor)
+    fn parts_mut(&mut self) -> Option<(&mut Compress, &mut Vec<u8>)> {
+        let resources = self.entry.as_mut()?;
+        Some((&mut resources.compressor, &mut resources.scratch))
+    }
+
+    /// 取得暂存内容的只读视图（组帧拷出用）。
+    fn scratch_slice(&self) -> Option<&[u8]> {
+        self.entry
+            .as_ref()
+            .map(|resources| resources.scratch.as_slice())
     }
 }
 
-impl Drop for PooledCompressor {
+impl Drop for PooledCompressionResources<'_> {
     fn drop(&mut self) {
-        let Some(entry) = self.0.take() else {
+        let Some(mut resources) = self.entry.take() else {
             return;
         };
-        COMPRESSOR_POOL.with(|pool| {
-            let mut pool = pool.borrow_mut();
-            if pool.len() < MAX_POOLED_COMPRESSORS_PER_THREAD {
-                pool.push(entry);
-            }
-        });
+        resources.scratch.clear();
+        if resources.scratch.capacity() > 2 * MAX_RETAINED_SCRATCH {
+            resources.scratch.shrink_to(MAX_RETAINED_SCRATCH);
+        }
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pool.len() < MAX_POOLED_COMPRESSION_RESOURCES {
+            pool.push(resources);
+        }
     }
 }
 
@@ -151,6 +186,51 @@ impl<W: AsyncWrite + Unpin> AsyncWrite for EncryptionWriter<W> {
     }
 }
 
+/// 压缩数据包负载：自全局池检出压缩资源（上下文 + 暂存），
+/// 逐包 `reset()` + `FlushCompress::Finish` 收尾。返回持有压缩
+/// 结果的守卫，调用方在组帧拷出后任其析构归还。
+fn compress_packet_data(
+    packet_data: &[u8],
+    compression_level: CompressionLevel,
+) -> Result<PooledCompressionResources<'static>, PacketEncodeError> {
+    compress_packet_data_in(&COMPRESSION_RESOURCE_POOL, packet_data, compression_level)
+}
+
+/// `compress_packet_data` 的池参数化实现（测试可注局部池）。
+fn compress_packet_data_in<'a>(
+    pool: &'a Mutex<Vec<CompressionResources>>,
+    packet_data: &[u8],
+    compression_level: CompressionLevel,
+) -> Result<PooledCompressionResources<'a>, PacketEncodeError> {
+    let mut pooled = PooledCompressionResources::checkout(compression_level, pool);
+    let (compressor, scratch) = pooled
+        .parts_mut()
+        .ok_or_else(|| PacketEncodeError::Message("池化压缩资源缺失（不变式破坏）".into()))?;
+    scratch.clear();
+    // deflate 最坏膨胀约 5 B/64 KiB：按输入全长 + 1/16 + 64 预留，
+    // 保证不可压缩负载也能单次 Finish 到 StreamEnd。收缩治理在
+    // 守卫归还时统一执行（见 `PooledCompressionResources::drop`）。
+    let reserve_hint = packet_data
+        .len()
+        .saturating_add(packet_data.len() / 16)
+        .saturating_add(64);
+    let current_capacity = scratch.capacity();
+    if reserve_hint > current_capacity {
+        scratch.reserve(reserve_hint.saturating_sub(current_capacity));
+    }
+    compressor.reset();
+    let status = compressor
+        .compress_vec(packet_data, scratch, FlushCompress::Finish)
+        .map_err(|err| PacketEncodeError::CompressionFailed(err.to_string()))?;
+
+    if !matches!(status, Status::StreamEnd) {
+        return Err(PacketEncodeError::CompressionFailed(format!(
+            "Unexpected compressor status: {status:?}"
+        )));
+    }
+    Ok(pooled)
+}
+
 /// 编码器：服务器 -> 客户端
 /// 支持 `ZLib` 编码/压缩
 /// 支持 Aes128 加密
@@ -158,8 +238,9 @@ pub struct TCPNetworkEncoder<W: AsyncWrite + Unpin> {
     writer: Option<EncryptionWriter<W>>,
     // 压缩与压缩阈值
     compression: Option<(CompressionThreshold, CompressionLevel)>,
-    // 复用压缩缓冲区，避免为每个数据包分配新的 Vec。
-    compression_scratch: Vec<u8>,
+    // 复用组帧缓冲区，避免为每个数据包分配新的 Vec。
+    //（压缩暂存已随轮次 9 改全局池化检出，见
+    // `COMPRESSION_RESOURCE_POOL`）
     frame_scratch: Vec<u8>,
 }
 
@@ -168,7 +249,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
         Self {
             writer: Some(EncryptionWriter::None(writer)),
             compression: None,
-            compression_scratch: Vec::new(),
             frame_scratch: Vec::new(),
         }
     }
@@ -192,54 +272,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
 
         if let Some(writer) = self.writer.take() {
             self.writer = Some(writer.upgrade(cipher));
-        }
-        Ok(())
-    }
-
-    fn compress_packet_data(
-        &mut self,
-        packet_data: &[u8],
-        compression_level: CompressionLevel,
-    ) -> Result<(), PacketEncodeError> {
-        self.compression_scratch.clear();
-        let reserve_hint = packet_data
-            .len()
-            .saturating_add(packet_data.len() / 16)
-            .saturating_add(64);
-        let current_capacity = self.compression_scratch.capacity();
-        // 容量治理：大包把缓冲撑大后，若当前包明显更小则收缩回
-        // 留存上限（此刻 len 为 0，收缩零拷贝）；半量判定保证
-        // 区块流量等常规尺寸不会触发收缩/重分配振荡。
-        if current_capacity > MAX_RETAINED_SCRATCH && reserve_hint < current_capacity / 2 {
-            self.compression_scratch
-                .shrink_to(MAX_RETAINED_SCRATCH.max(reserve_hint));
-        }
-        let current_capacity = self.compression_scratch.capacity();
-        if reserve_hint > current_capacity {
-            self.compression_scratch
-                .reserve(reserve_hint.saturating_sub(current_capacity));
-        }
-
-        // 压缩上下文自线程池检出：逐包 reset + Finish 的线上行为
-        // 与每连接独占上下文字节全等（见 `COMPRESSOR_POOL` 文档），
-        // 守卫析构时归还池中。
-        let mut pooled = PooledCompressor::checkout(compression_level);
-        let compressor = pooled
-            .compressor_mut()
-            .ok_or_else(|| PacketEncodeError::Message("池化压缩上下文缺失（不变式破坏）".into()))?;
-        compressor.reset();
-        let status = compressor
-            .compress_vec(
-                packet_data,
-                &mut self.compression_scratch,
-                FlushCompress::Finish,
-            )
-            .map_err(|err| PacketEncodeError::CompressionFailed(err.to_string()))?;
-
-        if !matches!(status, Status::StreamEnd) {
-            return Err(PacketEncodeError::CompressionFailed(format!(
-                "Unexpected compressor status: {status:?}"
-            )));
         }
         Ok(())
     }
@@ -277,22 +309,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
     ///
     /// NOTE: 此方法不会刷新。请调用 [`Self::flush`] 来刷新缓冲数据。
     pub async fn write_packet(&mut self, packet_data: Bytes) -> Result<(), PacketEncodeError> {
-        // 未压缩包不会触碰压缩缓冲，若只在此刻收缩组帧缓冲，
-        // 低于阈值的稳态小包会让压缩缓冲按历史最大压缩包永久
-        // 驻留。缓冲内容在上一包组帧后即失效，先清空再同策收缩
-        //（len 为 0，收缩零拷贝）。
-        if !self.is_compressing_packet(&packet_data) {
-            self.compression_scratch.clear();
-            let reserve_hint = packet_data
-                .len()
-                .saturating_add(packet_data.len() / 16)
-                .saturating_add(64);
-            let capacity = self.compression_scratch.capacity();
-            if capacity > MAX_RETAINED_SCRATCH && reserve_hint < capacity / 2 {
-                self.compression_scratch
-                    .shrink_to(MAX_RETAINED_SCRATCH.max(reserve_hint));
-            }
-        }
         let mut frame = std::mem::take(&mut self.frame_scratch);
         frame.clear();
         // 与压缩缓冲同策：大包之后收缩回留存上限，防每条连接
@@ -348,15 +364,19 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
         let mut header_buf = [0u8; 10];
         let mut header_cursor = std::io::Cursor::new(&mut header_buf[..]);
 
-        let payload_to_write: &[u8] = if let Some((compression_threshold, compression_level)) =
-            self.compression
-        {
+        if let Some((compression_threshold, compression_level)) = self.compression {
             if data_len >= compression_threshold {
-                self.compress_packet_data(packet_data.as_ref(), compression_level)?;
-                debug_assert!(!self.compression_scratch.is_empty());
+                // 压缩资源自全局池检出：逐包 reset + Finish 的线上行为
+                // 与每连接独占资源字节全等（见
+                // `COMPRESSION_RESOURCE_POOL` 文档）；暂存内容在本分支
+                // 内拷入帧缓冲后，守卫析构归还池中。
+                let pooled = compress_packet_data(packet_data.as_ref(), compression_level)?;
+                let compressed = pooled.scratch_slice().ok_or_else(|| {
+                    PacketEncodeError::Message("池化压缩资源缺失（不变式破坏）".into())
+                })?;
 
                 let full_packet_len_var_int: VarInt = (data_len_var_int.written_size()
-                    + self.compression_scratch.len())
+                    + compressed.len())
                 .try_into()
                 .map_err(|_| {
                     PacketEncodeError::Message(format!(
@@ -377,34 +397,21 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
                     .encode(&mut header_cursor)
                     .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
 
-                self.compression_scratch.as_slice()
-            } else {
-                let data_len_var_int: VarInt = 0.into();
-                let full_packet_len_var_int: VarInt = (data_len_var_int.written_size() + data_len)
-                    .try_into()
-                    .map_err(|_| {
-                        PacketEncodeError::Message(format!(
-                            "Full packet length is too large to fit in VarInt! ({data_len})"
-                        ))
-                    })?;
-
-                let complete_serialization_length =
-                    full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
-                if complete_serialization_length > MAX_PACKET_SIZE as usize {
-                    return Err(PacketEncodeError::TooLong(complete_serialization_length));
-                }
-
-                full_packet_len_var_int
-                    .encode(&mut header_cursor)
-                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-                data_len_var_int
-                    .encode(&mut header_cursor)
-                    .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
-
-                packet_data.as_ref()
+                let header_len = header_cursor.position() as usize;
+                out.reserve(header_len + compressed.len());
+                out.extend_from_slice(&header_buf[..header_len]);
+                out.extend_from_slice(compressed);
+                return Ok(());
             }
-        } else {
-            let full_packet_len_var_int: VarInt = data_len_var_int;
+            // 已启用压缩但本包低于阈值：data_len=0 标记
+            let zero_var_int: VarInt = 0.into();
+            let full_packet_len_var_int: VarInt = (zero_var_int.written_size() + data_len)
+                .try_into()
+                .map_err(|_| {
+                    PacketEncodeError::Message(format!(
+                        "Full packet length is too large to fit in VarInt! ({data_len})"
+                    ))
+                })?;
 
             let complete_serialization_length =
                 full_packet_len_var_int.written_size() + full_packet_len_var_int.0 as usize;
@@ -415,16 +422,26 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
             full_packet_len_var_int
                 .encode(&mut header_cursor)
                 .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+            zero_var_int
+                .encode(&mut header_cursor)
+                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+        } else {
+            let complete_serialization_length =
+                data_len_var_int.written_size() + data_len_var_int.0 as usize;
+            if complete_serialization_length > MAX_PACKET_SIZE as usize {
+                return Err(PacketEncodeError::TooLong(complete_serialization_length));
+            }
 
-            packet_data.as_ref()
-        };
+            data_len_var_int
+                .encode(&mut header_cursor)
+                .map_err(|err| PacketEncodeError::Message(err.to_string()))?;
+        }
 
+        // 两条未压缩路径负载均为原文，共享同一收尾
         let header_len = header_cursor.position() as usize;
-        let header_bytes = &header_buf[..header_len];
-
-        out.reserve(header_len + payload_to_write.len());
-        out.extend_from_slice(header_bytes);
-        out.extend_from_slice(payload_to_write);
+        out.reserve(header_len + data_len);
+        out.extend_from_slice(&header_buf[..header_len]);
+        out.extend_from_slice(packet_data.as_ref());
 
         Ok(())
     }
@@ -438,13 +455,10 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
             .map_err(|err| PacketEncodeError::Message(err.to_string()))
     }
 
-    /// 当前压缩/组帧 scratch 的容量（诊断与基准观测用）。
+    /// 当前组帧 scratch 的容量（诊断与基准观测用）。
     #[must_use]
-    pub const fn scratch_capacity(&self) -> (usize, usize) {
-        (
-            self.compression_scratch.capacity(),
-            self.frame_scratch.capacity(),
-        )
+    pub const fn frame_scratch_capacity(&self) -> usize {
+        self.frame_scratch.capacity()
     }
 }
 
@@ -659,30 +673,76 @@ mod tests {
         Ok(())
     }
 
-    /// 池化复用：守卫析构归还线程池，同级别下次检出命中
-    ///（池长归 0），再次析构后回到池中。
+    /// 池化复用：守卫析构归还来源池，同级别下次检出命中
+    ///（池长归 0），再次析构后回到池中。测试一律使用栈上
+    /// 局部池（守卫以来源池引用为参数），与并发运行的其他
+    /// 压缩测试天然隔离，无需串行锁。
     #[test]
-    fn pooled_compressor_reuse_round_trip() {
+    fn pooled_resources_reuse_round_trip() {
+        let pool = std::sync::Mutex::new(Vec::new());
+        let pool_len = || {
+            pool.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len()
+        };
         let level: CompressionLevel = 6;
-        drop(super::PooledCompressor::checkout(level));
-        super::COMPRESSOR_POOL.with(|pool| assert_eq!(pool.borrow().len(), 1));
-        let guard = super::PooledCompressor::checkout(level);
-        super::COMPRESSOR_POOL.with(|pool| assert!(pool.borrow().is_empty()));
+        drop(super::PooledCompressionResources::checkout(level, &pool));
+        assert_eq!(pool_len(), 1);
+        let guard = super::PooledCompressionResources::checkout(level, &pool);
+        assert_eq!(pool_len(), 0);
         drop(guard);
-        super::COMPRESSOR_POOL.with(|pool| assert_eq!(pool.borrow().len(), 1));
+        assert_eq!(pool_len(), 1);
     }
 
     /// 池容量上限：超出上限的归还直接释放，池长不超上限。
     #[test]
-    fn pooled_compressor_respects_per_thread_cap() {
-        let guards: Vec<_> = (0..6).map(super::PooledCompressor::checkout).collect();
+    fn pooled_resources_respects_global_cap() {
+        let pool = std::sync::Mutex::new(Vec::new());
+        let guards: Vec<_> = (0..=super::MAX_POOLED_COMPRESSION_RESOURCES)
+            .map(|_| super::PooledCompressionResources::checkout(6, &pool))
+            .collect();
         drop(guards);
-        super::COMPRESSOR_POOL.with(|pool| {
-            assert_eq!(
-                pool.borrow().len(),
-                super::MAX_POOLED_COMPRESSORS_PER_THREAD
-            );
-        });
+        let len = pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert_eq!(len, super::MAX_POOLED_COMPRESSION_RESOURCES);
+    }
+
+    /// 归还治理：逾 2 倍留存上限的暂存在守卫析构归还时收缩
+    /// 回留存上限；常规尺寸归还不得触发收缩振荡。
+    #[test]
+    fn pooled_scratch_shrinks_on_return_after_large_packet() {
+        let pool: std::sync::Mutex<Vec<super::CompressionResources>> =
+            std::sync::Mutex::new(Vec::new());
+        let scratch_cap = || {
+            pool.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .last()
+                .map(|resources| resources.scratch.capacity())
+        };
+
+        // 1 MiB 不可压缩负载：暂存被撑大后归还，池中条目应已收缩
+        let big = pseudo_random_bytes(1024 * 1024, 42);
+        let pooled = super::compress_packet_data_in(&pool, &big, 6)
+            .unwrap_or_else(|err| panic!("大包压缩失败: {err}"));
+        drop(pooled);
+        let pooled_cap = scratch_cap().unwrap_or(0);
+        assert!(
+            pooled_cap <= MAX_RETAINED_SCRATCH + 4096,
+            "归还的压缩暂存应收缩回留存上限附近: {pooled_cap}"
+        );
+
+        // 常规 128 KiB 负载：检出同一条目，容量不得再涨落振荡
+        let medium = pseudo_random_bytes(128 * 1024, 44);
+        let pooled = super::compress_packet_data_in(&pool, &medium, 6)
+            .unwrap_or_else(|err| panic!("中包压缩失败: {err}"));
+        drop(pooled);
+        assert_eq!(
+            scratch_cap(),
+            Some(pooled_cap),
+            "常规尺寸不应触发池化暂存再分配"
+        );
     }
 
     /// 字节全等门：同一数据包经两个先后创建的编码器（后者自
@@ -950,8 +1010,12 @@ mod tests {
             .collect()
     }
 
-    /// 大包之后 scratch 容量必须收缩回留存上限；
+    /// 大包之后组帧 scratch 容量必须收缩回留存上限；
     /// 常规尺寸（≤ 留存上限）流量不得触发收缩。
+    ///（压缩暂存的归还治理等价断言见同步测试
+    /// `pooled_scratch_shrinks_on_return_after_large_packet`——
+    /// 异步测试一律不断言全局池状态，规避跨 await 持锁与
+    /// 并发污染。）
     #[tokio::test]
     async fn scratch_capacity_shrinks_after_large_packet() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -959,25 +1023,21 @@ mod tests {
         let mut encoder = TCPNetworkEncoder::new(&mut buf);
         encoder.set_compression((0, 6));
 
-        // 1 MiB 不可压缩大包：两个 scratch 都被撑大
+        // 1 MiB 不可压缩大包：组帧缓冲被撑大
         let big = pseudo_random_bytes(1024 * 1024, 42);
         let big_len = big.len();
         encoder.write_packet(big.into()).await?;
-        let (big_comp_cap, big_frame_cap) = encoder.scratch_capacity();
+        let big_frame_cap = encoder.frame_scratch_capacity();
         assert!(
-            big_comp_cap >= big_len || big_frame_cap >= big_len,
-            "大包后容量应显著扩张: comp={big_comp_cap} frame={big_frame_cap}"
+            big_frame_cap >= big_len,
+            "大包后组帧容量应显著扩张: frame={big_frame_cap}"
         );
 
         // 小包：容量收缩回留存上限（分配器可能按大小档向上取整，
         // 断言留一个页档余量）
         let small = pseudo_random_bytes(64, 43);
         encoder.write_packet(small.into()).await?;
-        let (comp_cap, frame_cap) = encoder.scratch_capacity();
-        assert!(
-            comp_cap <= MAX_RETAINED_SCRATCH + 4096,
-            "压缩 scratch 应收缩回留存上限附近: {comp_cap}"
-        );
+        let frame_cap = encoder.frame_scratch_capacity();
         assert!(
             frame_cap <= MAX_RETAINED_SCRATCH + 4096,
             "组帧 scratch 应收缩回留存上限附近: {frame_cap}"
@@ -986,9 +1046,11 @@ mod tests {
         // 中包（128 KiB < 留存上限）：容量不得再涨落振荡
         let medium = pseudo_random_bytes(128 * 1024, 44);
         encoder.write_packet(medium.into()).await?;
-        let (comp_cap2, frame_cap2) = encoder.scratch_capacity();
-        assert_eq!(comp_cap, comp_cap2, "中包不应触发压缩缓冲再分配");
-        assert_eq!(frame_cap, frame_cap2, "中包不应触发组帧缓冲再分配");
+        assert_eq!(
+            encoder.frame_scratch_capacity(),
+            frame_cap,
+            "中包不应触发组帧缓冲再分配"
+        );
 
         // 线上字节正确性：解析缓冲末尾一帧并校验其内部结构
         let mut last_frame = last_frame_bytes(&buf);
@@ -1003,12 +1065,13 @@ mod tests {
         Ok(())
     }
 
-    /// 低于压缩阈值的小包不触碰压缩缓冲；写路径须同步
-    /// 收缩压缩 scratch，否则稳态小包流下它仍按历史最大
-    /// 压缩包驻留。
+    /// 低于压缩阈值的包以 `data_length=0` 标记未压缩组帧，
+    /// 高于阈值的包标记其原始长度——压缩标记的线上语义不随
+    /// 池化改变。（「未压缩帧不触碰压缩资源池」的内存面断言
+    /// 见同步测试 `uncompressed_frames_skip_resource_pool`。）
     #[tokio::test]
-    async fn compression_scratch_shrinks_via_uncompressed_writes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn uncompressed_writes_carry_zero_data_length() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut buf = Vec::new();
         let mut encoder = TCPNetworkEncoder::new(&mut buf);
         // 阈值 256：64 字节小包不压缩，1 MiB 大包压缩
@@ -1016,24 +1079,8 @@ mod tests {
 
         let big = pseudo_random_bytes(1024 * 1024, 45);
         encoder.write_packet(big.into()).await?;
-        let (big_comp_cap, _) = encoder.scratch_capacity();
-        assert!(
-            big_comp_cap >= 1024 * 1024,
-            "压缩大包应撑大压缩 scratch: {big_comp_cap}"
-        );
-
-        // 未压缩小包：压缩 scratch 同样收缩回留存上限
         let small = pseudo_random_bytes(64, 46);
         encoder.write_packet(small.into()).await?;
-        let (comp_cap, frame_cap) = encoder.scratch_capacity();
-        assert!(
-            comp_cap <= MAX_RETAINED_SCRATCH + 4096,
-            "未压缩小包写后压缩 scratch 应收缩回留存上限附近: {comp_cap}"
-        );
-        assert!(
-            frame_cap <= MAX_RETAINED_SCRATCH + 4096,
-            "组帧 scratch 应收缩回留存上限附近: {frame_cap}"
-        );
 
         // 线上字节正确性：末帧 data_length 必须为 0（未压缩标记）
         let mut last_frame = last_frame_bytes(&buf);
