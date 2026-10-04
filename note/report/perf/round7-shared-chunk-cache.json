@@ -1,0 +1,92 @@
+{
+  "clean": {
+    "legacy": {
+      "final_bytes": 100961191,
+      "max_tick_encodes": 2340,
+      "peak_bytes": 110351830,
+      "policy": "每玩家私有 32 MiB，新鲜度=弱引用+Arc（0.3.19 语义复刻）",
+      "prune_events": 155,
+      "stale_sends": 0,
+      "total_encode_bytes": 1200491081,
+      "total_encodes": 56849,
+      "wall_ms": 106
+    },
+    "shared": {
+      "final_bytes": 53533919,
+      "max_tick_encodes": 585,
+      "peak_bytes": 67100033,
+      "policy": "世界共享 64 MiB + 代数失效（生产语义复刻）",
+      "prune_events": 78,
+      "stale_sends": 0,
+      "total_encode_bytes": 1167497458,
+      "total_encodes": 55185,
+      "wall_ms": 116
+    },
+    "stream_hash_legacy": 12920002943555745301,
+    "stream_hash_shared": 12920002943555745301
+  },
+  "date": "2026-10-04",
+  "dense": {
+    "correctness_adjusted_legacy_encodes": 152319,
+    "legacy": {
+      "final_bytes": 101693610,
+      "max_tick_encodes": 2340,
+      "peak_bytes": 110351830,
+      "policy": "同上",
+      "prune_events": 155,
+      "stale_sends": 95470,
+      "total_encode_bytes": 1200491081,
+      "total_encodes": 56849,
+      "wall_ms": 180
+    },
+    "shared": {
+      "final_bytes": 53562121,
+      "max_tick_encodes": 585,
+      "peak_bytes": 67097392,
+      "policy": "同上",
+      "prune_events": 78,
+      "stale_sends": 0,
+      "total_encode_bytes": 1922399090,
+      "total_encodes": 91303,
+      "wall_ms": 171
+    }
+  },
+  "gates": {
+    "clean_journey_stream_hash_equal": true,
+    "shared_mode_stale_sends_zero_all_scenarios": true
+  },
+  "round": 7,
+  "sparse": {
+    "legacy": {
+      "final_bytes": 101009466,
+      "max_tick_encodes": 2340,
+      "peak_bytes": 110358743,
+      "policy": "同上",
+      "prune_events": 155,
+      "stale_sends": 34671,
+      "total_encode_bytes": 1200491081,
+      "total_encodes": 56849,
+      "wall_ms": 172
+    },
+    "shared": {
+      "final_bytes": 53495027,
+      "max_tick_encodes": 585,
+      "peak_bytes": 67098826,
+      "policy": "同上",
+      "prune_events": 78,
+      "stale_sends": 0,
+      "total_encode_bytes": 1238683045,
+      "total_encodes": 58655,
+      "wall_ms": 166
+    }
+  },
+  "subject": "区块编码缓存按世界共享 + 内容改动代数失效",
+  "workload": {
+    "note": "缓存只记尺寸（坐标的确定性函数），两模式面对同一世界与同一变异流",
+    "players": 4,
+    "scenarios": "洁净 0 / 稀疏 2 / 稠密 25 次变异每 tick",
+    "ticks": 2400,
+    "view_distance": 12,
+    "wobble_per_tick": 20
+  }
+}
