@@ -5,7 +5,7 @@
 /// 允许使用标准比较运算符进行版本比较。
 ///
 /// 协议编号无法识别时使用 `Unknown`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 #[allow(non_camel_case_types)]
 pub enum JavaMinecraftVersion {
     /// 1.7.2：改变世界更新。
