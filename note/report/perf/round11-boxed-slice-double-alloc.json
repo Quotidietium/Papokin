@@ -1,0 +1,53 @@
+{
+  "finding": "运行期变长 vec![T;n]+into_boxed_slice 经 LLVM 优化已是单次分配零拷贝，无双分配可收编；仅编译期定长在闭包上下文（抑制死分配消除）有真实收益",
+  "gates": {
+    "all_pass": true,
+    "allocations_not_worse": true,
+    "bytes_not_worse": true,
+    "content_bytes_equal": true
+  },
+  "round": 11,
+  "scenarios": {
+    "heightmap_i64x37": {
+      "legacy": {
+        "allocs": 8192,
+        "bytes": 2424832
+      },
+      "new": {
+        "allocs": 8192,
+        "bytes": 2424832
+      }
+    },
+    "light_u8x2048": {
+      "legacy": {
+        "allocs": 8192,
+        "bytes": 16777216
+      },
+      "new": {
+        "allocs": 8192,
+        "bytes": 16777216
+      }
+    },
+    "single_palette_u16x1": {
+      "legacy": {
+        "allocs": 8192,
+        "bytes": 16384
+      },
+      "new": {
+        "allocs": 8192,
+        "bytes": 16384
+      }
+    }
+  },
+  "topic": "区块本体编译期定长构造收编（Box::new([T;N]) 直装，消闭包内临时 Vec）",
+  "totals": {
+    "legacy_allocs": 24576,
+    "legacy_bytes": 19218432,
+    "new_allocs": 24576,
+    "new_bytes": 19218432
+  },
+  "workload": {
+    "light_bytes": 2048,
+    "rounds_per_kind": 8192
+  }
+}
