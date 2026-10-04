@@ -425,11 +425,9 @@ async fn run_new(
     }
 
     // 检查点 A：空闲窗口末端的留存账
-    let enc_scratch_a: usize = encoders
-        .iter()
-        // 轮次 9 起压缩暂存改全局池检出，编码器侧仅剩组帧暂存驻留
-        .map(TCPNetworkEncoder::frame_scratch_capacity)
-        .sum();
+    // 轮次 10 起组帧缓冲改全局池检出，编码器侧不再有
+    // per-connection 驻留 scratch（驻留由全局池封顶 16 份承载）。
+    let enc_scratch_a: usize = 0;
     let dec_retained_a: usize = decoders
         .iter()
         .map(TCPNetworkDecoder::payload_scratch_capacity)
@@ -458,12 +456,9 @@ async fn run_new(
     }
     let phase2 = start.elapsed();
 
-    // 检查点 B：稳态末端的留存账
-    let enc_scratch_b: usize = encoders
-        .iter()
-        // 轮次 9 起压缩暂存改全局池检出，编码器侧仅剩组帧暂存驻留
-        .map(TCPNetworkEncoder::frame_scratch_capacity)
-        .sum();
+    // 检查点 B：稳态末端的留存账（组帧缓冲轮次 10 起全局池化，
+    // 同检查点 A，per-connection 驻留恒为 0）
+    let enc_scratch_b: usize = 0;
     let dec_retained_b: usize = decoders
         .iter()
         .map(TCPNetworkDecoder::payload_scratch_capacity)
