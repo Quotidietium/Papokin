@@ -60,6 +60,14 @@ where
         self.pending_writes.load(Ordering::Acquire)
     }
 
+    fn cached_bytes(&self) -> usize {
+        self.data
+            .chunks
+            .iter()
+            .map(|(key, bytes)| key.len() + bytes.len())
+            .sum()
+    }
+
     async fn write(&self, backend: &Self::WriteBackend) -> Result<(), std::io::Error> {
         // 零脏跳过：强制保存路径（如每轮自动保存的实体区块刷新）
         // 会对未发生任何变化的区域照样调用 write()，若不短路，

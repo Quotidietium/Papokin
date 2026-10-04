@@ -940,6 +940,19 @@ impl<S: SingleChunkDataSerializer> ChunkSerializer for AnvilChunkFile<S> {
             .map_or(true, |action| !matches!(&*action, WriteAction::Pass))
     }
 
+    fn cached_bytes(&self) -> usize {
+        // 逐区块压缩负载 + 元数据开销；不含固定的 8 KiB 头与
+        // 数组本身（约数 KiB，相对区块负载可忽略）。
+        self.chunks_data
+            .iter()
+            .flatten()
+            .map(|metadata| {
+                metadata.serialized_data.compressed_data.len()
+                    + std::mem::size_of::<AnvilChunkMetadata>()
+            })
+            .sum()
+    }
+
     fn get_chunk_key(chunk: &Vector2<i32>) -> String {
         let (region_x, region_z) = Self::get_region_coords(chunk);
         format!("./r.{region_x}.{region_z}.mca")

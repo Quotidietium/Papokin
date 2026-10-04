@@ -400,6 +400,16 @@ impl<S: SingleChunkDataSerializer + 'static> ChunkSerializer for LinearV2File<S>
         self.pending_writes.load(Ordering::Acquire)
     }
 
+    fn cached_bytes(&self) -> usize {
+        // 逐区块压缩负载 + 时间戳数组固定开销
+        self.chunks_data
+            .iter()
+            .flatten()
+            .map(Bytes::len)
+            .sum::<usize>()
+            + std::mem::size_of_val(&self.timestamps)
+    }
+
     async fn write(&self, path: &PathBuf) -> Result<(), std::io::Error> {
         // 零脏跳过：强制保存路径（如每轮自动保存的实体区块刷新）
         // 会对未发生任何变化的区域照样调用 write()，若不短路，
