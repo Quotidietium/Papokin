@@ -1,0 +1,60 @@
+{
+  "gates": {
+    "all_pass": true
+  },
+  "round": 9,
+  "scenarios": {
+    "w128": {
+      "gates": {
+        "wire_bytes_equal": true,
+        "wire_hash_equal": true
+      },
+      "global_pool": {
+        "resources_created": 32,
+        "standing_bytes": 8404852,
+        "wall_ms": 470.3696
+      },
+      "legacy": {
+        "resources_created": 128,
+        "standing_bytes": 68208381,
+        "wall_ms": 370.6253
+      },
+      "thread_local": {
+        "resources_created": 128,
+        "standing_bytes": 68226813,
+        "wall_ms": 398.0319
+      },
+      "workers": 128
+    },
+    "w16": {
+      "gates": {
+        "wire_bytes_equal": true,
+        "wire_hash_equal": true
+      },
+      "global_pool": {
+        "resources_created": 16,
+        "standing_bytes": 8698968,
+        "wall_ms": 561.7894
+      },
+      "legacy": {
+        "resources_created": 128,
+        "standing_bytes": 68205693,
+        "wall_ms": 520.0944
+      },
+      "thread_local": {
+        "resources_created": 16,
+        "standing_bytes": 8786704,
+        "wall_ms": 500.5387
+      },
+      "workers": 16
+    }
+  },
+  "topic": "压缩资源全局有界池（轮次 8 线程局部池的生产拓扑修正）",
+  "workload": {
+    "compression_level": 6,
+    "connections": 128,
+    "global_pool_cap": 16,
+    "packets_per_conn": 300,
+    "thread_pool_cap": 4
+  }
+}
