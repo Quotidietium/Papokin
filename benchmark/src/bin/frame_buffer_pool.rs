@@ -172,14 +172,13 @@ fn frame_one(packet: &[u8], frame: &mut Vec<u8>) -> u64 {
     let data_len_var = 1usize; // VarInt(0) 恰 1 字节
     let full_len = data_len_var + packet.len();
     let mut header = [0u8; 10];
-    let mut header_len = 0usize;
     // 头部先写入栈上小缓冲再整体拷入，与生产一致
-    {
+    let header_len = {
         let mut cursor = Vec::new();
         write_var_int(full_len, &mut cursor);
         write_var_int(0, &mut cursor);
         header[..cursor.len()].copy_from_slice(&cursor);
-        header_len = cursor.len();
+        cursor.len()
     };
     debug_assert_eq!(header_len, var_int_size(full_len) + 1);
     frame.reserve(header_len + packet.len());
@@ -251,7 +250,7 @@ fn run_conn_global(conn: usize, pool: &Mutex<Vec<Vec<u8>>>, created: &AtomicUsiz
     let mut rolling: u64 = 0xcbf2_9ce4_8422_2325;
     let mut bytes = 0usize;
 
-    let mut frame_once = |packet: &[u8]| {
+    let frame_once = |packet: &[u8]| {
         let mut buffer = {
             let mut guard = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.pop()
