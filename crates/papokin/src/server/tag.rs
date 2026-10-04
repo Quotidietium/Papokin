@@ -442,7 +442,7 @@ fn vanilla_entry_id(key: RegistryKey, path: &str) -> Option<u16> {
 }
 
 /// 兴趣点注册表（非同步冻结注册表）的原版注册序：13 种职业站点、
-/// home、meeting、beehive、bee_nest。该序自 1.19 起跨版本稳定
+/// `home`、`meeting`、`beehive`、`bee_nest`。该序自 1.19 起跨版本稳定
 /// （各版本静态标签表 id 全等，且与 Papo 1.21.11 实抓一致）。
 const POINT_OF_INTEREST_NAMES: [&str; 17] = [
     "armorer",
@@ -882,7 +882,7 @@ mod tests {
     }
 
     /// poi 为非同步冻结注册表（不在 `REGISTRY_V_26_3`），原版新增项
-    /// 靠硬编码名称表解析：beehive=15、bee_nest=16、meeting=14。
+    /// 靠硬编码名称表解析：`beehive`=15、`bee_nest`=16、`meeting`=14。
     #[test]
     fn point_of_interest_vanilla_names_resolve() {
         let (_registries, tags) = manager();
@@ -907,8 +907,8 @@ mod tests {
         assert_eq!(ids, &vec![16, 14]);
     }
 
-    /// game_event 覆盖层新增项在 1.21.11 走与静态表一致的重映射：
-    /// shriek 数据集 id 40 → 1.21.11 空间 39。
+    /// `game_event` 覆盖层新增项在 1.21.11 走与静态表一致的重映射：
+    /// `shriek` 数据集 id 40 → 1.21.11 空间 39。
     #[test]
     fn game_event_overlay_entries_remap_for_1_21_11() {
         let (_registries, tags) = manager();

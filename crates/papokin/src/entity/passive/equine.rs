@@ -31,7 +31,7 @@ fn clamp_temper(value: i32, max: i32) -> i32 {
 }
 
 /// 原版驯化判定：`随机数(0..上限) < 新温顺度` 时驯服成功。
-fn taming_roll_succeeds(roll: i32, temper: i32) -> bool {
+const fn taming_roll_succeeds(roll: i32, temper: i32) -> bool {
     roll < temper
 }
 
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn temper_clamp_horse_bounds() {
         // 马系上限 100：每次尝试 +5，95 之后夹到 100，不为负
-        assert_eq!(clamp_temper(0 + TEMPER_STEP, 100), 5);
+        assert_eq!(clamp_temper(TEMPER_STEP, 100), 5);
         assert_eq!(clamp_temper(95 + TEMPER_STEP, 100), 100);
         assert_eq!(clamp_temper(200, 100), 100);
         assert_eq!(clamp_temper(-5, 100), 0);

@@ -2670,24 +2670,21 @@ impl World {
         }
         if join_version >= JavaMinecraftVersion::V_1_14 {
             client
-                .send_packet(&CSetChunkCacheRadius::new(
-                    i32::from(server.advanced_config.networking.java.view_distance.get()).into(),
-                ))
+                .send_packet(&CSetChunkCacheRadius::new(VarInt::from(
+                    server.advanced_config.networking.java.view_distance.get(),
+                )))
                 .await;
         }
         if join_version >= JavaMinecraftVersion::V_1_18 {
             client
-                .send_packet(&CSetSimulationDistance::new(
-                    i32::from(
-                        server
-                            .advanced_config
-                            .networking
-                            .java
-                            .simulation_distance
-                            .get(),
-                    )
-                    .into(),
-                ))
+                .send_packet(&CSetSimulationDistance::new(VarInt::from(
+                    server
+                        .advanced_config
+                        .networking
+                        .java
+                        .simulation_distance
+                        .get(),
+                )))
                 .await;
         }
 

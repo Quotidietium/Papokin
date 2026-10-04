@@ -134,7 +134,7 @@ pub fn send_attribute_updates_for_living(
 }
 
 /// 为生物实体构建「全部已声明属性」的完整同步包：实体进入客户端
-/// 追踪范围时随 spawn 下发（原版 ServerEntity 行为），客户端依此
+/// 追踪范围时随 spawn 下发（原版 `ServerEntity` 行为），客户端依此
 /// 渲染骑乘血条（最大生命）与移动/攻击动画速度；玩家自身在登录
 /// 突发中也收到一份。属性 id 按升序排列以保证线格式稳定。
 #[must_use]
