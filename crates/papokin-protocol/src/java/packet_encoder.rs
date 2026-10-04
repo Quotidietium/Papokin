@@ -208,16 +208,19 @@ fn compress_packet_data_in<'a>(
         .ok_or_else(|| PacketEncodeError::Message("池化压缩资源缺失（不变式破坏）".into()))?;
     scratch.clear();
     // deflate 最坏膨胀约 5 B/64 KiB：按输入全长 + 1/16 + 64 预留，
-    // 保证不可压缩负载也能单次 Finish 到 StreamEnd。收缩治理在
-    // 守卫归还时统一执行（见 `PooledCompressionResources::drop`）。
+    // 保证不可压缩负载也能单次 Finish 到 StreamEnd。`reserve` 的
+    // additional 语义只保证容量 ≥ len + additional（此处 len 为
+    // 0），必须传全量 hint——若传 hint 与既有容量的差值，摊销
+    // 扩容取 max(2×容量, hint-容量)，当既有容量 < hint/2 时结果
+    // 仍小于 hint，不可压缩大包会写满备用容量而得到 Status::Ok
+    //（轮次 2 预留治理引入的潜在缺陷，渐进增大的不可压缩包可
+    // 触发组帧失败）。收缩治理在守卫归还时统一执行（见
+    // `PooledCompressionResources::drop`）。
     let reserve_hint = packet_data
         .len()
         .saturating_add(packet_data.len() / 16)
         .saturating_add(64);
-    let current_capacity = scratch.capacity();
-    if reserve_hint > current_capacity {
-        scratch.reserve(reserve_hint.saturating_sub(current_capacity));
-    }
+    scratch.reserve(reserve_hint);
     compressor.reset();
     let status = compressor
         .compress_vec(packet_data, scratch, FlushCompress::Finish)
@@ -743,6 +746,27 @@ mod tests {
             Some(pooled_cap),
             "常规尺寸不应触发池化暂存再分配"
         );
+    }
+
+    /// 回归：暂存预留必须保证容量 ≥ 全量 hint。历史上按
+    /// `hint - 既有容量` 传参时，摊销扩容在既有容量 < hint/2
+    /// 的窗口内预留不足，不可压缩大包会写满备用容量而返回
+    /// `Status::Ok`（组帧失败）。本序列：300 KiB 包把暂存撑到
+    /// 约 326 KiB，随后 700 KiB 不可压缩包（hint ≈ 762 KiB，
+    /// 既有容量恰落于 < hint/2 的缺陷窗口）必须仍压缩成功。
+    #[test]
+    fn progressive_growth_never_under_reserves_scratch() {
+        let pool = std::sync::Mutex::new(Vec::new());
+        let first = pseudo_random_bytes(300 * 1024, 47);
+        let pooled = super::compress_packet_data_in(&pool, &first, 6)
+            .unwrap_or_else(|err| panic!("首包压缩失败: {err}"));
+        drop(pooled);
+
+        let grown = pseudo_random_bytes(700 * 1024, 48);
+        let pooled = super::compress_packet_data_in(&pool, &grown, 6)
+            .unwrap_or_else(|err| panic!("渐进增大的不可压缩包压缩失败（预留不足回归）: {err}"));
+        let out_len = pooled.scratch_slice().map_or(0, <[u8]>::len);
+        assert!(out_len >= grown.len(), "不可压缩包输出不应小于原文");
     }
 
     /// 字节全等门：同一数据包经两个先后创建的编码器（后者自
