@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-04",
+  "delta": {
+    "build_change_pct": 3.5600707806912255,
+    "live_saved_pct": 51.028524857375714,
+    "save_saved_pct": 7.480562448304385,
+    "wire_saved_pct": 7.480562448304385
+  },
+  "gates": {
+    "memory_decode_equal": true,
+    "save_decode_equal": true,
+    "wire_client_decode_equal": true
+  },
+  "legacy": {
+    "build_ms": 56.5691,
+    "empty_containers": 27375,
+    "full_containers": 30225,
+    "live_bytes": 62822400,
+    "save_arrays": 30225,
+    "save_bytes": 61900800,
+    "wire_arrays": 30225,
+    "wire_bytes": 61900800
+  },
+  "new": {
+    "build_ms": 58.583,
+    "empty_containers": 43028,
+    "full_containers": 14572,
+    "live_bytes": 30765056,
+    "save_arrays": 27964,
+    "save_bytes": 57270272,
+    "wire_arrays": 27964,
+    "wire_bytes": 57270272
+  },
+  "round": 6,
+  "subject": "光照容器均质归一：Full(2048B) -> Empty(1B)，天空光仅均质 15 可降级",
+  "workload": {
+    "chunks": 1200,
+    "composition": "sky: 15% absent/45% uniform-15/10% uniform-0/30% mixed; block: 80% absent/8% uniform-0/2% uniform-7/10% mixed",
+    "containers_per_side": 57600,
+    "live_scope": "计数分配器仅覆盖两批光照容器本体；校验和无驻留",
+    "sections_per_chunk": 24
+  }
+}
