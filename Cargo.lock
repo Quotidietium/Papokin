@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "papokin"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2337,7 +2337,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-api-macros"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-codecs"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "serde_json",
  "tracing",
@@ -2390,7 +2390,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-command"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "papokin-codecs",
  "papokin-data",
@@ -2405,7 +2405,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-config"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "papokin-util",
  "serde",
@@ -2416,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-data"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "crc-fast",
  "criterion",
@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-fuzzer"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "clap",
  "colored",
@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-gametest"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "async-trait",
  "papokin-data",
@@ -2455,14 +2455,14 @@ dependencies = [
 
 [[package]]
 name = "papokin-host-bindings"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "wasmtime",
 ]
 
 [[package]]
 name = "papokin-inventory"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "papokin-data",
  "papokin-nbt",
@@ -2476,7 +2476,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-macros"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "heck",
  "proc-macro-error2",
@@ -2487,7 +2487,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-nbt"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "bytes",
  "cesu8",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-plugin-api"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "postcard",
  "serde_json",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-plugin-runtime"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "futures",
  "thiserror 2.0.20",
@@ -2525,7 +2525,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-plugin-utils"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "papokin-plugin-api",
  "reqwest",
@@ -2540,7 +2540,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-protocol"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "aes",
  "async-compression",
@@ -2565,7 +2565,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-util"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "bytes",
  "colored",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "papokin-world"
-version = "0.3.16+1.21.11"
+version = "0.3.17+1.21.11"
 dependencies = [
  "arc-swap",
  "bitflags",
