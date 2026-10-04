@@ -9,7 +9,9 @@ description = "Papokin 性能基准程序（内存/CPU 量化对比，报告输�
 papokin-world = { path = "../crates/papokin-world" }
 papokin-config = { path = "../crates/papokin-config" }
 papokin-util = { path = "../crates/papokin-util" }
+papokin-protocol = { path = "../crates/papokin-protocol" }
 bytes = { workspace = true }
+flate2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
