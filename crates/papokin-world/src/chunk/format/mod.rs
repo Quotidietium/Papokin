@@ -339,10 +339,12 @@ impl ChunkData {
                             }
                         });
 
-                    block_lights[index] =
-                        block_light.map_or(LightContainer::Empty(0), LightContainer::Full);
-                    sky_lights[index] =
-                        sky_light.map_or(LightContainer::Empty(0), LightContainer::Full);
+                    block_lights[index] = block_light.map_or(LightContainer::Empty(0), |data| {
+                        demote_block_light(LightContainer::Full(data))
+                    });
+                    sky_lights[index] = sky_light.map_or(LightContainer::Empty(0), |data| {
+                        demote_sky_light(LightContainer::Full(data))
+                    });
 
                     if let Some(bs_compound) = section_compound.get_compound("block_states") {
                         let data = bs_compound
@@ -531,9 +533,15 @@ impl ChunkData {
     fn internal_to_bytes(&self) -> Bytes {
         use papokin_nbt::tag::NbtTag;
 
-        fn extract_light_ref(light: Option<&LightContainer>) -> Option<&[u8]> {
+        fn extract_light_ref(light: Option<&LightContainer>) -> Option<Box<[u8]>> {
             match light {
-                Some(LightContainer::Full(data)) => Some(data.as_ref()),
+                Some(LightContainer::Full(data)) => Some(data.clone()),
+                // 非零均质容器落成均质字节数组：若省略，自家加载侧会
+                // 读回 Empty(0)，该值即丢失（重照路径本就产出
+                // Empty(15) 天空光，此处顺带堵住其往返丢失）
+                Some(LightContainer::Empty(value)) if *value != 0 => {
+                    Some(vec![value << 4 | value; LightContainer::ARRAY_SIZE].into_boxed_slice())
+                }
                 _ => None,
             }
         }
@@ -1006,6 +1014,20 @@ impl LightContainer {
         matches!(self, Self::Empty(_))
     }
 
+    /// 若容器内容全部半字节同为同一值，返回该值。
+    /// `Empty` 恒为均质；`Full` 要求每个字节等于 `v<<4|v`。
+    #[must_use]
+    pub fn uniform_value(&self) -> Option<u8> {
+        match self {
+            Self::Empty(value) => Some(*value),
+            Self::Full(data) => {
+                let first = *data.first()?;
+                (first & 0x0F == first >> 4 && data.iter().all(|&b| b == first))
+                    .then_some(first & 0x0F)
+            }
+        }
+    }
+
     #[inline]
     const fn index(x: usize, y: usize, z: usize) -> usize {
         y * 16 * 16 + z * 16 + x
@@ -1082,6 +1104,27 @@ impl LightContainer {
 impl Default for LightContainer {
     fn default() -> Self {
         Self::new_empty(15)
+    }
+}
+
+/// 方块光落载/生成收尾归一：均质数组一律降级为 `Empty`。
+/// 保存侧对 `Empty(0)` 省略、对非零 `Empty` 重建均质数组，
+/// 网络侧按值物化或置空掩码，两条出口均保持解码语义不变。
+#[must_use]
+pub fn demote_block_light(container: LightContainer) -> LightContainer {
+    container
+        .uniform_value()
+        .map_or(container, LightContainer::Empty)
+}
+
+/// 天空光落载/生成收尾归一：仅均质 15 可降级。均质 0 若降级，
+/// 保存省略后原版按「缺失即 15」解读、客户端按空掩码渲染 15，
+/// 洞穴会漏光，故其余取值一律保留 `Full`。
+#[must_use]
+pub fn demote_sky_light(container: LightContainer) -> LightContainer {
+    match container.uniform_value() {
+        Some(15) => LightContainer::Empty(15),
+        _ => container,
     }
 }
 
@@ -1226,5 +1269,177 @@ mod tests {
         );
         assert_eq!(nbt2.get_long("LastUpdate"), Some(123_456));
         assert_eq!(nbt2.get_string("Status"), Some("minecraft:noise"));
+    }
+
+    #[test]
+    fn uniform_value_detects_uniform_and_mixed() {
+        assert_eq!(LightContainer::Empty(7).uniform_value(), Some(7));
+        assert_eq!(
+            LightContainer::new_filled(15).uniform_value(),
+            Some(15),
+            "0xFF 填充数组应识别为均质 15"
+        );
+        assert_eq!(
+            LightContainer::new_filled(0).uniform_value(),
+            Some(0),
+            "0x00 填充数组应识别为均质 0"
+        );
+        assert_eq!(
+            LightContainer::new_filled(7).uniform_value(),
+            Some(7),
+            "0x77 填充数组应识别为均质 7"
+        );
+
+        // 半字节不对称的字节（0xF0）重复铺满也不是逐格均质
+        let skewed: Box<[u8]> = vec![0xF0u8; LightContainer::ARRAY_SIZE].into_boxed_slice();
+        assert_eq!(LightContainer::Full(skewed).uniform_value(), None);
+
+        // 仅一字节不同即非均质
+        let mut mixed = vec![0xFFu8; LightContainer::ARRAY_SIZE];
+        mixed[100] = 0xFE;
+        assert_eq!(
+            LightContainer::Full(mixed.into_boxed_slice()).uniform_value(),
+            None
+        );
+    }
+
+    #[test]
+    fn demote_rules_respect_sky_light_zero_exception() {
+        // 方块光：任意均质值均可降级
+        assert!(matches!(
+            demote_block_light(LightContainer::new_filled(7)),
+            LightContainer::Empty(7)
+        ));
+        assert!(matches!(
+            demote_block_light(LightContainer::new_filled(0)),
+            LightContainer::Empty(0)
+        ));
+        // 天空光：仅均质 15 降级；均质 0 必须保留 Full
+        // （省略的天空光在客户端/原版语义中等于 15，降级会漏光）
+        assert!(matches!(
+            demote_sky_light(LightContainer::new_filled(15)),
+            LightContainer::Empty(15)
+        ));
+        assert!(matches!(
+            demote_sky_light(LightContainer::new_filled(0)),
+            LightContainer::Full(_)
+        ));
+        assert!(matches!(
+            demote_sky_light(LightContainer::new_filled(7)),
+            LightContainer::Full(_)
+        ));
+    }
+
+    #[test]
+    fn loaded_uniform_light_demoted_and_round_trips() {
+        // 构造原版风格区块 NBT：三个区段，Y=2 携带均质 0xFF 天空光
+        // 与均质 0x00 方块光数组，Y=1 携带非均质天空光
+        let mut root = NbtCompound::new();
+        root.put_int("xPos", 1);
+        root.put_int("zPos", 2);
+        root.put_int("yPos", 0);
+        root.put_bool("isLightOn", true);
+
+        let mut section0 = NbtCompound::new();
+        section0.put_byte("Y", 0);
+        let mut section1 = NbtCompound::new();
+        section1.put_byte("Y", 1);
+        let mut mixed_sky = vec![-1i8; LightContainer::ARRAY_SIZE];
+        mixed_sky[0] = 0x12;
+        section1.put("SkyLight", NbtTag::ByteArray(mixed_sky.into_boxed_slice()));
+        let mut section2 = NbtCompound::new();
+        section2.put_byte("Y", 2);
+        section2.put(
+            "SkyLight",
+            NbtTag::ByteArray(vec![-1i8; LightContainer::ARRAY_SIZE].into_boxed_slice()),
+        );
+        section2.put(
+            "BlockLight",
+            NbtTag::ByteArray(vec![0i8; LightContainer::ARRAY_SIZE].into_boxed_slice()),
+        );
+        root.put_list(
+            "sections",
+            vec![
+                NbtTag::Compound(section0),
+                NbtTag::Compound(section1),
+                NbtTag::Compound(section2),
+            ],
+        );
+
+        let bytes = papokin_nbt::Nbt::from(root).write_unnamed();
+        let chunk = ChunkData::internal_from_bytes(&bytes, Vector2::new(1, 2)).expect("解析");
+        let light = chunk.light_engine.lock().expect("光照锁");
+        assert!(
+            matches!(light.sky_light[2], LightContainer::Empty(15)),
+            "均质 0xFF 天空光应降级为 Empty(15)"
+        );
+        assert!(
+            matches!(light.block_light[2], LightContainer::Empty(0)),
+            "均质 0x00 方块光应降级为 Empty(0)"
+        );
+        assert!(
+            matches!(light.sky_light[1], LightContainer::Full(_)),
+            "非均质天空光必须保留 Full"
+        );
+        assert!(
+            matches!(light.sky_light[0], LightContainer::Empty(0)),
+            "缺失数组保持 Empty(0)"
+        );
+        // 逐格取值与原始数组一致
+        for i in 0..16 {
+            assert_eq!(light.sky_light[2].get(i, 3, i), 15);
+            assert_eq!(light.block_light[2].get(i, 3, i), 0);
+        }
+        assert_eq!(light.sky_light[1].get(0, 0, 0), 2, "非均质首格低半字节");
+        assert_eq!(light.sky_light[1].get(1, 0, 0), 1, "非均质首格高半字节");
+        drop(light);
+
+        // 保存：Empty(15) 天空光物化回 0xFF 数组（与原版输入逐字节一致）；
+        // Empty(0) 方块光省略（原版/自家读取语义均为 0）
+        let out = chunk.internal_to_bytes();
+        let mut cursor = std::io::Cursor::new(out.as_ref());
+        let mut reader = papokin_nbt::deserializer::NbtReadHelperJava::new(
+            papokin_nbt::deserializer::NbtStreamReader(&mut cursor),
+        );
+        let nbt = papokin_nbt::Nbt::read(&mut reader).expect("重新解析输出");
+        let sections = nbt.root_tag.get_list("sections").expect("sections 列表");
+        let section2 = sections
+            .iter()
+            .find_map(|tag| {
+                let c = tag.extract_compound()?;
+                (c.get_byte("Y") == Some(2)).then_some(c)
+            })
+            .expect("Y=2 区段");
+        let sky = section2
+            .get("SkyLight")
+            .and_then(|tag| tag.extract_byte_array())
+            .expect("Empty(15) 天空光必须物化为数组");
+        assert!(
+            sky.iter().all(|&b| b == -1),
+            "物化数组必须为 0xFF 填充，与原版输入逐字节一致"
+        );
+        assert!(
+            section2.get("BlockLight").is_none(),
+            "均质 0 方块光省略（解码语义不变）"
+        );
+        let section1 = sections
+            .iter()
+            .find_map(|tag| {
+                let c = tag.extract_compound()?;
+                (c.get_byte("Y") == Some(1)).then_some(c)
+            })
+            .expect("Y=1 区段");
+        let sky1 = section1
+            .get("SkyLight")
+            .and_then(|tag| tag.extract_byte_array())
+            .expect("非均质天空光数组必须保留");
+        assert_eq!(sky1[0], 0x12, "非均质内容逐字节保留");
+        assert!(sky1[1..].iter().all(|&b| b == -1));
+
+        // 第二次往返：重新加载后仍应收敛到同一归一形态
+        let chunk2 = ChunkData::internal_from_bytes(&out, Vector2::new(1, 2)).expect("二次解析");
+        let light2 = chunk2.light_engine.lock().expect("光照锁");
+        assert!(matches!(light2.sky_light[2], LightContainer::Empty(15)));
+        assert!(matches!(light2.block_light[2], LightContainer::Empty(0)));
     }
 }

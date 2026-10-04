@@ -1,5 +1,6 @@
 use crate::chunk::{
     ChunkData, ChunkHeightmapType, ChunkHeightmaps, ChunkLight, ChunkSections,
+    format::{demote_block_light, demote_sky_light},
     palette::{BiomePalette, BlockPalette},
 };
 use crate::generation::biome_coords;
@@ -301,6 +302,23 @@ impl Chunk {
         // 通过取得 proto_chunk 的所有权，我们可以直接移动光照数据
         // 这防止在内存中保留重复的光照数据
         let light_data = proto_chunk.light;
+
+        // 均质归一：生成/重照引擎写出的 Full 数组若内容均一，按与
+        // 落载相同的规则降级为 Empty——全亮天空区段不再常驻 2 KiB
+        // 数组（天空光仅均质 15 可降级，其余取值保留以护住「缺失即
+        // 15」的原版语义；方块光任意均质值均可降级）
+        let light_data = ChunkLight {
+            sky_light: light_data
+                .sky_light
+                .into_iter()
+                .map(demote_sky_light)
+                .collect(),
+            block_light: light_data
+                .block_light
+                .into_iter()
+                .map(demote_block_light)
+                .collect(),
+        };
 
         // 只有在通过光照阶段且光照配置为“default”时才标记为已点亮（“full”和“dark”模式会跳过正式光照）
         let is_lit = proto_chunk.stage >= StagedChunkEnum::Lighting
