@@ -13,6 +13,16 @@ use crate::{
 
 // 原始数据 -> 压缩 -> 加密
 
+/// 收发 scratch 缓冲的容量留存上限。
+///
+/// 压缩/组帧/负载 scratch 按历史最大数据包扩张；不设上限时，
+/// 一次登录突发（配方/标签同步，数 MiB）或单个大包就会让每条
+/// 连接的缓冲永久驻留数 MiB（连接数一乘便是数百 MiB 的稳态
+/// 占用）。超过本上限且当前包明显更小时收缩回本上限——常规
+/// 游玩数据包（含区块包，一般 ≤ 150 KiB）天然低于该值，因此
+/// 稳态下收缩条件不成立，不产生收缩/重分配振荡。
+pub(crate) const MAX_RETAINED_SCRATCH: usize = 256 * 1024;
+
 pub enum EncryptionWriter<W: AsyncWrite + Unpin> {
     Encrypt(Box<StreamEncryptor<W>>),
     None(W),
@@ -138,6 +148,14 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
             .saturating_add(packet_data.len() / 16)
             .saturating_add(64);
         let current_capacity = self.compression_scratch.capacity();
+        // 容量治理：大包把缓冲撑大后，若当前包明显更小则收缩回
+        // 留存上限（此刻 len 为 0，收缩零拷贝）；半量判定保证
+        // 区块流量等常规尺寸不会触发收缩/重分配振荡。
+        if current_capacity > MAX_RETAINED_SCRATCH && reserve_hint < current_capacity / 2 {
+            self.compression_scratch
+                .shrink_to(MAX_RETAINED_SCRATCH.max(reserve_hint));
+        }
+        let current_capacity = self.compression_scratch.capacity();
         if reserve_hint > current_capacity {
             self.compression_scratch
                 .reserve(reserve_hint.saturating_sub(current_capacity));
@@ -209,6 +227,13 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
     pub async fn write_packet(&mut self, packet_data: Bytes) -> Result<(), PacketEncodeError> {
         let mut frame = std::mem::take(&mut self.frame_scratch);
         frame.clear();
+        // 与压缩缓冲同策：大包之后收缩回留存上限，防每条连接
+        // 按历史最大包永久驻留
+        let frame_hint = packet_data.len().saturating_add(10);
+        let frame_capacity = frame.capacity();
+        if frame_capacity > MAX_RETAINED_SCRATCH && frame_hint < frame_capacity / 2 {
+            frame.shrink_to(MAX_RETAINED_SCRATCH.max(frame_hint));
+        }
         let framed = self.frame_packet(&packet_data, &mut frame);
         let result = match framed {
             Ok(()) => self.write_frame(&frame).await,
@@ -343,6 +368,15 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
             .flush()
             .await
             .map_err(|err| PacketEncodeError::Message(err.to_string()))
+    }
+
+    /// 当前压缩/组帧 scratch 的容量（诊断与基准观测用）。
+    #[must_use]
+    pub const fn scratch_capacity(&self) -> (usize, usize) {
+        (
+            self.compression_scratch.capacity(),
+            self.frame_scratch.capacity(),
+        )
     }
 }
 
@@ -757,7 +791,7 @@ mod tests {
     /// 测试编码不应被压缩的小负载
     #[tokio::test]
     async fn encode_small_payload_no_compression() -> Result<(), Box<dyn std::error::Error>> {
-        // 创建小负载的 CStatusResponse 数据包
+        // 创建数据负载的 CStatusResponse 数据包
         let packet = CStatusResponse::new(String::from("Hi"));
 
         // 构建启用压缩的数据包
@@ -795,5 +829,92 @@ mod tests {
 
         assert_eq!(buffer, expected_payload);
         Ok(())
+    }
+
+    /// xorshift 伪随机字节（不可压缩，确保 scratch 真实扩张）
+    fn pseudo_random_bytes(len: usize, seed: u64) -> Vec<u8> {
+        let mut state = seed | 1;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 32) as u8
+            })
+            .collect()
+    }
+
+    /// 大包之后 scratch 容量必须收缩回留存上限；
+    /// 常规尺寸（≤ 留存上限）流量不得触发收缩。
+    #[tokio::test]
+    async fn scratch_capacity_shrinks_after_large_packet() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut buf = Vec::new();
+        let mut encoder = TCPNetworkEncoder::new(&mut buf);
+        encoder.set_compression((0, 6));
+
+        // 1 MiB 不可压缩大包：两个 scratch 都被撑大
+        let big = pseudo_random_bytes(1024 * 1024, 42);
+        let big_len = big.len();
+        encoder.write_packet(big.into()).await?;
+        let (big_comp_cap, big_frame_cap) = encoder.scratch_capacity();
+        assert!(
+            big_comp_cap >= big_len || big_frame_cap >= big_len,
+            "大包后容量应显著扩张: comp={big_comp_cap} frame={big_frame_cap}"
+        );
+
+        // 小包：容量收缩回留存上限（分配器可能按大小档向上取整，
+        // 断言留一个页档余量）
+        let small = pseudo_random_bytes(64, 43);
+        encoder.write_packet(small.into()).await?;
+        let (comp_cap, frame_cap) = encoder.scratch_capacity();
+        assert!(
+            comp_cap <= MAX_RETAINED_SCRATCH + 4096,
+            "压缩 scratch 应收缩回留存上限附近: {comp_cap}"
+        );
+        assert!(
+            frame_cap <= MAX_RETAINED_SCRATCH + 4096,
+            "组帧 scratch 应收缩回留存上限附近: {frame_cap}"
+        );
+
+        // 中包（128 KiB < 留存上限）：容量不得再涨落振荡
+        let medium = pseudo_random_bytes(128 * 1024, 44);
+        encoder.write_packet(medium.into()).await?;
+        let (comp_cap2, frame_cap2) = encoder.scratch_capacity();
+        assert_eq!(comp_cap, comp_cap2, "中包不应触发压缩缓冲再分配");
+        assert_eq!(frame_cap, frame_cap2, "中包不应触发组帧缓冲再分配");
+
+        // 线上字节正确性：解析缓冲末尾一帧并校验其内部结构
+        let mut last_frame = last_frame_bytes(&buf);
+        let packet_length = decode_varint(&mut last_frame).map_err(|e| e.to_string())?;
+        assert_eq!(packet_length as usize, last_frame.len());
+        let data_length = decode_varint(&mut last_frame).map_err(|e| e.to_string())?;
+        assert_eq!(
+            data_length as usize,
+            128 * 1024,
+            "未压缩长度应为中包原始长度"
+        );
+        Ok(())
+    }
+
+    /// 解析缓冲末尾一帧的字节切片（帧 = `VarInt` 长度前缀 + 负载）。
+    fn last_frame_bytes(buf: &[u8]) -> &[u8] {
+        // 逐帧跳过至最后一帧
+        let mut rest = buf;
+        let mut last = rest;
+        while !rest.is_empty() {
+            let mut cursor = rest;
+            let Ok(len) = decode_varint(&mut cursor) else {
+                break;
+            };
+            let len = len as usize;
+            let header = rest.len() - cursor.len();
+            if cursor.len() < len {
+                break;
+            }
+            last = &rest[..header + len];
+            rest = &cursor[len..];
+        }
+        last
     }
 }
