@@ -104,11 +104,10 @@ fn per_block_lock() -> (u64, usize, f64) {
 
     for x in 0..EDGE as i32 {
         for z in 0..EDGE as i32 {
-            let mut highest = MIN_Y - 1;
+            // 非空方块一路顶到列顶；每方块独立取锁
+            //（对齐 update_heightmap 的逐次 lock 语义）
             for y in MIN_Y..MIN_Y + COLUMN_HEIGHT {
-                highest = y; // 非空方块一路顶到列顶
-                // 每个方块独立取锁（对齐 update_heightmap 的逐次 lock）
-                heightmap.lock().set(x, z, highest);
+                heightmap.lock().set(x, z, y);
             }
         }
     }
