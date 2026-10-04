@@ -121,7 +121,7 @@ use papokin_world::world::{GetBlockError, WorldPortalExt};
 use papokin_world::{biome, chunk::io::Dirtiable};
 use papokin_world::{chunk::ChunkData, world::BlockAccessor};
 use papokin_world::{
-    level::{Level, RandomTickSample, SyncChunk},
+    level::{Level, RandomTickSample, SyncChunk, TickData},
     tick::{OrderedTick, TickPriority},
 };
 pub use papokin_world::{world::BlockFlags, world_info::LevelData};
@@ -174,9 +174,9 @@ impl PapokinError for GetBlockError {
 /// 玩家快照条目（`player`, `pos`, `bb`, `chunk_pos`），实体碰撞检测用
 type PlayerSnapshot = (Arc<Player>, Vector3<f64>, BoundingBox, Vector2<i32>);
 
-/// tick 复用缓冲（轮次 14）：玩家快照与方块实体活跃集跨 tick 驻留容量。
+/// tick 复用缓冲（轮次 14/15）：tick 热路径的临时集合跨 tick 驻留容量。
 ///
-/// 两者每 tick 重建、tick 结束即弃；驻留容量、逐 tick `clear()` 重填，
+/// 这些集合每 tick 重建、tick 结束即弃；驻留容量、逐 tick `clear()` 重填，
 /// 消去逐 tick 新建 `Vec` 的分配流失。tick 单线程顺序执行，经
 /// `Mutex` 独占访问，不会并发。
 #[derive(Default)]
@@ -185,6 +185,14 @@ struct TickScratch {
     players_cache: Vec<PlayerSnapshot>,
     /// 活跃区块的方块实体，本 tick 统一 tick 与比较器输出排空用
     block_entities: Vec<Arc<dyn BlockEntity>>,
+    /// 位于活跃且已加载区块的可 tick 实体（轮次 15）
+    entities_cache: Vec<(Arc<dyn EntityBase>, Vector2<i32>)>,
+    /// 计划刻/随机刻数据三 Vec（轮次 15，`Level::get_tick_data` 重填）
+    tick_data: TickData,
+    /// 自然生成候选区块（轮次 15）
+    spawning_chunks: Vec<(Vector2<i32>, SyncChunk)>,
+    /// 活跃区块坐标集，`inhabited_time` 自增用（轮次 15）
+    active_chunks_cache: Vec<Vector2<i32>>,
 }
 
 /// 表示一个 Minecraft 世界，包含实体、玩家以及底层的世界数据。
@@ -1348,7 +1356,8 @@ impl World {
         let players = self.players.load();
         let player_count = players.len();
         // 轮次 14：玩家快照跨 tick 复用（clear 重填，消逐 tick 新建 Vec）。
-        // tick 单线程顺序执行，锁仅此一处获取、tick 结束归还。
+        // tick 单线程顺序执行；锁分两程持有（玩家/实体/方块实体段与
+        // 计划刻/生成段），每程 tick 内顺序归还，不会并发。
         let mut tick_scratch = self
             .tick_scratch
             .lock()
@@ -1419,18 +1428,19 @@ impl World {
             }
             Some((entity.clone(), entity_chunk))
         };
+        // 轮次 15：可 tick 实体过滤集跨 tick 复用（clear 重填；
+        // 锁自玩家快照起持有，无需重取）。
+        tick_scratch.entities_cache.clear();
         // 小集合上并行过滤的池调度开销高于过滤本身
-        let tickable: Vec<_> = if entities_to_tick.len() <= 256 {
-            entities_to_tick
-                .iter()
-                .filter_map(in_active_loaded_chunk)
-                .collect()
+        if entities_to_tick.len() <= 256 {
+            tick_scratch
+                .entities_cache
+                .extend(entities_to_tick.iter().filter_map(in_active_loaded_chunk));
         } else {
-            entities_to_tick
-                .par_iter()
-                .filter_map(in_active_loaded_chunk)
-                .collect()
-        };
+            tick_scratch
+                .entities_cache
+                .par_extend(entities_to_tick.par_iter().filter_map(in_active_loaded_chunk));
+        }
 
         let server_ref = server.as_ref();
         let tick_batch = |batch: &[(Arc<dyn EntityBase>, Vector2<i32>)]| {
@@ -1474,10 +1484,14 @@ impl World {
             }
         };
         // 小集合上并行调度的池唤醒开销高于 tick 本身
-        if tickable.len() <= 2 * ENTITY_TICK_BATCH_SIZE {
-            tickable.chunks(ENTITY_TICK_BATCH_SIZE).for_each(tick_batch);
+        if tick_scratch.entities_cache.len() <= 2 * ENTITY_TICK_BATCH_SIZE {
+            tick_scratch
+                .entities_cache
+                .chunks(ENTITY_TICK_BATCH_SIZE)
+                .for_each(tick_batch);
         } else {
-            tickable
+            tick_scratch
+                .entities_cache
                 .par_chunks(ENTITY_TICK_BATCH_SIZE)
                 .for_each(tick_batch);
         }
@@ -1781,7 +1795,18 @@ impl World {
             .active_chunks
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut tick_data = self.level.get_tick_data(&active_chunks, random_tick_speed);
+        // 轮次 15：`TickData` 三 Vec 跨 tick 复用；本段持有锁至
+        // `inhabited_time` 自增结束（生成候选与活跃坐标集同缓冲）。
+        let mut tick_scratch = self
+            .tick_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.level.get_tick_data(
+            &active_chunks,
+            random_tick_speed,
+            &mut tick_scratch.tick_data,
+        );
+        let tick_data = &mut tick_scratch.tick_data;
         // 先顺延溢出部分再执行保留部分（保持执行顺序与调度次序一致）
         if tick_data.block_ticks.len() > MAX_SCHEDULED_TICKS_PER_FRAME {
             let spilled = tick_data
@@ -1929,14 +1954,14 @@ impl World {
 
         // 5. 通过 Rayon 并行执行区块生成器
         if !spawn_list.is_empty() {
-            let mut spawning_chunks = Vec::new();
+            tick_scratch.spawning_chunks.clear();
             for pos in active_chunks.iter() {
                 if let Some(chunk) = self.level.read_chunk_sync(pos, std::clone::Clone::clone) {
-                    spawning_chunks.push((*pos, chunk));
+                    tick_scratch.spawning_chunks.push((*pos, chunk));
                 }
             }
 
-            spawning_chunks.shuffle(&mut rng());
+            tick_scratch.spawning_chunks.shuffle(&mut rng());
 
             let world = self.clone();
             let spawn_handle = handle;
@@ -1950,12 +1975,14 @@ impl World {
                 }
             };
             // 少量候选区块直接串行；大批次再摊给 Rayon 池
-            if spawning_chunks.len() <= 2 * SPAWN_BATCH_SIZE {
-                spawning_chunks
+            if tick_scratch.spawning_chunks.len() <= 2 * SPAWN_BATCH_SIZE {
+                tick_scratch
+                    .spawning_chunks
                     .chunks(SPAWN_BATCH_SIZE)
                     .for_each(spawn_batch);
             } else {
-                spawning_chunks
+                tick_scratch
+                    .spawning_chunks
                     .par_chunks(SPAWN_BATCH_SIZE)
                     .for_each(spawn_batch);
             }
@@ -1964,15 +1991,19 @@ impl World {
         // 批量执行这些开销小的查找和原子自增，避免唤醒 Rayon
         // 为每个刻的微小任务生成工作线程，同时对大集合保留并行性。
         let loaded_chunks = self.level.loaded_chunks.clone();
-        let active_chunks_vec: Vec<_> = active_chunks.iter().copied().collect();
-        if active_chunks_vec.len() <= 2 * INHABITED_TIME_BATCH_SIZE {
-            for pos in &active_chunks_vec {
+        tick_scratch.active_chunks_cache.clear();
+        tick_scratch
+            .active_chunks_cache
+            .extend(active_chunks.iter().copied());
+        if tick_scratch.active_chunks_cache.len() <= 2 * INHABITED_TIME_BATCH_SIZE {
+            for pos in &tick_scratch.active_chunks_cache {
                 if let Some(chunk) = loaded_chunks.get(pos) {
                     chunk.inhabited_time.fetch_add(1, Relaxed);
                 }
             }
         } else {
-            active_chunks_vec
+            tick_scratch
+                .active_chunks_cache
                 .par_iter()
                 .with_min_len(INHABITED_TIME_BATCH_SIZE)
                 .for_each(|pos| {

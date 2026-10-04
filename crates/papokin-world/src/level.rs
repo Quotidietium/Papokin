@@ -130,6 +130,7 @@ pub struct Level {
     pub chunk_listener: Arc<ChunkListener>,
 }
 
+#[derive(Default)]
 pub struct TickData {
     pub block_ticks: Vec<OrderedTick<&'static Block>>,
     pub fluid_ticks: Vec<OrderedTick<&'static Fluid>>,
@@ -578,18 +579,21 @@ impl Level {
         });
     }
 
+    /// 轮次 15：`tick_data` 由调用方持有并跨 tick 复用（clear 重填，
+    /// 消逐 tick 三 Vec 新建）；`random_ticks` 容量按当次活跃区块数
+    /// 补足，复用形态下稳态零分配。
     pub fn get_tick_data(
         &self,
         active_chunks: &FxHashSet<Vector2<i32>>,
         random_tick_speed: i64,
-    ) -> TickData {
+        tick_data: &mut TickData,
+    ) {
         let samples_per_section = random_tick_speed.max(0);
 
-        let mut ticks = TickData {
-            block_ticks: Vec::new(),
-            fluid_ticks: Vec::new(),
-            random_ticks: Vec::with_capacity(active_chunks.len() * 3),
-        };
+        tick_data.block_ticks.clear();
+        tick_data.fluid_ticks.clear();
+        tick_data.random_ticks.clear();
+        tick_data.random_ticks.reserve(active_chunks.len() * 3);
 
         // 1. 处理活跃区块（随机刻、方块实体）
         for pos in active_chunks {
@@ -624,7 +628,7 @@ impl Level {
                             let tick_block = has_random_ticks(block_state_id);
                             let tick_fluid = has_random_ticking_fluid(block_state_id);
                             if tick_block || tick_fluid {
-                                ticks.random_ticks.push(RandomTickSample {
+                                tick_data.random_ticks.push(RandomTickSample {
                                     position: BlockPos::new(
                                         chunk_x_base + x_offset as i32,
                                         y_base + y_in_section as i32,
@@ -651,8 +655,8 @@ impl Level {
             let pos = *pos_ref;
             if let Some(chunk) = self.loaded_chunks.get(&pos) {
                 let chunk = chunk.value();
-                ticks.block_ticks.append(&mut chunk.block_ticks.step_tick());
-                ticks.fluid_ticks.append(&mut chunk.fluid_ticks.step_tick());
+                tick_data.block_ticks.append(&mut chunk.block_ticks.step_tick());
+                tick_data.fluid_ticks.append(&mut chunk.fluid_ticks.step_tick());
 
                 // 如果它不再有刻，则标记移除（本 tick 结束后统一删）
                 if !chunk.block_ticks.has_ticks() && !chunk.fluid_ticks.has_ticks() {
@@ -666,10 +670,8 @@ impl Level {
             self.chunks_with_scheduled_ticks.remove(&pos);
         }
 
-        ticks.block_ticks.sort_unstable();
-        ticks.fluid_ticks.sort_unstable();
-
-        ticks
+        tick_data.block_ticks.sort_unstable();
+        tick_data.fluid_ticks.sort_unstable();
     }
 
     pub fn clean_entity_chunk(self: &Arc<Self>, chunk: &Vector2<i32>) {
