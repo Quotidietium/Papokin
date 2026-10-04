@@ -1,0 +1,34 @@
+{
+  "gates": {
+    "all_pass": true,
+    "packet_hashes_equal": true,
+    "sample_full_compare_equal": true,
+    "wire_bytes_equal": true
+  },
+  "memory": {
+    "legacy_live_bytes": 41055358,
+    "per_context_bytes": 320744,
+    "pool_created_contexts": 1,
+    "pool_retained_contexts": 1,
+    "pooled_live_bytes": 345022,
+    "saved_bytes": 40710336,
+    "saved_percent": 99.15961760703682
+  },
+  "round": 8,
+  "throughput": {
+    "legacy_ms": 370.6289,
+    "pooled_ms": 335.3706
+  },
+  "topic": "zlib 压缩上下文线程池化",
+  "wire": {
+    "legacy_wire_bytes": 16805125,
+    "pooled_wire_bytes": 16805125
+  },
+  "workload": {
+    "compression_level": 6,
+    "connections": 128,
+    "raw_bytes": 32474571,
+    "rounds": 25,
+    "total_packets": 3200
+  }
+}
