@@ -34,7 +34,7 @@ use papokin_protocol::{
     java::{
         client::{config::CConfigDisconnect, login::CLoginDisconnect},
         packet_decoder::TCPNetworkDecoder,
-        packet_encoder::TCPNetworkEncoder,
+        packet_encoder::{TCPNetworkEncoder, checkout_frame_buffer, return_frame_buffer},
     },
     ser::{NetworkWriteExt, WritingError},
 };
@@ -196,7 +196,11 @@ fn frame_packet_batch(
     Vec<u8>,
     Option<PacketEncodeError>,
 ) {
-    let mut frame = Vec::new();
+    // 组帧缓冲自全局池检出（轮次 10）：原本每批 `Vec::new()`
+    // 的分配流失改池化复用；写循环 `write_frame` 完成后交
+    // `return_frame_buffer` 归还。
+    let mut frame = checkout_frame_buffer();
+    frame.clear();
     let mut frame_err = None;
     for packet in batch {
         if let Err(err) = writer.frame_packet(&packet.data, &mut frame) {
@@ -902,6 +906,10 @@ impl JavaClient {
                         send_failed = true;
                         break;
                     }
+
+                    // 写帧完成：组帧缓冲治理后归还全局池（轮次 10）。
+                    // 失败路径连接随即关闭，缓冲自然释放、不强制归还。
+                    return_frame_buffer(frame);
 
                     written_packets.extend(returned_batch);
                 }

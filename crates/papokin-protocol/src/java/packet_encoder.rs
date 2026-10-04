@@ -28,6 +28,54 @@ pub(crate) const MAX_RETAINED_SCRATCH: usize = 256 * 1024;
 /// 池空时检出永远新建，压缩路径绝不因池化而阻塞。
 const MAX_POOLED_COMPRESSION_RESOURCES: usize = 16;
 
+/// 组帧缓冲全局池的驻留上限（份）。组帧缓冲为纯字节暂存
+///（无压缩级别维度），池化收益与压缩资源同源：连接级常驻
+/// 与批路径逐批新建统一改为按需检出，驻留封顶为常数份。
+const MAX_POOLED_FRAME_BUFFERS: usize = 16;
+
+/// 全局组帧缓冲池。
+///
+/// 每条连接的编码器原本常驻一块组帧 scratch（`write_packet`
+/// 单包路径，生产上仅登录/配置阶段使用），登录结束后缓冲
+/// 随连接常驻空转；批路径（`frame_packet_batch`）则每批新建
+/// `Vec`，tick 齐发下形成分配流失。两者统一改自本池检出：
+/// 池空检出永远新建、绝不阻塞，归还封顶常数份。归还治理与
+/// 压缩暂存同款：清空内容，容量逾 `2 × MAX_RETAINED_SCRATCH`
+/// 收缩回留存上限，规避一次性大包撑大后的永久驻留。
+static FRAME_BUFFER_POOL: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+/// 组帧缓冲归还治理：清空内容，容量逾 2 倍留存上限时收缩
+/// 回留存上限（2 倍余量近似轮次 2 的半量规则，规避常规
+/// 尺寸附近的收缩/重分配振荡）。
+pub fn give_back_frame_buffer(buffer: &mut Vec<u8>) {
+    buffer.clear();
+    if buffer.capacity() > 2 * MAX_RETAINED_SCRATCH {
+        buffer.shrink_to(MAX_RETAINED_SCRATCH);
+    }
+}
+
+/// 自全局池检出一块组帧缓冲（池空新建）。供 `write_packet`
+/// 与批路径组帧共用；缓冲用毕须交 `return_frame_buffer` 归还。
+#[must_use]
+pub fn checkout_frame_buffer() -> Vec<u8> {
+    let mut pool = FRAME_BUFFER_POOL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    pool.pop().unwrap_or_default()
+}
+
+/// 将组帧缓冲治理后归还全局池（池满则直接释放）。
+pub fn return_frame_buffer(buffer: Vec<u8>) {
+    let mut buffer = buffer;
+    give_back_frame_buffer(&mut buffer);
+    let mut pool = FRAME_BUFFER_POOL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if pool.len() < MAX_POOLED_FRAME_BUFFERS {
+        pool.push(buffer);
+    }
+}
+
 /// 压缩资源捆绑：一份 zlib 压缩上下文 + 一块压缩暂存缓冲。
 /// 两者在 `frame_packet` 的压缩分支中成对使用，捆绑检出省去
 /// 两次池查找。
@@ -241,10 +289,9 @@ pub struct TCPNetworkEncoder<W: AsyncWrite + Unpin> {
     writer: Option<EncryptionWriter<W>>,
     // 压缩与压缩阈值
     compression: Option<(CompressionThreshold, CompressionLevel)>,
-    // 复用组帧缓冲区，避免为每个数据包分配新的 Vec。
-    //（压缩暂存已随轮次 9 改全局池化检出，见
+    //（组帧缓冲已随轮次 10 改全局池检出，见
+    // `FRAME_BUFFER_POOL`；压缩资源见轮次 9
     // `COMPRESSION_RESOURCE_POOL`）
-    frame_scratch: Vec<u8>,
 }
 
 impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
@@ -252,7 +299,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
         Self {
             writer: Some(EncryptionWriter::None(writer)),
             compression: None,
-            frame_scratch: Vec::new(),
         }
     }
 
@@ -312,21 +358,16 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
     ///
     /// NOTE: 此方法不会刷新。请调用 [`Self::flush`] 来刷新缓冲数据。
     pub async fn write_packet(&mut self, packet_data: Bytes) -> Result<(), PacketEncodeError> {
-        let mut frame = std::mem::take(&mut self.frame_scratch);
+        // 组帧缓冲自全局池检出（轮次 10）：所有出口（组帧失败、
+        // 写帧失败、成功）均在返回前归还，连接登录结束后不再
+        // 常驻组帧缓冲。
+        let mut frame = checkout_frame_buffer();
         frame.clear();
-        // 与压缩缓冲同策：大包之后收缩回留存上限，防每条连接
-        // 按历史最大包永久驻留
-        let frame_hint = packet_data.len().saturating_add(10);
-        let frame_capacity = frame.capacity();
-        if frame_capacity > MAX_RETAINED_SCRATCH && frame_hint < frame_capacity / 2 {
-            frame.shrink_to(MAX_RETAINED_SCRATCH.max(frame_hint));
-        }
-        let framed = self.frame_packet(&packet_data, &mut frame);
-        let result = match framed {
+        let result = match self.frame_packet(&packet_data, &mut frame) {
             Ok(()) => self.write_frame(&frame).await,
             Err(err) => Err(err),
         };
-        self.frame_scratch = frame;
+        return_frame_buffer(frame);
         result
     }
 
@@ -456,12 +497,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
             .flush()
             .await
             .map_err(|err| PacketEncodeError::Message(err.to_string()))
-    }
-
-    /// 当前组帧 scratch 的容量（诊断与基准观测用）。
-    #[must_use]
-    pub const fn frame_scratch_capacity(&self) -> usize {
-        self.frame_scratch.capacity()
     }
 }
 
@@ -1034,47 +1069,25 @@ mod tests {
             .collect()
     }
 
-    /// 大包之后组帧 scratch 容量必须收缩回留存上限；
-    /// 常规尺寸（≤ 留存上限）流量不得触发收缩。
-    ///（压缩暂存的归还治理等价断言见同步测试
-    /// `pooled_scratch_shrinks_on_return_after_large_packet`——
-    /// 异步测试一律不断言全局池状态，规避跨 await 持锁与
-    /// 并发污染。）
+    /// 组帧缓冲池化后（轮次 10），大小包混写序列的线上字节
+    /// 必须保持正确：缓冲来源（新建/池复用）不影响帧内容。
+    ///（缓冲驻留与归还治理的内存面断言见同步测试
+    /// `pooled_frame_buffer_*`——异步测试一律不断言全局池
+    /// 状态，规避跨 await 持锁与并发污染。）
     #[tokio::test]
-    async fn scratch_capacity_shrinks_after_large_packet() -> Result<(), Box<dyn std::error::Error>>
+    async fn write_packet_frames_correct_across_size_mix() -> Result<(), Box<dyn std::error::Error>>
     {
         let mut buf = Vec::new();
         let mut encoder = TCPNetworkEncoder::new(&mut buf);
         encoder.set_compression((0, 6));
 
-        // 1 MiB 不可压缩大包：组帧缓冲被撑大
+        // 大（1 MiB 不可压缩）→ 小（64 B）→ 中（128 KiB）混写
         let big = pseudo_random_bytes(1024 * 1024, 42);
-        let big_len = big.len();
         encoder.write_packet(big.into()).await?;
-        let big_frame_cap = encoder.frame_scratch_capacity();
-        assert!(
-            big_frame_cap >= big_len,
-            "大包后组帧容量应显著扩张: frame={big_frame_cap}"
-        );
-
-        // 小包：容量收缩回留存上限（分配器可能按大小档向上取整，
-        // 断言留一个页档余量）
         let small = pseudo_random_bytes(64, 43);
         encoder.write_packet(small.into()).await?;
-        let frame_cap = encoder.frame_scratch_capacity();
-        assert!(
-            frame_cap <= MAX_RETAINED_SCRATCH + 4096,
-            "组帧 scratch 应收缩回留存上限附近: {frame_cap}"
-        );
-
-        // 中包（128 KiB < 留存上限）：容量不得再涨落振荡
         let medium = pseudo_random_bytes(128 * 1024, 44);
         encoder.write_packet(medium.into()).await?;
-        assert_eq!(
-            encoder.frame_scratch_capacity(),
-            frame_cap,
-            "中包不应触发组帧缓冲再分配"
-        );
 
         // 线上字节正确性：解析缓冲末尾一帧并校验其内部结构
         let mut last_frame = last_frame_bytes(&buf);
@@ -1087,6 +1100,72 @@ mod tests {
             "未压缩长度应为中包原始长度"
         );
         Ok(())
+    }
+
+    /// 组帧缓冲池化复用：归还后再次检出命中同一缓冲（容量
+    /// 延续），池长随检出/归还涨落。
+    #[test]
+    fn pooled_frame_buffer_reuse_round_trip() {
+        let pool = std::sync::Mutex::new(Vec::new());
+        // 局部池注入：生产函数走全局池，此处直取池原语验证
+        // 语义（检出/治理/归还三件套与生产同款）。
+        let mut buffer: Vec<u8> = pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .unwrap_or_default();
+        buffer.reserve(4096);
+        super::give_back_frame_buffer(&mut buffer);
+        {
+            let mut guard = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.push(buffer);
+        };
+        assert_eq!(
+            pool.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
+        let reused = pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop();
+        assert!(
+            reused.as_ref().is_some_and(|b| b.capacity() >= 4096),
+            "复用条目应保留既有容量"
+        );
+    }
+
+    /// 归还治理：逾 2 倍留存上限的缓冲归还时收缩回留存上限；
+    /// 全局池驻留不超上限（超额归还直接释放）。
+    #[test]
+    fn pooled_frame_buffer_shrinks_and_respects_cap() {
+        // 收缩治理（局部缓冲直验）
+        let mut buffer: Vec<u8> = Vec::with_capacity(1024 * 1024);
+        super::give_back_frame_buffer(&mut buffer);
+        assert!(
+            buffer.capacity() <= MAX_RETAINED_SCRATCH + 4096,
+            "归还的组帧缓冲应收缩回留存上限附近: {}",
+            buffer.capacity()
+        );
+        assert!(buffer.is_empty(), "归还治理必须清空内容");
+
+        // 全局池驻留上限：检出 上限+1 份全数归还，池长封顶
+        let buffers: Vec<Vec<u8>> = (0..=super::MAX_POOLED_FRAME_BUFFERS)
+            .map(|_| super::checkout_frame_buffer())
+            .collect();
+        for buffer in buffers {
+            super::return_frame_buffer(buffer);
+        }
+        assert_eq!(
+            super::FRAME_BUFFER_POOL
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            super::MAX_POOLED_FRAME_BUFFERS
+        );
     }
 
     /// 低于压缩阈值的包以 `data_length=0` 标记未压缩组帧，
