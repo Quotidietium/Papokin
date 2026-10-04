@@ -166,7 +166,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!();
     println!("| 模式 | 缓存留存 | 存活块数 | 分配次数 | 编码耗时 | RSS |");
     println!("|---|---:|---:|---:|---:|---:|");
-    for (name, s) in [("old（32 KiB 预分配驻留）", &old), ("new（移交前裁剪）", &new)] {
+    for (name, s) in [
+        ("old（32 KiB 预分配驻留）", &old),
+        ("new（移交前裁剪）", &new),
+    ] {
         println!(
             "| {name} | {:.1} MiB | {} | {} | {} ms | {:.1} MiB |",
             mib(s.live_bytes as u64),
