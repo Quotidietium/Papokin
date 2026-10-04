@@ -80,6 +80,11 @@ pub struct ChunkData {
     pub status: ChunkStatus,
     pub blending_data: Option<crate::generation::blender::blending_data::BlendingData>,
     pub dirty: AtomicBool,
+    /// 内容改动代数：每次 `mark_dirty(true)`（即任何需要落盘的
+    /// 内容变异——方块、光照、方块实体等）单调递增。区块编码
+    /// 缓存以此判断缓存条目是否已过期，与弱引用存活（未卸载）
+    /// 共同构成完整的失效语义。
+    pub modification: AtomicU64,
     pub inhabited_time: AtomicU64,
     pub custom_data: std::sync::Mutex<NbtCompound>,
     /// Pumpkin 未建模的区块 NBT 字段，予以保留以便加载/保存往返
@@ -627,6 +632,21 @@ impl ChunkSections {
 }
 
 impl ChunkData {
+    /// 当前内容改动代数（缓存失效判断用，见字段文档）。
+    #[must_use]
+    pub fn modification_generation(&self) -> u64 {
+        self.modification.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 内容变异统一收口：置脏（触发落盘）并递增改动代数
+    ///（编码缓存失效）。所有内容写路径必须经由此处或
+    /// `Dirtiable::mark_dirty(true)`，不得直接 `dirty.store(true)`。
+    pub fn mark_modified(&self) {
+        self.modification
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[must_use]
     pub fn empty(x: i32, z: i32) -> Self {
         Self {
@@ -642,6 +662,7 @@ impl ChunkData {
             status: ChunkStatus::Full,
             blending_data: None,
             dirty: std::sync::atomic::AtomicBool::new(false),
+            modification: std::sync::atomic::AtomicU64::new(0),
             inhabited_time: std::sync::atomic::AtomicU64::new(0),
             custom_data: std::sync::Mutex::new(NbtCompound::new()),
             preserved_data: std::sync::Mutex::new(None),
@@ -772,7 +793,7 @@ impl ChunkData {
         }
 
         if modified {
-            self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.mark_modified();
         }
 
         drop(sections);
@@ -1086,5 +1107,26 @@ mod tests {
         chunk.remove_custom_data("my_plugin", "test_key");
         assert!(!chunk.has_custom_data("my_plugin", "test_key"));
         assert!(chunk.has_custom_data("my_plugin", "number_key"));
+    }
+
+    #[test]
+    fn modification_generation_bumps_only_on_dirty_mark() {
+        use crate::chunk::io::Dirtiable;
+
+        let chunk = super::ChunkData::empty(0, 0);
+        assert_eq!(chunk.modification_generation(), 0);
+
+        chunk.mark_dirty(true);
+        assert_eq!(chunk.modification_generation(), 1);
+        chunk.mark_dirty(true);
+        assert_eq!(chunk.modification_generation(), 2);
+
+        // 保存收尾的清脏不计改动（内容未再变化）
+        chunk.mark_dirty(false);
+        assert_eq!(chunk.modification_generation(), 2);
+
+        // 再次变异继续单调递增
+        chunk.mark_dirty(true);
+        assert_eq!(chunk.modification_generation(), 3);
     }
 }

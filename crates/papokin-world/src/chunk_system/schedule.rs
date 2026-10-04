@@ -209,7 +209,7 @@ impl GenerationSchedule {
                 for section in &mut engine.sky_light {
                     section.fill(15);
                 }
-                chunk.dirty.store(true, Relaxed);
+                chunk.mark_modified();
             }
             LightingEngineConfig::Dark => {
                 let mut engine = chunk
@@ -222,7 +222,7 @@ impl GenerationSchedule {
                 for section in &mut engine.sky_light {
                     section.fill(0);
                 }
-                chunk.dirty.store(true, Relaxed);
+                chunk.mark_modified();
             }
             LightingEngineConfig::Default => {}
         }

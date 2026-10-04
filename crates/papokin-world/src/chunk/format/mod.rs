@@ -99,7 +99,12 @@ impl PathFromLevelFolder for ChunkData {
 impl Dirtiable for ChunkData {
     #[inline]
     fn mark_dirty(&self, flag: bool) {
-        self.dirty.store(flag, Ordering::Relaxed);
+        if flag {
+            // 内容变异 ⇒ 改动代数递增，编码缓存的代数校验随之失效
+            self.mark_modified();
+        } else {
+            self.dirty.store(flag, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -516,6 +521,7 @@ impl ChunkData {
             z: position.y,
             // 此区块是从磁盘读取的，因此尚未被修改
             dirty: AtomicBool::new(false),
+            modification: AtomicU64::new(0),
             block_ticks: ChunkTickScheduler::from_iter(block_ticks),
             fluid_ticks: ChunkTickScheduler::from_iter(fluid_ticks),
             pending_block_entities: std::sync::Mutex::new(block_entities),
@@ -803,7 +809,7 @@ impl ChunkData {
             namespace.into(),
             papokin_nbt::tag::NbtTag::Compound(namespace_data),
         );
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_modified();
     }
 
     pub fn get_custom_data(&self, namespace: &str, key: &str) -> Option<papokin_nbt::tag::NbtTag> {
@@ -837,7 +843,7 @@ impl ChunkData {
                 papokin_nbt::tag::NbtTag::Compound(namespace_data),
             );
         }
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_modified();
     }
 
     pub fn has_custom_data(&self, namespace: &str, key: &str) -> bool {
