@@ -295,12 +295,20 @@ impl ChunkSender {
                                 && light_packet
                                     .write_packet_data(&mut light_buf, &version)
                                     .is_ok())
-                            .then(|| Bytes::from(light_buf))
+                            .then(|| {
+                                light_buf.shrink_to_fit();
+                                Bytes::from(light_buf)
+                            })
                         })
                 } else {
                     None
                 };
 
+                // 负载会随编码缓存长期驻留（每玩家上限 8192 条），
+                // 收缩掉 32 KiB 预分配的多余容量再移交 Bytes——
+                // Bytes::from(Vec) 原样接管底层分配，不收缩则
+                // 每条缓存按预分配容量而非实际包长占内存。
+                chunk_buf.shrink_to_fit();
                 Some(EncodedChunk {
                     position: pos,
                     payload: Bytes::from(chunk_buf),
@@ -369,5 +377,69 @@ impl ChunkSender {
 impl Default for ChunkSender {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use papokin_data::Block;
+
+    /// 构造带少量方块的测试区块
+    fn populated_chunk(fill: usize) -> SyncChunk {
+        let chunk = ChunkData::empty(0, 0);
+        for i in 0..fill {
+            chunk
+                .section
+                .set_block_absolute_y(i, 64, i, Block::STONE.default_state.id);
+        }
+        Arc::new(chunk)
+    }
+
+    #[test]
+    fn encode_batch_payload_matches_direct_serialization_and_cache_reuses() {
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let batch = PreparedBatch {
+            chunks: (0..3)
+                .map(|i| PreparedChunk {
+                    position: Vector2::new(i, 0),
+                    chunk: populated_chunk(8),
+                })
+                .collect(),
+            epoch_snapshot: 1,
+            target_version: version,
+        };
+
+        let mut cache = FxHashMap::default();
+        let encoded = ChunkSender::encode_batch(&batch, &mut cache);
+        assert_eq!(encoded.len(), 3, "全部区块应编码成功");
+
+        // 线上字节与直接序列化完全一致（容量裁剪不得改动内容）
+        for (candidate, enc) in batch.chunks.iter().zip(&encoded) {
+            let mut expected = Vec::new();
+            expected
+                .write_var_int(&VarInt(CChunkData::to_id(version)))
+                .expect("写入 id 不应失败");
+            CChunkData(&candidate.chunk)
+                .write_packet_data(&mut expected, &version)
+                .expect("直接序列化不应失败");
+            assert_eq!(
+                &enc.payload[..],
+                &expected[..],
+                "编码负载应与直接序列化逐字节一致"
+            );
+            assert!(enc.light_payload.is_none(), "1.21.11 不应有独立光照包");
+        }
+
+        // 缓存命中路径：同批再次编码应复用同一分配而非重新序列化
+        let encoded2 = ChunkSender::encode_batch(&batch, &mut cache);
+        assert_eq!(encoded2.len(), 3);
+        for (first, second) in encoded.iter().zip(&encoded2) {
+            assert_eq!(
+                first.payload.as_ptr(),
+                second.payload.as_ptr(),
+                "缓存命中应共享同一分配而非重新序列化"
+            );
+        }
     }
 }

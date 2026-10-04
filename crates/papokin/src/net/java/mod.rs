@@ -516,6 +516,10 @@ impl JavaClient {
                                 error!("写入光照更新数据失败：{err:?}");
                                 None
                             } else {
+                                // 与编码缓存同策：Bytes 原样接管底层
+                                // 分配，收缩多余容量，避免按预分配
+                                // 容量驻留至消费完成
+                                light_buf.shrink_to_fit();
                                 Some(Bytes::from(light_buf))
                             }
                         }
@@ -528,6 +532,7 @@ impl JavaClient {
                     None
                 };
 
+                buf.shrink_to_fit();
                 serialized.push((Bytes::from(buf), light_buf));
             }
             let _ = tx.send(serialized);
