@@ -1,0 +1,23 @@
+{
+  "gates": {
+    "all_pass": true,
+    "content_equal": true,
+    "locks_reduced": true
+  },
+  "per_block_lock": {
+    "locks": 65537,
+    "wall_ms": 2.5374999999999996
+  },
+  "per_column_lock": {
+    "locks": 2,
+    "wall_ms": 0.0031999999999999997
+  },
+  "round": 12,
+  "topic": "运行时方块 set 高度图互斥锁按列聚合（锁次数 = 列数而非方块数）",
+  "workload": {
+    "column_height": 256,
+    "edge": 16,
+    "total_blocks": 65536,
+    "total_columns": 256
+  }
+}
