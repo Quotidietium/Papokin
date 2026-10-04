@@ -1,0 +1,67 @@
+{
+  "runs": [
+    {
+      "budget_mib": 0,
+      "chunks_per_region": 64,
+      "evicted_total": 0,
+      "manager_after_populate_mib": 64.4609375,
+      "manager_after_rounds_mib": 64.4609375,
+      "manager_end_mib": 64.4609375,
+      "payload_kib": 8,
+      "regions": 128,
+      "rounds": 3,
+      "rss_after_populate_mib": 149.05078125,
+      "rss_end_mib": 150.19140625,
+      "rss_peak_mib": 149.22265625,
+      "rss_start_mib": 9.3984375,
+      "t_populate_ms": 4817,
+      "t_readback_ms": 9,
+      "t_rounds_ms": 4014,
+      "verify_ok": true
+    },
+    {
+      "budget_mib": 32,
+      "chunks_per_region": 64,
+      "evicted_total": 462,
+      "manager_after_populate_mib": 29.2088623046875,
+      "manager_after_rounds_mib": 25.1800537109375,
+      "manager_end_mib": 26.187255859375,
+      "payload_kib": 8,
+      "regions": 128,
+      "rounds": 3,
+      "rss_after_populate_mib": 73.828125,
+      "rss_end_mib": 58.09765625,
+      "rss_peak_mib": 79.58984375,
+      "rss_start_mib": 9.44921875,
+      "t_populate_ms": 4704,
+      "t_readback_ms": 11,
+      "t_rounds_ms": 4424,
+      "verify_ok": true
+    },
+    {
+      "budget_mib": 8,
+      "chunks_per_region": 64,
+      "evicted_total": 500,
+      "manager_after_populate_mib": 6.043212890625,
+      "manager_after_rounds_mib": 6.043212890625,
+      "manager_end_mib": 7.0504150390625,
+      "payload_kib": 8,
+      "regions": 128,
+      "rounds": 3,
+      "rss_after_populate_mib": 24.74609375,
+      "rss_end_mib": 24.9921875,
+      "rss_peak_mib": 28.30078125,
+      "rss_start_mib": 9.44140625,
+      "t_populate_ms": 4664,
+      "t_readback_ms": 9,
+      "t_rounds_ms": 4318,
+      "verify_ok": true
+    }
+  ],
+  "workload": {
+    "chunks_per_region": 64,
+    "payload_kib": 8,
+    "regions": 128,
+    "rounds": 3
+  }
+}
