@@ -1,0 +1,30 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_tick": {
+    "fresh_allocs": 2139.5583333333334,
+    "fresh_bytes": 348331.16,
+    "reused_allocs": 0.0,
+    "reused_bytes": 0.0
+  },
+  "per_tick_fresh": {
+    "allocs": 1283735,
+    "bytes": 208998696
+  },
+  "reused_buffers": {
+    "allocs": 0,
+    "bytes": 0
+  },
+  "round": 16,
+  "topic": "实体移动碰撞收集/追踪器快照/生成列表跨 tick 复用（线程局部暂存 + 驻留重填 + 去 Arc）",
+  "workload": {
+    "moving_entities": 800,
+    "spawn_categories": 8,
+    "ticks": 600,
+    "tracked_entities": 800
+  }
+}
