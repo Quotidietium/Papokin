@@ -221,6 +221,9 @@ pub struct World {
     /// 末影龙战斗管理器（仅存在于 `THE_END` 维度中）。
     pub dragon_fight: Option<std::sync::Mutex<dragon_fight::DragonFight>>,
     pub spawn_state: ArcSwap<SpawnState>,
+    /// 本世界的共享区块编码缓存：所有同协议版本的玩家共用同一份
+    /// 编码产物（内容相同 ⇒ 线上字节相同），按内容改动代数失效。
+    pub chunk_encode_cache: crate::net::chunk_sender::SharedChunkEncodeCache,
     pub active_chunks: RwLock<FxHashSet<Vector2<i32>>>,
     active_chunk_tracker: std::sync::Mutex<ActiveChunkTracker>,
     pub forced_chunks: std::sync::Mutex<FxHashSet<Vector2<i32>>>,
@@ -370,6 +373,7 @@ impl World {
             custom_data: std::sync::Mutex::new(custom_data),
             custom_block_entity_data: DashMap::new(),
             entity_tracker: entity_tracker::EntityTracker::new(),
+            chunk_encode_cache: crate::net::chunk_sender::SharedChunkEncodeCache::new(),
         }
     }
 

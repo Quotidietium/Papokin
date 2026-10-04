@@ -380,9 +380,6 @@ pub struct Player {
     pub experience_pick_up_delay: Mutex<u32>,
     pub chunk_sender: Mutex<crate::net::ChunkSender>,
     pub chunk_listener: Mutex<Receiver<(Vector2<i32>, Weak<ChunkData>)>>,
-    /// 区块网络编码缓存（按区块位置复用序列化字节），跨 tick 持久。
-    /// 条目以对区块数据的弱引用判新鲜度；容量超限时整体清空兜底。
-    pub chunk_encode_cache: Mutex<rustc_hash::FxHashMap<Vector2<i32>, crate::net::EncodedChunk>>,
     /// 玩家当前持有的区块票：(加票中心, 视距等级, 模拟等级)。
     /// 必须连同加票时的中心一起记录：断线/跨维度清理时玩家的
     /// `chunk_pos` 可能已因下坐骑等原因越过区块边界，若按当前
@@ -637,7 +634,6 @@ impl Player {
                 sender
             }),
             chunk_listener: Mutex::new(world.level.chunk_listener.add_global_chunk_listener()),
-            chunk_encode_cache: Mutex::new(rustc_hash::FxHashMap::default()),
             held_chunk_tickets: Mutex::new(None),
             watched_update_lock: Mutex::new(()),
             watched_task_tail: Mutex::new(None),
@@ -1087,11 +1083,9 @@ impl Player {
         if let Ok(mut sender) = self.chunk_sender.lock() {
             sender.reset();
         }
-        // 旧世界的编码缓存条目已全部作废，直接清空，
-        // 不必等容量兜底触发。
-        if let Ok(mut cache) = self.chunk_encode_cache.lock() {
-            cache.clear();
-        }
+        // 编码缓存已改为按世界共享：跨世界后发送路径自然改用新世界
+        // 的缓存；旧世界条目随区块卸载（弱引用失效）与逐出清扫回收，
+        // 若回访旧世界且区块未卸载未变异，还能继续命中。
     }
 
     #[expect(clippy::too_many_lines)]
@@ -2573,37 +2567,30 @@ impl Player {
                     .map_or(0, |s| s.sent_chunks_count())
             },
             |batch| {
-                // 跨 tick 复用的编码缓存：每个区块仅在数据变化
-                // （弱引用失效）或未缓存时重新序列化。字节预算超限时
-                // 按最远优先逐出至八成（视距内热条目保留），替代旧的
-                // 整体清空——后者会让当前视距全部重序列化；跨世界移动
-                // 的旧世界条目天然距离最远，同样被优先逐出。
-                const MAX_ENCODE_CACHE_BYTES: usize = 32 * 1024 * 1024;
+                // 按世界共享的编码缓存：同版本玩家注视同一区块只编码
+                // 一次、驻留一份；条目仅在内容变异（改动代数递增）、
+                // 区块卸载（弱引用失效）或未缓存时重新序列化。全局字节
+                // 预算超限时按「距所有玩家最远优先」逐出至八成（各玩家
+                // 视距内热条目都保留），并顺带清扫已卸载区块的死条目。
+                const MAX_SHARED_ENCODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-                let mut cache_guard = self.chunk_encode_cache.try_lock().ok();
-                if let Some(cache) = cache_guard.as_deref_mut() {
-                    let cache_bytes: usize = cache
-                        .values()
-                        .map(crate::net::EncodedChunk::encoded_bytes)
-                        .sum();
-                    if cache_bytes > MAX_ENCODE_CACHE_BYTES {
-                        let evicted = crate::net::chunk_sender::prune_encode_cache(
-                            cache,
-                            player_chunk,
-                            MAX_ENCODE_CACHE_BYTES / 5 * 4,
-                        );
-                        if evicted > 0 {
-                            debug!("区块编码缓存超预算，最远优先逐出 {evicted} 条");
-                        }
+                let cache = &world.chunk_encode_cache;
+                if cache.total_bytes() > MAX_SHARED_ENCODE_CACHE_BYTES {
+                    // 逐出距离按「距最近玩家」计算：只收集全员中心的
+                    // 时机控制在超预算之后，常规路径零分配
+                    let centers: Vec<Vector2<i32>> = world
+                        .players
+                        .load()
+                        .iter()
+                        .map(|p| p.get_entity().chunk_pos.load())
+                        .collect();
+                    let evicted =
+                        cache.prune_if_over_budget(&centers, MAX_SHARED_ENCODE_CACHE_BYTES);
+                    if evicted > 0 {
+                        debug!("共享区块编码缓存超预算，最远优先逐出 {evicted} 条");
                     }
                 }
-                let encoded = cache_guard.as_deref_mut().map_or_else(
-                    || {
-                        let mut scratch = rustc_hash::FxHashMap::default();
-                        crate::net::ChunkSender::encode_batch(&batch, &mut scratch)
-                    },
-                    |cache| crate::net::ChunkSender::encode_batch(&batch, cache),
-                );
+                let encoded = crate::net::ChunkSender::encode_batch(&batch, cache);
                 let current_epoch = self.chunk_send_epoch.load(Ordering::Relaxed);
                 let (sent, total_sent_chunks) = self.chunk_sender.try_lock().map_or_else(
                     |_| (Vec::new(), 0),
