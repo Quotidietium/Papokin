@@ -2,6 +2,7 @@ use aes::cipher::KeyIvInit;
 use bytes::Bytes;
 use flate2::{Compress, Compression, FlushCompress, Status};
 use papokin_util::version::JavaMinecraftVersion;
+use std::cell::RefCell;
 use thiserror::Error;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -22,6 +23,67 @@ use crate::{
 /// 游玩数据包（含区块包，一般 ≤ 150 KiB）天然低于该值，因此
 /// 稳态下收缩条件不成立，不产生收缩/重分配振荡。
 pub(crate) const MAX_RETAINED_SCRATCH: usize = 256 * 1024;
+
+/// 每线程池化的 zlib 压缩上下文数量上限（防御性约束；
+/// 稳态下每线程在役压缩级别仅一种）。
+const MAX_POOLED_COMPRESSORS_PER_THREAD: usize = 4;
+
+thread_local! {
+    /// 按线程复用的 zlib 压缩上下文池。
+    ///
+    /// 压缩上下文（字典窗口 + 哈希/链表 + 待决缓冲，实测单个逾
+    /// 百 KiB）原本作为字段随每条连接的编码器常驻，而连接的压缩
+    /// 流量是间歇的——大量空闲连接各自白占一份状态。协议线上行为
+    /// 逐包无状态（每包 `reset()` 后以 `FlushCompress::Finish`
+    /// 完整收尾，等价于一条全新压缩流），上下文在连接间可互换、
+    /// 输出字节全等，故按线程检出复用。检出/归还均在
+    /// `compress_packet_data` 单次同步调用内完成，不跨 await、
+    /// 不跨线程。
+    // 已是 const 初始化，clippy 1.98 对 RefCell<Vec<_>> 形式仍误报
+    //（与 density_volume 同例）
+    #[allow(clippy::missing_const_for_thread_local)]
+    static COMPRESSOR_POOL: RefCell<Vec<(CompressionLevel, Compress)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// 池化压缩上下文守卫：存活期间独占一份上下文，析构时归还
+/// 线程池（池满则直接释放）。
+struct PooledCompressor(Option<(CompressionLevel, Compress)>);
+
+impl PooledCompressor {
+    /// 按压缩级别检出上下文：池中有同级条目则复用，否则新建。
+    fn checkout(level: CompressionLevel) -> Self {
+        let entry = COMPRESSOR_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            pool.iter()
+                .position(|(pooled_level, _)| *pooled_level == level)
+                .map(|index| pool.swap_remove(index))
+        });
+        Self(Some(entry.unwrap_or_else(|| {
+            (level, Compress::new(Compression::new(level), true))
+        })))
+    }
+
+    /// 取得内部压缩器的可变引用（上下文仅在 `Drop` 中交出，
+    /// 守卫存活期间必为 `Some`）。
+    fn compressor_mut(&mut self) -> Option<&mut Compress> {
+        self.0.as_mut().map(|(_, compressor)| compressor)
+    }
+}
+
+impl Drop for PooledCompressor {
+    fn drop(&mut self) {
+        let Some(entry) = self.0.take() else {
+            return;
+        };
+        COMPRESSOR_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() < MAX_POOLED_COMPRESSORS_PER_THREAD {
+                pool.push(entry);
+            }
+        });
+    }
+}
 
 pub enum EncryptionWriter<W: AsyncWrite + Unpin> {
     Encrypt(Box<StreamEncryptor<W>>),
@@ -96,8 +158,6 @@ pub struct TCPNetworkEncoder<W: AsyncWrite + Unpin> {
     writer: Option<EncryptionWriter<W>>,
     // 压缩与压缩阈值
     compression: Option<(CompressionThreshold, CompressionLevel)>,
-    // 复用压缩器，避免为每个数据包构建 zlib 状态。
-    compressor: Option<(CompressionLevel, Compress)>,
     // 复用压缩缓冲区，避免为每个数据包分配新的 Vec。
     compression_scratch: Vec<u8>,
     frame_scratch: Vec<u8>,
@@ -108,7 +168,6 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
         Self {
             writer: Some(EncryptionWriter::None(writer)),
             compression: None,
-            compressor: None,
             compression_scratch: Vec::new(),
             frame_scratch: Vec::new(),
         }
@@ -161,20 +220,13 @@ impl<W: AsyncWrite + Unpin> TCPNetworkEncoder<W> {
                 .reserve(reserve_hint.saturating_sub(current_capacity));
         }
 
-        let needs_new_compressor = match self.compressor.as_ref() {
-            Some((level, _)) => *level != compression_level,
-            None => true,
-        };
-        if needs_new_compressor {
-            self.compressor = Some((
-                compression_level,
-                Compress::new(Compression::new(compression_level), true),
-            ));
-        }
-
-        let (_, compressor) = self.compressor.as_mut().ok_or_else(|| {
-            PacketEncodeError::Message("compressor must be present after initialization".into())
-        })?;
+        // 压缩上下文自线程池检出：逐包 reset + Finish 的线上行为
+        // 与每连接独占上下文字节全等（见 `COMPRESSOR_POOL` 文档），
+        // 守卫析构时归还池中。
+        let mut pooled = PooledCompressor::checkout(compression_level);
+        let compressor = pooled
+            .compressor_mut()
+            .ok_or_else(|| PacketEncodeError::Message("池化压缩上下文缺失（不变式破坏）".into()))?;
         compressor.reset();
         let status = compressor
             .compress_vec(
@@ -604,6 +656,44 @@ mod tests {
 
         // 剩余缓冲区为有效载荷
         assert_eq!(decompressed_buffer, expected_payload);
+        Ok(())
+    }
+
+    /// 池化复用：守卫析构归还线程池，同级别下次检出命中
+    ///（池长归 0），再次析构后回到池中。
+    #[test]
+    fn pooled_compressor_reuse_round_trip() {
+        let level: CompressionLevel = 6;
+        drop(super::PooledCompressor::checkout(level));
+        super::COMPRESSOR_POOL.with(|pool| assert_eq!(pool.borrow().len(), 1));
+        let guard = super::PooledCompressor::checkout(level);
+        super::COMPRESSOR_POOL.with(|pool| assert!(pool.borrow().is_empty()));
+        drop(guard);
+        super::COMPRESSOR_POOL.with(|pool| assert_eq!(pool.borrow().len(), 1));
+    }
+
+    /// 池容量上限：超出上限的归还直接释放，池长不超上限。
+    #[test]
+    fn pooled_compressor_respects_per_thread_cap() {
+        let guards: Vec<_> = (0..6).map(super::PooledCompressor::checkout).collect();
+        drop(guards);
+        super::COMPRESSOR_POOL.with(|pool| {
+            assert_eq!(
+                pool.borrow().len(),
+                super::MAX_POOLED_COMPRESSORS_PER_THREAD
+            );
+        });
+    }
+
+    /// 字节全等门：同一数据包经两个先后创建的编码器（后者自
+    /// 池中检出前者归还的上下文）压缩输出必须逐字节一致。
+    #[tokio::test]
+    async fn compressed_output_identical_across_encoder_instances()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let packet = MaxSizePacket::new(4096);
+        let first = build_packet_with_encoder(&packet, Some((0, 6)), None).await?;
+        let second = build_packet_with_encoder(&packet, Some((0, 6)), None).await?;
+        assert_eq!(first, second, "池化复用不得改变线上字节");
         Ok(())
     }
 
