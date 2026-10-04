@@ -30,6 +30,34 @@ pub struct HeterogeneousPaletteData<V: Hash + Eq + Copy, const DIM: usize> {
 enum PaletteStorage<V, const DIM: usize> {
     Dense(Box<AbstractCube<V, DIM>>),
     Indexed(Box<AbstractCube<u8, DIM>>),
+    /// 调色板不超过 16 态时的半字节索引存储：每个字节装两个
+    /// 4 bit 索引，占用恰为 `Indexed` 的一半。缓冲区长度恒为
+    /// `DIM * DIM * DIM / 2`。
+    Nibble(Box<[u8]>),
+}
+
+/// 半字节索引读取：偶数线性索引取低半字节，奇数取高半字节。
+/// 线性索引按 y,z,x 行主序，与 `AbstractCube` 展平顺序一致。
+#[inline]
+const fn nibble_get(buf: &[u8], linear: usize) -> u8 {
+    let byte = buf[linear / 2];
+    if linear.is_multiple_of(2) {
+        byte & 0x0F
+    } else {
+        byte >> 4
+    }
+}
+
+/// 半字节索引写入，`value` 必须不超过 15。
+#[inline]
+fn nibble_set(buf: &mut [u8], linear: usize, value: u8) {
+    debug_assert!(value <= 0x0F);
+    let byte = &mut buf[linear / 2];
+    if linear.is_multiple_of(2) {
+        *byte = (*byte & 0xF0) | value;
+    } else {
+        *byte = (*byte & 0x0F) | (value << 4);
+    }
 }
 
 impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V, DIM> {
@@ -41,6 +69,9 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
         match &self.storage {
             PaletteStorage::Dense(cube) => cube[y][z][x],
             PaletteStorage::Indexed(indices) => self.palette[indices[y][z][x] as usize],
+            PaletteStorage::Nibble(buf) => {
+                self.palette[nibble_get(buf, (y * DIM + z) * DIM + x) as usize]
+            }
         }
     }
 
@@ -72,7 +103,6 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
         };
 
         // 处理存储升级或更新
-        let mut upgraded = false;
         match &mut self.storage {
             PaletteStorage::Dense(cube) => {
                 cube[y][z][x] = value;
@@ -96,7 +126,26 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
                     }
                     cube[y][z][x] = value;
                     self.storage = PaletteStorage::Dense(cube);
-                    upgraded = true;
+                }
+            }
+            PaletteStorage::Nibble(buf) => {
+                if new_index <= 15 {
+                    nibble_set(buf, (y * DIM + z) * DIM + x, new_index as u8);
+                } else {
+                    // 调色板超过 16 态：解包为 u8 索引存储。
+                    // 半字节存储的调色板至多 16 态，单次新增一项后至多
+                    // 17 态，必然落在 u8 索引区间内。
+                    let mut indices = Box::new([[[0u8; DIM]; DIM]; DIM]);
+                    for (i, v) in indices
+                        .as_flattened_mut()
+                        .as_flattened_mut()
+                        .iter_mut()
+                        .enumerate()
+                    {
+                        *v = nibble_get(buf, i);
+                    }
+                    indices[y][z][x] = new_index as u8;
+                    self.storage = PaletteStorage::Indexed(indices);
                 }
             }
         }
@@ -114,14 +163,25 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
                 self.counts.shrink_to_fit();
             }
 
-            // 如果我们使用索引，需要更新所有索引，因为 swap_remove 改变了索引
-            if !upgraded && let PaletteStorage::Indexed(indices) = &mut self.storage {
-                for row in indices.iter_mut() {
-                    for col in row.iter_mut() {
-                        for idx in col.iter_mut() {
-                            if *idx as usize == last_index {
-                                *idx = original_index as u8;
+            // 索引型存储需要按 swap_remove 改写被移动的索引；
+            // Dense 存的是值本身，无需改写。
+            match &mut self.storage {
+                PaletteStorage::Dense(_) => {}
+                PaletteStorage::Indexed(indices) => {
+                    for row in indices.iter_mut() {
+                        for col in row.iter_mut() {
+                            for idx in col.iter_mut() {
+                                if *idx as usize == last_index {
+                                    *idx = original_index as u8;
+                                }
                             }
+                        }
+                    }
+                }
+                PaletteStorage::Nibble(buf) => {
+                    for linear in 0..DIM * DIM * DIM {
+                        if nibble_get(buf, linear) as usize == last_index {
+                            nibble_set(buf, linear, original_index as u8);
                         }
                     }
                 }
@@ -165,7 +225,18 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             Self::Homogeneous(palette[0])
         } else {
             // 异构立方体，存储完整数据
-            if palette.len() <= 256 && std::mem::size_of::<V>() > 1 {
+            if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
+                let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
+                for (i, v) in cube.as_flattened().as_flattened().iter().enumerate() {
+                    let idx = palette.iter().position(|p| p == v).unwrap_or(0);
+                    nibble_set(&mut buf, i, idx as u8);
+                }
+                Self::Heterogeneous(Box::new(HeterogeneousPaletteData {
+                    storage: PaletteStorage::Nibble(buf),
+                    palette,
+                    counts,
+                }))
+            } else if palette.len() <= 256 && std::mem::size_of::<V>() > 1 {
                 let mut indices = Box::new([[[0u8; DIM]; DIM]; DIM]);
                 for (i, v) in cube.as_flattened().as_flattened().iter().enumerate() {
                     let idx = palette.iter().position(|p| p == v).unwrap_or(0);
@@ -218,7 +289,13 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             return Self::Homogeneous(palette[0]);
         }
 
-        let storage = if palette.len() <= 256 && std::mem::size_of::<V>() > 1 {
+        let storage = if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
+            let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
+            for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
+                nibble_set(&mut buf, i, *idx);
+            }
+            PaletteStorage::Nibble(buf)
+        } else if palette.len() <= 256 && std::mem::size_of::<V>() > 1 {
             PaletteStorage::Indexed(indices)
         } else {
             PaletteStorage::Dense(cube)
@@ -279,6 +356,25 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
                             })
                         })
                         .collect(),
+                    PaletteStorage::Nibble(buf) => (0..Self::VOLUME
+                        .div_ceil(blocks_per_i64 as usize))
+                        .map(|word| {
+                            let base = word * blocks_per_i64 as usize;
+                            (0..blocks_per_i64 as usize).fold(0, |acc, index| {
+                                let linear = base + index;
+                                if linear >= Self::VOLUME {
+                                    acc
+                                } else {
+                                    let key_index = nibble_get(buf, linear) as usize;
+                                    debug_assert!((1 << bits_per_entry) > key_index);
+
+                                    let packed_offset_index = (key_index as u64)
+                                        << (bits_per_entry as u64 * index as u64);
+                                    acc | packed_offset_index as i64
+                                }
+                            })
+                        })
+                        .collect(),
                 };
 
                 (data.palette.clone().into_boxed_slice(), packed_indices)
@@ -335,6 +431,18 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             }
             // 若 counts[0] 在越界情况下被跳过则加以修正（罕见）
             // 但实际上我们应当直接确保它是正确的。
+
+            if palette.len() <= 16 {
+                let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
+                for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
+                    nibble_set(&mut buf, i, *idx);
+                }
+                return Self::Heterogeneous(Box::new(HeterogeneousPaletteData {
+                    storage: PaletteStorage::Nibble(buf),
+                    palette: palette.to_vec(),
+                    counts,
+                }));
+            }
 
             return Self::Heterogeneous(Box::new(HeterogeneousPaletteData {
                 storage: PaletteStorage::Indexed(indices),
@@ -444,6 +552,9 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
                         .iter()
                         .map(|&idx| data.palette[idx as usize]),
                 ),
+                PaletteStorage::Nibble(buf) => {
+                    Box::new((0..Self::VOLUME).map(|i| data.palette[nibble_get(buf, i) as usize]))
+                }
             },
         }
     }
@@ -463,24 +574,7 @@ impl<'a, V: Hash + Eq + Copy + Default, const DIM: usize> IntoIterator
     type IntoIter = Box<dyn Iterator<Item = Self::Item> + 'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        match self {
-            PalettedContainer::Homogeneous(registry_id) => Box::new(std::iter::repeat_n(
-                *registry_id,
-                PalettedContainer::<V, DIM>::VOLUME,
-            )),
-            PalettedContainer::Heterogeneous(data) => match &data.storage {
-                PaletteStorage::Dense(cube) => {
-                    Box::new(cube.as_flattened().as_flattened().iter().copied())
-                }
-                PaletteStorage::Indexed(indices) => Box::new(
-                    indices
-                        .as_flattened()
-                        .as_flattened()
-                        .iter()
-                        .map(|&idx| data.palette[idx as usize]),
-                ),
-            },
-        }
+        PalettedContainer::iter(self)
     }
 }
 
@@ -779,7 +873,7 @@ pub(crate) const BIOME_NETWORK_MAX_BITS: u8 = 7;
 
 #[cfg(test)]
 mod tests {
-    use super::{BlockPalette, NetworkPalette};
+    use super::{BlockPalette, NetworkPalette, PaletteStorage, PalettedContainer};
     use papokin_data::{Block, BlockStateId};
 
     fn network_palette_values(palette: NetworkPalette<u16>) -> Option<Box<[u16]>> {
@@ -787,6 +881,47 @@ mod tests {
             NetworkPalette::Single(value) => Some(Box::new([value])),
             NetworkPalette::Indirect(values) => Some(values),
             NetworkPalette::Direct => None,
+        }
+    }
+
+    fn storage_is_nibble(palette: &BlockPalette) -> bool {
+        match palette {
+            PalettedContainer::Homogeneous(_) => false,
+            PalettedContainer::Heterogeneous(data) => {
+                matches!(data.storage, PaletteStorage::Nibble(_))
+            }
+        }
+    }
+
+    fn storage_is_indexed(palette: &BlockPalette) -> bool {
+        match palette {
+            PalettedContainer::Homogeneous(_) => false,
+            PalettedContainer::Heterogeneous(data) => {
+                matches!(data.storage, PaletteStorage::Indexed(_))
+            }
+        }
+    }
+
+    fn storage_is_dense(palette: &BlockPalette) -> bool {
+        match palette {
+            PalettedContainer::Homogeneous(_) => false,
+            PalettedContainer::Heterogeneous(data) => {
+                matches!(data.storage, PaletteStorage::Dense(_))
+            }
+        }
+    }
+
+    fn assert_matches_model(palette: &BlockPalette, model: &[[[BlockStateId; 16]; 16]; 16]) {
+        for (y, row) in model.iter().enumerate() {
+            for (z, col) in row.iter().enumerate() {
+                for (x, expected) in col.iter().enumerate() {
+                    assert_eq!(
+                        palette.get(x, y, z),
+                        *expected,
+                        "坐标 ({x}, {y}, {z}) 取值与模型不一致"
+                    );
+                }
+            }
         }
     }
 
@@ -843,5 +978,192 @@ mod tests {
         assert_bulk_matches_mutations(|x, y, z| {
             BlockStateId::new_or_air(((y * 256 + z * 16 + x) % 300) as u16)
         });
+    }
+
+    #[test]
+    fn small_palette_uses_nibble_storage_on_all_build_paths() {
+        let states = [
+            Block::AIR.default_state.id,
+            Block::STONE.default_state.id,
+            Block::WATER.default_state.id,
+        ];
+
+        // 逐次变异路径（Homogeneous 升级）
+        let mut mutated = BlockPalette::default();
+        for (i, state) in states.iter().enumerate() {
+            mutated.set(i, 0, 0, *state);
+        }
+        assert!(storage_is_nibble(&mutated));
+
+        // 批量构建路径
+        let bulk = BlockPalette::from_fn(|x, _, _| states[x % states.len()]);
+        assert!(storage_is_nibble(&bulk));
+
+        // 磁盘反序列化路径（3 态调色板 + 4 bit 打包数据）
+        let mut packed = vec![0i64; 256];
+        for (i, word) in packed.iter_mut().enumerate() {
+            for j in 0..16usize {
+                let cell = i * 16 + j;
+                *word |= (((cell % states.len()) as u64) << (4 * j)) as i64;
+            }
+        }
+        let disk = BlockPalette::from_palette_and_packed_data(&states, &packed, 4);
+        assert!(storage_is_nibble(&disk));
+        assert_eq!(disk.get(5, 0, 0), states[5 % states.len()]);
+    }
+
+    #[test]
+    fn nibble_upgrades_to_indexed_at_seventeen_states() {
+        let states: Vec<BlockStateId> = (1u16..=17).map(BlockStateId::new_or_air).collect();
+        assert!(
+            states.iter().all(|s| *s != BlockStateId::default()),
+            "测试前提：状态池不含默认（空气）状态"
+        );
+        let mut palette = BlockPalette::default();
+        let mut model = [[[BlockStateId::default(); 16]; 16]; 16];
+
+        // 默认状态 + 15 个相异状态 = 16 态，恰为半字节存储上限
+        for (i, state) in states.iter().take(15).enumerate() {
+            palette.set(i, 0, 0, *state);
+            model[0][0][i] = *state;
+        }
+        assert!(storage_is_nibble(&palette));
+
+        palette.set(0, 1, 0, states[15]);
+        model[1][0][0] = states[15];
+        assert!(storage_is_indexed(&palette));
+        assert_matches_model(&palette, &model);
+    }
+
+    #[test]
+    fn indexed_stays_until_256_then_dense_at_257_states() {
+        let states: Vec<BlockStateId> = (1u16..=256).map(BlockStateId::new_or_air).collect();
+        let mut palette = BlockPalette::default();
+        let mut model = [[[BlockStateId::default(); 16]; 16]; 16];
+
+        // 默认状态 + 255 个相异状态 = 256 态，恰为 u8 索引存储上限
+        for (i, state) in states.iter().take(255).enumerate() {
+            let (x, y, z) = (i % 16, i / 256, (i / 16) % 16);
+            palette.set(x, y, z, *state);
+            model[y][z][x] = *state;
+        }
+        assert!(storage_is_indexed(&palette));
+
+        let state = states[255];
+        palette.set(0, 1, 0, state);
+        model[1][0][0] = state;
+        assert!(storage_is_dense(&palette));
+        assert_matches_model(&palette, &model);
+    }
+
+    #[test]
+    fn nibble_swap_remove_rewrites_indices() {
+        let states: Vec<BlockStateId> = (1u16..=5).map(BlockStateId::new_or_air).collect();
+        let mut palette = BlockPalette::default();
+        let mut model = [[[BlockStateId::default(); 16]; 16]; 16];
+
+        for i in 0..64usize {
+            let (x, z) = (i % 16, (i / 16) % 16);
+            let state = states[i % states.len()];
+            palette.set(x, 0, z, state);
+            model[0][z][x] = state;
+        }
+        // 把 states[2] 的全部单元改写为 states[3]：states[2] 计数归零，
+        // 触发 swap_remove 与索引改写
+        for i in (2..64usize).step_by(5) {
+            let (x, z) = (i % 16, (i / 16) % 16);
+            palette.set(x, 0, z, states[3]);
+            model[0][z][x] = states[3];
+        }
+
+        assert!(storage_is_nibble(&palette));
+        assert_matches_model(&palette, &model);
+    }
+
+    #[test]
+    fn nibble_demotes_to_homogeneous_when_single_state_remains() {
+        let a = BlockStateId::new_or_air(7);
+        let b = BlockStateId::new_or_air(9);
+        let mut palette = BlockPalette::default();
+
+        palette.set(3, 3, 3, a);
+        palette.set(4, 4, 4, b);
+        assert!(storage_is_nibble(&palette));
+
+        palette.set(3, 3, 3, BlockStateId::default());
+        palette.set(4, 4, 4, BlockStateId::default());
+        assert!(matches!(
+            palette,
+            PalettedContainer::Homogeneous(value) if value == BlockStateId::default()
+        ));
+    }
+
+    #[test]
+    fn randomized_mutations_match_model_across_storage_tiers() {
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+        // 24 态池：变异过程中跨越 Nibble（≤16）→ Indexed（17+）边界
+        let pool: Vec<BlockStateId> = (1u16..=24).map(BlockStateId::new_or_air).collect();
+        let mut palette = BlockPalette::default();
+        let mut model = [[[BlockStateId::default(); 16]; 16]; 16];
+
+        for op in 0..4096usize {
+            let (x, y, z) = (
+                (next() % 16) as usize,
+                (next() % 16) as usize,
+                (next() % 16) as usize,
+            );
+            let value = pool[(next() % pool.len() as u64) as usize];
+            palette.set(x, y, z, value);
+            model[y][z][x] = value;
+
+            if op % 512 == 0 {
+                for _ in 0..64 {
+                    let (sx, sy, sz) = (
+                        (next() % 16) as usize,
+                        (next() % 16) as usize,
+                        (next() % 16) as usize,
+                    );
+                    assert_eq!(palette.get(sx, sy, sz), model[sy][sz][sx]);
+                }
+            }
+        }
+
+        assert_matches_model(&palette, &model);
+
+        // 与同一模型的批量构建比对：取值序列与位宽必须一致
+        // （随机变异与行主序批量构建的调色板内序不同，打包字节
+        // 不作逐位比对——行主序流的字节一致性由 bulk_palette_* 覆盖）
+        let bulk = BlockPalette::from_fn(|x, y, z| model[y][z][x]);
+        assert_eq!(
+            palette.iter().collect::<Vec<_>>(),
+            bulk.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            palette.convert_network().bits_per_entry,
+            bulk.convert_network().bits_per_entry
+        );
+    }
+
+    #[test]
+    fn bulk_palette_matches_nibble_tier_mutations() {
+        // 空气（默认态）纳入池中：内容里始终存在默认态单元，
+        // 其调色板条目不会因计数归零而被 swap_remove 重排，
+        // 变异与批量构建的调色板内序一致，序列化字节可逐位比对。
+        let mut states = vec![Block::AIR.default_state.id];
+        states.extend((1u16..=11).map(BlockStateId::new_or_air));
+        assert_bulk_matches_mutations(|x, y, z| states[(x + y * 3 + z * 7) % states.len()]);
+    }
+
+    #[test]
+    fn bulk_palette_matches_indexed_tier_mutations() {
+        let mut states = vec![Block::AIR.default_state.id];
+        states.extend((1u16..=19).map(BlockStateId::new_or_air));
+        assert_bulk_matches_mutations(|x, y, z| states[(x * 5 + y + z * 11) % states.len()]);
     }
 }
