@@ -1,0 +1,55 @@
+{
+  "legacy": {
+    "checkpoint_a": {
+      "decoder_retained_mib": 64.0,
+      "encoder_scratch_mib": 132.0150146484375,
+      "rss_mib": 228.28125
+    },
+    "checkpoint_b": {
+      "decoder_retained_mib": 64.0,
+      "encoder_scratch_mib": 132.0150146484375,
+      "rss_mib": 228.2890625
+    },
+    "connections": 64,
+    "integrity_ok": true,
+    "mode": "legacy",
+    "phase2_ms": 3736,
+    "phase2_packets": 257280,
+    "rss_baseline_mib": 9.4453125,
+    "throughput_packets_per_sec": 68850.64620136871,
+    "wire_bytes": 243388032
+  },
+  "new": {
+    "checkpoint_a": {
+      "decoder_retained_mib": 0.0,
+      "encoder_scratch_mib": 132.0150146484375,
+      "rss_mib": 164.0078125
+    },
+    "checkpoint_b": {
+      "decoder_retained_mib": 0.0,
+      "encoder_scratch_mib": 32.0,
+      "rss_mib": 64.015625
+    },
+    "connections": 64,
+    "integrity_ok": true,
+    "mode": "new",
+    "phase2_ms": 3626,
+    "phase2_packets": 257280,
+    "rss_baseline_mib": 9.40625,
+    "throughput_packets_per_sec": 70939.43102153635,
+    "wire_bytes": 243388032
+  },
+  "round": 2,
+  "subject": "每连接收发 scratch 容量治理（256 KiB 留存上限）",
+  "wire_bytes_equal": true,
+  "workload": {
+    "big_packet_bytes": 1048576,
+    "compression_threshold": 256,
+    "connections": 64,
+    "heartbeats": 32,
+    "medium_every": 100,
+    "medium_packet_bytes": 131072,
+    "rounds": 2000,
+    "small_packet_bytes": 64
+  }
+}
