@@ -1,0 +1,26 @@
+{
+  "integrity_ok": true,
+  "new": {
+    "max_tick_encodes": 585,
+    "peak_bytes": 33553130,
+    "peak_entries": 1745,
+    "policy_events": 715,
+    "total_encodes": 240560
+  },
+  "old": {
+    "max_tick_encodes": 585,
+    "peak_bytes": 178854405,
+    "peak_entries": 8185,
+    "policy_events": 31,
+    "total_encodes": 257920
+  },
+  "round": 4,
+  "subject": "区块编码缓存逐出策略：字节预算 + 最远优先 vs 计数闸清空",
+  "workload": {
+    "journey_ticks": 9600,
+    "new_max_bytes": 33554432,
+    "old_max_entries": 8192,
+    "view_distance": 12,
+    "wobble_per_tick": 40
+  }
+}
