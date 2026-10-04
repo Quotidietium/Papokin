@@ -20,6 +20,7 @@ members = [
     "crates/papokin-world",
     "tools/papokin-codegen",
     "tools/papokin-fuzzer",
+    "benchmark",
 ]
 
 # [workspace.lints.rust]

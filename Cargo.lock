@@ -2346,6 +2346,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "papokin-benchmark"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "papokin-config",
+ "papokin-util",
+ "papokin-world",
+ "serde_json",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "papokin-codecs"
 version = "0.3.14+1.21.11"
 dependencies = [
