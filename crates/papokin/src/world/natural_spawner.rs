@@ -474,14 +474,14 @@ impl SpawnState {
     }
 }
 
-#[must_use]
 pub fn get_filtered_spawning_categories(
     state: &SpawnState,
     spawn_friendlies: bool,
     spawn_enemies: bool,
     spawn_passives: bool,
-) -> Vec<&'static MobCategory> {
-    let mut ret = Vec::with_capacity(MobCategory::SPAWNING_CATEGORIES.len());
+    out: &mut Vec<&'static MobCategory>,
+) {
+    out.clear();
     for category in MobCategory::SPAWNING_CATEGORIES {
         let is_type_allowed = if category.is_friendly {
             spawn_friendlies
@@ -498,10 +498,9 @@ pub fn get_filtered_spawning_categories(
         }
 
         if state.can_spawn_for_category_global(category) {
-            ret.push(category);
+            out.push(category);
         }
     }
-    ret
 }
 
 pub fn spawn_for_chunk(

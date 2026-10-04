@@ -1494,90 +1494,92 @@ impl Entity {
 
         let bounding_box = self.bounding_box.load();
 
-        let (collisions, block_positions) = self
-            .world
-            .load()
-            .get_block_collisions(bounding_box.stretch(movement), caller);
+        // 轮次 16：碰撞收集经线程局部暂存就地消费（消每次移动两新建 Vec）
+        self.world.load().with_block_collisions(
+            bounding_box.stretch(movement),
+            caller,
+            |collisions, block_positions| {
+                if collisions.is_empty() {
+                    return movement;
+                }
 
-        if collisions.is_empty() {
-            return movement;
-        }
+                let mut adjusted_movement = movement;
 
-        let mut adjusted_movement = movement;
+                // Y 轴调整
+                if movement.get_axis(Axis::Y) != 0.0 {
+                    let mut max_time = 1.0;
+                    let mut positions = block_positions.iter().copied();
+                    if let Some((mut collisions_len, mut position)) = positions.next() {
+                        let mut supporting_block_pos = None;
 
-        // Y 轴调整
-        if movement.get_axis(Axis::Y) != 0.0 {
-            let mut max_time = 1.0;
-            let mut positions = block_positions.into_iter();
-            if let Some((mut collisions_len, mut position)) = positions.next() {
-                let mut supporting_block_pos = None;
+                        for (i, inert_box) in collisions.iter().enumerate() {
+                            if i == collisions_len {
+                                let Some((next_len, next_pos)) = positions.next() else {
+                                    break;
+                                };
+                                collisions_len = next_len;
+                                position = next_pos;
+                            }
 
-                for (i, inert_box) in collisions.iter().enumerate() {
-                    if i == collisions_len {
-                        let Some((next_len, next_pos)) = positions.next() else {
-                            break;
-                        };
-                        collisions_len = next_len;
-                        position = next_pos;
+                            if let Some(collision_time) = bounding_box.calculate_collision_time(
+                                inert_box,
+                                adjusted_movement,
+                                Axis::Y,
+                                max_time,
+                            ) {
+                                max_time = collision_time;
+
+                                // 如果实体向下移动并发生碰撞，设置支撑方块位置
+                                if movement.get_axis(Axis::Y) < 0.0 {
+                                    supporting_block_pos = Some(position);
+                                }
+                            }
+                        }
+
+                        if max_time != 1.0 {
+                            let changed_component = adjusted_movement.get_axis(Axis::Y) * max_time;
+                            adjusted_movement.set_axis(Axis::Y, changed_component);
+                        }
+
+                        self.on_ground
+                            .store(supporting_block_pos.is_some(), Ordering::SeqCst);
+                        self.supporting_block_pos.store(supporting_block_pos);
+                    }
+                }
+
+                let mut horizontal_collision = false;
+
+                for axis in Axis::horizontal() {
+                    if movement.get_axis(axis) == 0.0 {
+                        continue;
                     }
 
-                    if let Some(collision_time) = bounding_box.calculate_collision_time(
-                        inert_box,
-                        adjusted_movement,
-                        Axis::Y,
-                        max_time,
-                    ) {
-                        max_time = collision_time;
+                    let mut max_time = 1.0;
 
-                        // 如果实体向下移动并发生碰撞，设置支撑方块位置
-                        if movement.get_axis(Axis::Y) < 0.0 {
-                            supporting_block_pos = Some(position);
+                    for inert_box in collisions {
+                        if let Some(collision_time) = bounding_box.calculate_collision_time(
+                            inert_box,
+                            adjusted_movement,
+                            axis,
+                            max_time,
+                        ) {
+                            max_time = collision_time;
                         }
                     }
+
+                    if max_time != 1.0 {
+                        let changed_component = adjusted_movement.get_axis(axis) * max_time;
+                        adjusted_movement.set_axis(axis, changed_component);
+                        horizontal_collision = true;
+                    }
                 }
 
-                if max_time != 1.0 {
-                    let changed_component = adjusted_movement.get_axis(Axis::Y) * max_time;
-                    adjusted_movement.set_axis(Axis::Y, changed_component);
-                }
+                self.horizontal_collision
+                    .store(horizontal_collision, Ordering::SeqCst);
 
-                self.on_ground
-                    .store(supporting_block_pos.is_some(), Ordering::SeqCst);
-                self.supporting_block_pos.store(supporting_block_pos);
-            }
-        }
-
-        let mut horizontal_collision = false;
-
-        for axis in Axis::horizontal() {
-            if movement.get_axis(axis) == 0.0 {
-                continue;
-            }
-
-            let mut max_time = 1.0;
-
-            for inert_box in &collisions {
-                if let Some(collision_time) = bounding_box.calculate_collision_time(
-                    inert_box,
-                    adjusted_movement,
-                    axis,
-                    max_time,
-                ) {
-                    max_time = collision_time;
-                }
-            }
-
-            if max_time != 1.0 {
-                let changed_component = adjusted_movement.get_axis(axis) * max_time;
-                adjusted_movement.set_axis(axis, changed_component);
-                horizontal_collision = true;
-            }
-        }
-
-        self.horizontal_collision
-            .store(horizontal_collision, Ordering::SeqCst);
-
-        adjusted_movement
+                adjusted_movement
+            },
+        )
     }
 
     /// 按照原版 Minecraft 的机制对实体施加击退。

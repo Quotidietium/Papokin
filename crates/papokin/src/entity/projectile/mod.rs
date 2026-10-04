@@ -194,30 +194,31 @@ impl ThrownItemEntity {
         let mut closest_t = 1.0f64;
         let mut hit = None;
 
-        // 方块碰撞
-        let (block_cols, block_positions) = world.get_block_collisions(search_box, caller);
-        for (idx, bb) in block_cols.iter().enumerate() {
-            if let Some(t) = calculate_ray_intersection(&start_pos, &delta, bb)
-                && t < closest_t
-            {
-                closest_t = t;
-                // 映射回方块坐标
-                let mut curr = 0;
-                for (len, pos) in &block_positions {
-                    curr += len;
-                    if idx < curr {
-                        let hit_pos = start_pos.add(&delta.multiply(t, t, t));
-                        hit = Some(ProjectileHit::Block {
-                            pos: *pos,
-                            face: get_hit_face(hit_pos, *pos),
-                            hit_pos,
-                            normal: delta.normalize().multiply(-1.0, -1.0, -1.0),
-                        });
-                        break;
+        // 方块碰撞（轮次 16：线程局部暂存就地消费）
+        world.with_block_collisions(search_box, caller, |block_cols, block_positions| {
+            for (idx, bb) in block_cols.iter().enumerate() {
+                if let Some(t) = calculate_ray_intersection(&start_pos, &delta, bb)
+                    && t < closest_t
+                {
+                    closest_t = t;
+                    // 映射回方块坐标
+                    let mut curr = 0;
+                    for (len, pos) in block_positions {
+                        curr += len;
+                        if idx < curr {
+                            let hit_pos = start_pos.add(&delta.multiply(t, t, t));
+                            hit = Some(ProjectileHit::Block {
+                                pos: *pos,
+                                face: get_hit_face(hit_pos, *pos),
+                                hit_pos,
+                                normal: delta.normalize().multiply(-1.0, -1.0, -1.0),
+                            });
+                            break;
+                        }
                     }
                 }
             }
-        }
+        });
 
         // 实体碰撞
         let candidates = world.get_entities_at_box(&search_box);

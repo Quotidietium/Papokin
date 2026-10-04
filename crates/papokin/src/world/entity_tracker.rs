@@ -521,8 +521,15 @@ impl TrackedEntity {
     }
 }
 
+/// `update_all` 驻留缓冲：受追踪实体快照 + 跨区移动玩家列表（轮次 16）
+type UpdateAllScratch = (Vec<Arc<TrackedEntity>>, Vec<Arc<Player>>);
+
 pub struct EntityTracker {
     pub entity_map: DashMap<i32, Arc<TrackedEntity>>,
+    /// `update_all` 的快照/跨区移动玩家驻留缓冲（轮次 16）：仅 tick
+    /// 主循环单线程调用 `update_all`，插件回调不存在重入 `update_all`
+    /// 的路径（`update_player_position` 不触碰本缓冲），持锁迭代安全。
+    update_all_scratch: std::sync::Mutex<UpdateAllScratch>,
 }
 
 impl Default for EntityTracker {
@@ -536,6 +543,7 @@ impl EntityTracker {
     pub fn new() -> Self {
         Self {
             entity_map: DashMap::new(),
+            update_all_scratch: std::sync::Mutex::new((Vec::new(), Vec::new())),
         }
     }
 
@@ -686,12 +694,20 @@ impl EntityTracker {
 
     pub fn update_all(&self, world: &World) {
         let players = world.players.load();
-        let mut moved_players = Vec::new();
+        // 轮次 16：快照与移动玩家列表跨 tick 驻留复用（clear 重填）。
+        // 锁仅本函数获取；`update_players` 触发的插件回调无重入
+        // `update_all` 的路径，持锁迭代不构成死锁。
+        let scratch = &mut *self
+            .update_all_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (tracked_entities, moved_players) = scratch;
+        moved_players.clear();
 
         // 快照后迭代，理由同 update_player_position。
-        let tracked_entities: Vec<Arc<TrackedEntity>> =
-            self.entity_map.iter().map(|e| e.value().clone()).collect();
-        for tracked in &tracked_entities {
+        tracked_entities.clear();
+        tracked_entities.extend(self.entity_map.iter().map(|e| e.value().clone()));
+        for tracked in tracked_entities.iter() {
             let pos = tracked.entity.get_entity().pos.load();
             let new_pos = Vector3::new(
                 get_section_cord(pos.x.floor() as i32),
@@ -711,12 +727,12 @@ impl EntityTracker {
         }
 
         if !moved_players.is_empty() {
-            for tracked in &tracked_entities {
-                tracked.update_players(&moved_players, world);
+            for tracked in tracked_entities.iter() {
+                tracked.update_players(moved_players, world);
             }
         }
 
-        for tracked in &tracked_entities {
+        for tracked in tracked_entities.iter() {
             if tracked.entity.get_entity().synched_data.is_dirty() {
                 tracked.entity.get_entity().send_dirty_entity_data();
             }

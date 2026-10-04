@@ -304,9 +304,11 @@ impl FishingBobberEntity {
         )
         .expand(0.3, 0.3, 0.3);
 
-        // 基础方块碰撞，用于拦停浮漂
-        let (block_cols, _) = world.get_block_collisions(search_box, caller);
-        if !block_cols.is_empty() {
+        // 基础方块碰撞，用于拦停浮漂（轮次 16：线程局部暂存就地消费）
+        let hit_block = world.with_block_collisions(search_box, caller, |block_cols, _| {
+            !block_cols.is_empty()
+        });
+        if hit_block {
             self.in_ground.store(true, Ordering::Relaxed);
             entity.velocity.store(Vector3::new(0.0, 0.0, 0.0));
             return;

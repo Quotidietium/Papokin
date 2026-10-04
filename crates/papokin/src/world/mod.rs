@@ -193,6 +193,22 @@ struct TickScratch {
     spawning_chunks: Vec<(Vector2<i32>, SyncChunk)>,
     /// 活跃区块坐标集，`inhabited_time` 自增用（轮次 15）
     active_chunks_cache: Vec<Vector2<i32>>,
+    /// 自然生成类别过滤列表（轮次 16，直传借用替代逐 tick `Arc` 包装）
+    spawning_categories: Vec<&'static MobCategory>,
+}
+
+/// 实体移动碰撞收集暂存：碰撞形状 + 「累计形状数 + 方块坐标」位置映射
+/// （轮次 16）
+type BlockCollisionScratch = (Vec<BoundingBox>, Vec<(usize, BlockPos)>);
+
+thread_local! {
+    /// 实体移动碰撞收集的线程局部暂存（轮次 16）：五个调用点均在
+    /// rayon 工作线程或玩家任务链上同步收集并就地消费，无重入路径
+    /// （收集与消费不回调本收集），`RefCell` 借用不跨出单次收集。
+    // 已是 const 初始化，clippy 1.98 对该形式仍误报（与 datapack 同）
+    #[allow(clippy::missing_const_for_thread_local)]
+    static BLOCK_COLLISION_SCRATCH: std::cell::RefCell<BlockCollisionScratch> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
 }
 
 /// 表示一个 Minecraft 世界，包含实体、玩家以及底层的世界数据。
@@ -1945,15 +1961,18 @@ impl World {
         let spawn_enemies = !peaceful && spawn_monsters && spawn_mobs;
         let spawn_passives = spawn_passives && spawn_mobs;
 
-        let spawn_list = Arc::new(natural_spawner::get_filtered_spawning_categories(
+        // 轮次 16：生成列表入 `TickScratch` 驻留重填、直传借用
+        // （`tick_spawning_chunk` 形参本就是 `&Vec`，去逐 tick `Arc` 包装）。
+        natural_spawner::get_filtered_spawning_categories(
             &spawn_state,
             spawn_mobs,
             spawn_enemies,
             spawn_passives,
-        ));
+            &mut tick_scratch.spawning_categories,
+        );
 
         // 5. 通过 Rayon 并行执行区块生成器
-        if !spawn_list.is_empty() {
+        if !tick_scratch.spawning_categories.is_empty() {
             tick_scratch.spawning_chunks.clear();
             for pos in active_chunks.iter() {
                 if let Some(chunk) = self.level.read_chunk_sync(pos, std::clone::Clone::clone) {
@@ -1968,10 +1987,14 @@ impl World {
             let spawn_batch = |batch: &[(Vector2<i32>, SyncChunk)]| {
                 let _guard = spawn_handle.enter();
                 let world = world.clone();
-                let s_list = spawn_list.clone();
                 let s_state = spawn_state.clone();
                 for (pos, chunk) in batch {
-                    world.tick_spawning_chunk(*pos, chunk, &s_list, &s_state);
+                    world.tick_spawning_chunk(
+                        *pos,
+                        chunk,
+                        &tick_scratch.spawning_categories,
+                        &s_state,
+                    );
                 }
             };
             // 少量候选区块直接串行；大批次再摊给 Rayon 池
@@ -2229,14 +2252,19 @@ impl World {
     }
 
     // 用于调整移动
-    pub fn get_block_collisions(
+    /// 方块碰撞收集（重填模式，轮次 16）：清空并重填调用方提供的两个
+    /// 缓冲——`collisions` 收碰撞形状，`positions` 按「截至本方块累计
+    /// 形状数 + 方块坐标」收位置映射。调用方就地消费，消去每次调用
+    /// 两新建 `Vec` 的分配流失。
+    pub fn get_block_collisions_into(
         &self,
         bounding_box: BoundingBox,
         entity: &dyn EntityBase,
-    ) -> (Vec<BoundingBox>, Vec<(usize, BlockPos)>) {
-        let mut collisions = Vec::new();
-
-        let mut positions = Vec::new();
+        collisions: &mut Vec<BoundingBox>,
+        positions: &mut Vec<(usize, BlockPos)>,
+    ) {
+        collisions.clear();
+        positions.clear();
 
         let min = BlockPos::floored_v(bounding_box.min.add_raw(0.0, -0.50001, 0.0));
         let max = bounding_box.max_block_pos();
@@ -2276,8 +2304,21 @@ impl World {
                 positions.push((collisions.len(), pos));
             }
         }
+    }
 
-        (collisions, positions)
+    /// 经线程局部暂存执行方块碰撞收集并就地消费（轮次 16）：暂存
+    /// 容量随线程驻留，每次调用 clear 重填，稳态零分配。
+    pub fn with_block_collisions<R>(
+        &self,
+        bounding_box: BoundingBox,
+        entity: &dyn EntityBase,
+        f: impl FnOnce(&[BoundingBox], &[(usize, BlockPos)]) -> R,
+    ) -> R {
+        BLOCK_COLLISION_SCRATCH.with(|cell| {
+            let (collisions, positions) = &mut *cell.borrow_mut();
+            self.get_block_collisions_into(bounding_box, entity, collisions, positions);
+            f(collisions, positions)
+        })
     }
 
     pub fn is_space_empty(&self, bounding_box: BoundingBox) -> bool {
