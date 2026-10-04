@@ -1,0 +1,32 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_tick": {
+    "fresh_allocs": 14.023333333333333,
+    "fresh_bytes": 82312.96,
+    "reused_allocs": 0.0,
+    "reused_bytes": 0.0
+  },
+  "per_tick_fresh": {
+    "allocs": 8414,
+    "bytes": 49387776
+  },
+  "reused_buffers": {
+    "allocs": 0,
+    "bytes": 0
+  },
+  "round": 15,
+  "topic": "世界 tick 剩余六处逐 tick 向量跨 tick 复用（实体过滤集/生成候选/活跃坐标/TickData 三 Vec）",
+  "workload": {
+    "active_chunks": 600,
+    "entities": 800,
+    "random_samples": 1800,
+    "scheduled_block": 64,
+    "scheduled_fluid": 32,
+    "ticks": 600
+  }
+}
