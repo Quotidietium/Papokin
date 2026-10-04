@@ -2574,15 +2574,28 @@ impl Player {
             },
             |batch| {
                 // 跨 tick 复用的编码缓存：每个区块仅在数据变化
-                // （弱引用失效）或未缓存时重新序列化。容量超限时
-                // 整体清空兜底，防止跨世界移动无限积累。
-                const MAX_ENCODE_CACHE_ENTRIES: usize = 8192;
+                // （弱引用失效）或未缓存时重新序列化。字节预算超限时
+                // 按最远优先逐出至八成（视距内热条目保留），替代旧的
+                // 整体清空——后者会让当前视距全部重序列化；跨世界移动
+                // 的旧世界条目天然距离最远，同样被优先逐出。
+                const MAX_ENCODE_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
                 let mut cache_guard = self.chunk_encode_cache.try_lock().ok();
-                if let Some(cache) = cache_guard.as_deref_mut()
-                    && cache.len() > MAX_ENCODE_CACHE_ENTRIES
-                {
-                    cache.clear();
+                if let Some(cache) = cache_guard.as_deref_mut() {
+                    let cache_bytes: usize = cache
+                        .values()
+                        .map(crate::net::EncodedChunk::encoded_bytes)
+                        .sum();
+                    if cache_bytes > MAX_ENCODE_CACHE_BYTES {
+                        let evicted = crate::net::chunk_sender::prune_encode_cache(
+                            cache,
+                            player_chunk,
+                            MAX_ENCODE_CACHE_BYTES / 5 * 4,
+                        );
+                        if evicted > 0 {
+                            debug!("区块编码缓存超预算，最远优先逐出 {evicted} 条");
+                        }
+                    }
                 }
                 let encoded = cache_guard.as_deref_mut().map_or_else(
                     || {

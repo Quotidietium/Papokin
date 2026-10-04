@@ -52,6 +52,12 @@ impl EncodedChunk {
 
         self.position == candidate.position && Arc::ptr_eq(&held, &candidate.chunk)
     }
+
+    /// 条目的线上字节数（编码缓存预算记账用）
+    #[must_use]
+    pub fn encoded_bytes(&self) -> usize {
+        self.payload.len() + self.light_payload.as_ref().map_or(0, Bytes::len)
+    }
 }
 
 #[derive(Debug)]
@@ -380,6 +386,44 @@ impl Default for ChunkSender {
     }
 }
 
+/// 以最远优先逐出编码缓存条目，直到总字节数不超过
+/// `target_bytes`，返回逐出条数。距离按区块坐标平方和排序
+///（与圆柱视距同一序）：玩家短期内不会回访远处区块，
+/// 远者缓存命中率天然最低；近处热条目（当前视距内）
+/// 全部保留，杜绝整体清空引发的全量重序列化风暴。
+#[must_use]
+pub fn prune_encode_cache<S: std::hash::BuildHasher>(
+    cache: &mut std::collections::HashMap<Vector2<i32>, EncodedChunk, S>,
+    center: Vector2<i32>,
+    target_bytes: usize,
+) -> usize {
+    let mut total: usize = cache.values().map(EncodedChunk::encoded_bytes).sum();
+    if total <= target_bytes {
+        return 0;
+    }
+    let mut farthest: Vec<(i64, Vector2<i32>)> = cache
+        .keys()
+        .map(|pos| {
+            let dx = i64::from(pos.x - center.x);
+            let dz = i64::from(pos.y - center.y);
+            (dx * dx + dz * dz, *pos)
+        })
+        .collect();
+    farthest.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+
+    let mut evicted = 0;
+    for (_, pos) in farthest {
+        if total <= target_bytes {
+            break;
+        }
+        if let Some(removed) = cache.remove(&pos) {
+            total -= removed.encoded_bytes();
+            evicted += 1;
+        }
+    }
+    evicted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -441,5 +485,60 @@ mod tests {
                 "缓存命中应共享同一分配而非重新序列化"
             );
         }
+    }
+    #[test]
+    fn prune_encode_cache_evicts_farthest_first_within_budget() {
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let center = Vector2::new(0, 0);
+        // 3 条近（视距内量级）+ 3 条远（跨世界/远征量级）
+        let batch = PreparedBatch {
+            chunks: [(1, 0), (0, 2), (2, 1), (40, 0), (0, 41), (39, 40)]
+                .iter()
+                .map(|&(x, z)| PreparedChunk {
+                    position: Vector2::new(x, z),
+                    chunk: populated_chunk(8),
+                })
+                .collect(),
+            epoch_snapshot: 1,
+            target_version: version,
+        };
+        let mut cache = FxHashMap::default();
+        let encoded = ChunkSender::encode_batch(&batch, &mut cache);
+        assert_eq!(encoded.len(), 6);
+
+        let total: usize = cache.values().map(EncodedChunk::encoded_bytes).sum();
+        let target = total / 2;
+
+        let evicted = prune_encode_cache(&mut cache, center, target);
+        assert_eq!(evicted, 3, "等尺寸条目减半须逐出 3 条: {evicted}");
+
+        // 近处三条必须保留，远处三条必须逐出
+        for pos in [Vector2::new(1, 0), Vector2::new(0, 2), Vector2::new(2, 1)] {
+            assert!(cache.contains_key(&pos), "近处条目应保留: {pos:?}");
+        }
+        for pos in [
+            Vector2::new(40, 0),
+            Vector2::new(0, 41),
+            Vector2::new(39, 40),
+        ] {
+            assert!(!cache.contains_key(&pos), "远处条目应逐出: {pos:?}");
+        }
+
+        let after: usize = cache.values().map(EncodedChunk::encoded_bytes).sum();
+        assert!(after <= target, "逐出后应降至目标以内: {after} <= {target}");
+
+        // 预算已足时再次调用应为无操作
+        assert_eq!(prune_encode_cache(&mut cache, center, target), 0);
+
+        // 保留条目的线上字节仍与直接序列化一致（逐出不触碰内容）
+        let retained = &cache[&Vector2::new(1, 0)];
+        let mut expected = Vec::new();
+        expected
+            .write_var_int(&VarInt(CChunkData::to_id(version)))
+            .expect("写入 id 不应失败");
+        CChunkData(&batch.chunks[0].chunk)
+            .write_packet_data(&mut expected, &version)
+            .expect("直接序列化不应失败");
+        assert_eq!(&retained.payload[..], &expected[..]);
     }
 }
