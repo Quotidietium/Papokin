@@ -505,11 +505,18 @@ impl ChunkData {
         let original_status =
             (status_str != status_to_str(status)).then(|| (status_str.to_string(), status));
 
+        // 轮次 24：保留字段即时序列化为精确贴合的 blob 驻留（驻留
+        // 期间只有落盘路径会读取它们），复合标签本身不常驻，消去
+        // 解析态 HashMap/Box<str>/逐标签枚举的堆开销；to_vec +
+        // into_boxed_slice 去掉 Vec 增长摊余（实测摊余可达 2×）
         let preserved_data = (!preserved_fields.is_empty()
             || original_status.is_some()
             || custom_data_tag != "PumpkinCustomData")
             .then_some(super::PreservedChunkData {
-                fields: preserved_fields,
+                fields_blob: papokin_nbt::Nbt::from(preserved_fields)
+                    .write_unnamed()
+                    .to_vec()
+                    .into_boxed_slice(),
                 custom_data_tag,
                 original_status,
             });
@@ -618,9 +625,22 @@ impl ChunkData {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let mut root_compound = preserved
-            .as_ref()
-            .map_or_else(NbtCompound::new, |p| p.fields.clone());
+        let mut root_compound = preserved.as_ref().map_or_else(
+            NbtCompound::new,
+            // 轮次 24：blob 仅在落盘时物化解析；blob 由本进程自有
+            // 序列化产生，回读失败即内部不变式破坏——panic 优于静默
+            // 降级（零数据风险约束：绝不静默丢弃保留字段）
+            #[expect(clippy::expect_used)]
+            |preserved| {
+                let mut cursor = std::io::Cursor::new(preserved.fields_blob.as_ref());
+                let mut reader = papokin_nbt::deserializer::NbtReadHelperJava::new(
+                    papokin_nbt::deserializer::NbtStreamReader(&mut cursor),
+                );
+                papokin_nbt::Nbt::read_unnamed(&mut reader)
+                    .expect("保留字段 blob 回读不应失败")
+                    .root_tag
+            },
+        );
         root_compound.put_int("DataVersion", WORLD_DATA_VERSION);
         root_compound.put_int("xPos", self.x);
         root_compound.put_int("zPos", self.z);
@@ -1275,6 +1295,64 @@ mod tests {
         );
         assert_eq!(nbt2.get_long("LastUpdate"), Some(123_456));
         assert_eq!(nbt2.get_string("Status"), Some("minecraft:noise"));
+    }
+
+    /// 轮次 24：保留字段在内存中以序列化 blob 驻留（而非解析态
+    /// 复合标签），blob 回读必须逐键还原外来字段。
+    #[test]
+    fn preserved_fields_reside_as_blob_and_reparse_faithfully() {
+        let mut root = NbtCompound::new();
+        root.put_int("xPos", 1);
+        root.put_int("zPos", 2);
+        root.put_int("yPos", -4);
+        root.put_string("Status", "minecraft:full".to_string());
+        root.put_long("LastUpdate", 999);
+        let mut structures = NbtCompound::new();
+        let mut references = NbtCompound::new();
+        references.put("minecraft:village", NbtTag::LongArray(vec![11, 22, 33]));
+        structures.put_compound("References", references);
+        root.put_compound("structures", structures);
+
+        let bytes = papokin_nbt::Nbt::from(root).write_unnamed();
+        let chunk = ChunkData::internal_from_bytes(&bytes, Vector2::new(1, 2)).expect("解析");
+
+        let preserved = chunk.preserved_data.lock().expect("锁").clone();
+        let preserved = preserved.expect("携带外来字段的区块必须有保留数据");
+        // 驻留形态是 blob：长度应与同名序列化一致且不含逐标签堆分配
+        let expect_blob = papokin_nbt::Nbt::from({
+            let mut compound = NbtCompound::new();
+            compound.put_long("LastUpdate", 999);
+            compound.put_compound("structures", {
+                let mut structures = NbtCompound::new();
+                let mut references = NbtCompound::new();
+                references.put("minecraft:village", NbtTag::LongArray(vec![11, 22, 33]));
+                structures.put_compound("References", references);
+                structures
+            });
+            compound
+        })
+        .write_unnamed();
+        assert_eq!(
+            preserved.fields_blob.len(),
+            expect_blob.len(),
+            "blob 应与等价序列化同长"
+        );
+
+        // blob 回读逐键还原
+        let mut cursor = std::io::Cursor::new(preserved.fields_blob.as_ref());
+        let mut reader = papokin_nbt::deserializer::NbtReadHelperJava::new(
+            papokin_nbt::deserializer::NbtStreamReader(&mut cursor),
+        );
+        let reparsed = papokin_nbt::Nbt::read_unnamed(&mut reader)
+            .expect("blob 回读")
+            .root_tag;
+        assert_eq!(reparsed.get_long("LastUpdate"), Some(999));
+        assert!(reparsed.get_compound("structures").is_some_and(|s| {
+            s.get_compound("References").is_some_and(|r| {
+                r.get_long_array("minecraft:village")
+                    .is_some_and(|arr| arr == [11, 22, 33])
+            })
+        }));
     }
 
     #[test]
