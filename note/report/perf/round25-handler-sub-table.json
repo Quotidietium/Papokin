@@ -1,0 +1,14 @@
+{
+  "round": 25,
+  "results": {
+    "old": {"load_allocs": 241278, "load_alloc_bytes": 20520552, "hold_retained_growth": 10712, "steady_fire_allocs": 10000, "unload_allocs": 6446, "fp": "0xe36251457c09f3c2"},
+    "new": {"load_allocs": 2733, "load_alloc_bytes": 114388, "hold_retained_growth": 7104, "steady_fire_allocs": 0, "unload_allocs": 610, "fp": "0xe36251457c09f3c2"}
+  },
+  "gates": [
+    {"name": "G1 逐键派发序指纹全等", "pass": true, "detail": "old=0xe36251457c09f3c2 new=0xe36251457c09f3c2"},
+    {"name": "G2 加载分配字节 ≤ 旧臂 1/4", "pass": true, "detail": "old=20520552 new=114388"},
+    {"name": "G3 钉住驻留增量 ≤ 旧臂 1/4", "pass": false, "detail": "old=10712 new=7104"},
+    {"name": "G4 稳态 fire 零分配（新臂）", "pass": true, "detail": "old=10000 new=0（10000 次 fire）"},
+    {"name": "G5 卸载分配 ≤ 旧臂 1/4", "pass": true, "detail": "old=6446 new=610"}
+  ]
+}
