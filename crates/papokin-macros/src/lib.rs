@@ -586,6 +586,9 @@ pub fn pumpkin_block_from_tag(args: TokenStream, item: TokenStream) -> TokenStre
 ///
 /// # Arguments
 /// - `input` – 表示要为其派生 `PacketWrite` 的结构体的输入 `TokenStream`。
+///
+/// # Panics
+/// 如果结构体含有无名字段（元组结构体），派生展开过程会 panic。
 #[rustfmt::skip]
 #[proc_macro_derive(PacketWrite, attributes(serial))]
 pub fn derive_serialize(input: TokenStream) -> TokenStream {
@@ -656,6 +659,9 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 ///
 /// # Arguments
 /// - `input` – 表示要为其派生 `PacketRead` 的结构体的输入 `TokenStream`。
+///
+/// # Panics
+/// 如果结构体含有无名字段（元组结构体），派生展开过程会 panic。
 #[rustfmt::skip]
 #[proc_macro_derive(PacketRead, attributes(serial))]
 pub fn derive_deserialize(input: TokenStream) -> TokenStream {
@@ -718,6 +724,9 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
 ///
 /// # Arguments
 /// - `input` – 表示要为其派生 `PacketReadSlice` 的结构体的输入 `TokenStream`。
+///
+/// # Panics
+/// 如果结构体含有无名字段（元组结构体），派生展开过程会 panic。
 #[rustfmt::skip]
 #[proc_macro_derive(PacketReadSlice, attributes(serial))]
 pub fn derive_deserialize_from_slice(input: TokenStream) -> TokenStream {
