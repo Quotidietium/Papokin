@@ -3019,33 +3019,70 @@ impl Entity {
         let world = self.world.load();
         let players = world.players.load();
 
-        let mut java_recipients = Vec::new();
+        let tracked = world.entity_tracker.get_tracked_entity(self.entity_id);
+        let chunk_pos = self.chunk_pos.load();
+        let visible = |player: &Arc<Player>| {
+            tracked.as_ref().map_or_else(
+                || {
+                    player
+                        .watched_section
+                        .load()
+                        .is_within_distance(chunk_pos.x, chunk_pos.y)
+                },
+                |t| {
+                    t.seen_by.contains(&player.gameprofile.id)
+                        || player.entity_id() == self.entity_id
+                },
+            )
+        };
 
-        if let Some(tracked) = world.entity_tracker.get_tracked_entity(self.entity_id) {
-            for player in players.iter() {
-                if tracked.seen_by.contains(&player.gameprofile.id)
-                    || player.entity_id() == self.entity_id
-                {
-                    java_recipients.push(player);
-                }
-            }
-        } else {
-            let chunk_pos = self.chunk_pos.load();
-            for player in players.iter() {
-                if player
-                    .watched_section
-                    .load()
-                    .is_within_distance(chunk_pos.x, chunk_pos.y)
-                {
-                    java_recipients.push(player);
+        // 轮次 19：栈内联版本槽两趟过滤（原为收件人 Vec + BTreeMap
+        // 分组两分配）；第一趟收集在线版本集
+        let mut versions_buf = [JavaMinecraftVersion::V_1_21_11; 4];
+        let mut version_count = 0usize;
+        let mut overflow = false;
+        for player in players.iter().filter(|p| visible(p)) {
+            let version = player.client.version.load();
+            if !versions_buf[..version_count].contains(&version) {
+                if version_count < versions_buf.len() {
+                    versions_buf[version_count] = version;
+                    version_count += 1;
+                } else {
+                    overflow = true;
+                    break;
                 }
             }
         }
 
-        let recipients_by_version =
-            World::collect_java_recipients_by_version(java_recipients.into_iter());
+        if overflow {
+            // 版本种数超槽位（异常配置）：回退原分配路径
+            let recipients_by_version =
+                World::collect_java_recipients_by_version(players.iter().filter(|p| visible(p)));
+            for (version, recipients) in recipients_by_version {
+                if version < JavaMinecraftVersion::V_1_21 {
+                    continue;
+                }
+                let mut buf = Vec::new();
+                for m in meta {
+                    let _ = m.write(&mut buf, &version);
+                }
+                if buf.is_empty() {
+                    continue;
+                }
+                buf.put_u8(255);
+                let packet = CSetEntityMetadata::new(self.entity_id.into(), buf.into());
+                if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version)
+                {
+                    for recipient in recipients {
+                        recipient.try_enqueue_packet(packet_data.clone());
+                    }
+                }
+            }
+            return;
+        }
 
-        for (version, recipients) in recipients_by_version {
+        // 第二趟：逐版本打包并重过滤收件人直发
+        for version in versions_buf[..version_count].iter().copied() {
             if version < JavaMinecraftVersion::V_1_21 {
                 continue;
             }
@@ -3059,8 +3096,10 @@ impl Entity {
             buf.put_u8(255);
             let packet = CSetEntityMetadata::new(self.entity_id.into(), buf.into());
             if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version) {
-                for recipient in recipients {
-                    recipient.try_enqueue_packet(packet_data.clone());
+                for player in players.iter().filter(|p| visible(p)) {
+                    if player.client.version.load() == version {
+                        player.client.try_enqueue_packet(packet_data.clone());
+                    }
                 }
             }
         }
@@ -3074,46 +3113,80 @@ impl Entity {
         let world = self.world.load();
         let players = world.players.load();
 
-        let mut java_recipients = Vec::new();
+        let tracked = world.entity_tracker.get_tracked_entity(self.entity_id);
+        let chunk_pos = self.chunk_pos.load();
+        let visible = |player: &Arc<Player>| {
+            tracked.as_ref().map_or_else(
+                || {
+                    player
+                        .watched_section
+                        .load()
+                        .is_within_distance(chunk_pos.x, chunk_pos.y)
+                },
+                |t| {
+                    t.seen_by.contains(&player.gameprofile.id)
+                        || player.entity_id() == self.entity_id
+                },
+            )
+        };
 
-        if let Some(tracked) = world.entity_tracker.get_tracked_entity(self.entity_id) {
-            for player in players.iter() {
-                if tracked.seen_by.contains(&player.gameprofile.id)
-                    || player.entity_id() == self.entity_id
-                {
-                    java_recipients.push(player);
-                }
-            }
-        } else {
-            let chunk_pos = self.chunk_pos.load();
-            for player in players.iter() {
-                if player
-                    .watched_section
-                    .load()
-                    .is_within_distance(chunk_pos.x, chunk_pos.y)
-                {
-                    java_recipients.push(player);
+        // 轮次 19：栈内联版本槽两趟过滤（原为收件人 Vec + BTreeMap
+        // 分组 + 版本 Vec 三分配）；第一趟收集在线版本集。
+        // 注意：无收件人时不得调用 `pack_dirty_for_versions`（它会
+        // 清脏），本结构与原先「收件人为空直接返回」语义一致
+        let mut versions_buf = [JavaMinecraftVersion::V_1_21_11; 4];
+        let mut version_count = 0usize;
+        let mut overflow = false;
+        for player in players.iter().filter(|p| visible(p)) {
+            let version = player.client.version.load();
+            if !versions_buf[..version_count].contains(&version) {
+                if version_count < versions_buf.len() {
+                    versions_buf[version_count] = version;
+                    version_count += 1;
+                } else {
+                    overflow = true;
+                    break;
                 }
             }
         }
 
-        if java_recipients.is_empty() {
+        if overflow {
+            // 版本种数超槽位（异常配置）：回退原分配路径
+            let recipients_by_version =
+                World::collect_java_recipients_by_version(players.iter().filter(|p| visible(p)));
+            let versions: Vec<JavaMinecraftVersion> =
+                recipients_by_version.keys().copied().collect();
+            // 打包与清脏在同一把锁内完成，防止窗口期并发的 set 写入
+            // 被清脏吞掉（见 pack_dirty_for_versions 文档）。
+            for (version, buf) in self.synched_data.pack_dirty_for_versions(&versions) {
+                if let Some(recipients) = recipients_by_version.get(&version) {
+                    let packet = CSetEntityMetadata::new(self.entity_id.into(), buf);
+                    if let Ok(packet_data) =
+                        JavaClient::serialize_packet_for_version(&packet, version)
+                    {
+                        for recipient in recipients {
+                            recipient.try_enqueue_packet(packet_data.clone());
+                        }
+                    }
+                }
+            }
             return;
         }
 
-        let recipients_by_version =
-            World::collect_java_recipients_by_version(java_recipients.into_iter());
-        let versions: Vec<papokin_util::version::JavaMinecraftVersion> =
-            recipients_by_version.keys().copied().collect();
+        if version_count == 0 {
+            return;
+        }
         // 打包与清脏在同一把锁内完成，防止窗口期并发的 set 写入
         // 被清脏吞掉（见 pack_dirty_for_versions 文档）。
-        for (version, buf) in self.synched_data.pack_dirty_for_versions(&versions) {
-            if let Some(recipients) = recipients_by_version.get(&version) {
-                let packet = CSetEntityMetadata::new(self.entity_id.into(), buf);
-                if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version)
-                {
-                    for recipient in recipients {
-                        recipient.try_enqueue_packet(packet_data.clone());
+        for (version, buf) in self
+            .synched_data
+            .pack_dirty_for_versions(&versions_buf[..version_count])
+        {
+            let packet = CSetEntityMetadata::new(self.entity_id.into(), buf);
+            if let Ok(packet_data) = JavaClient::serialize_packet_for_version(&packet, version) {
+                for player in players.iter().filter(|p| visible(p)) {
+                    if player.client.version.load() == version {
+                        player.client.try_enqueue_packet(packet_data.clone());
                     }
                 }
             }

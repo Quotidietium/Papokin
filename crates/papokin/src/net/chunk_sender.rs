@@ -29,10 +29,28 @@ pub struct PreparedChunk {
     pub chunk: SyncChunk,
 }
 
-pub struct PreparedBatch {
-    pub chunks: Vec<PreparedChunk>,
+/// 轮次 19：批次借用调用方驻留候选缓冲（原自有 `Vec`，每批次新建），
+/// 跨 tick 复用容量
+pub struct PreparedBatch<'a> {
+    pub chunks: &'a [PreparedChunk],
     pub epoch_snapshot: u32,
     pub target_version: JavaMinecraftVersion,
+}
+
+/// 区块批次发送驻留暂存（轮次 19）：候选/编码结果/输出/派发四缓冲，
+/// 由 `Player::tick` 持锁横跨「准备→并行编码→提交」全程重填。
+/// `Player::tick` 逐玩家单线程执行，持锁无竞争；批次借用与编码
+/// 出参为互不相交字段借用。
+#[derive(Default)]
+pub struct ChunkBatchScratch {
+    /// 批次候选（`prepare_batch` 重填）
+    pub prepared: Vec<PreparedChunk>,
+    /// 并行编码结果（`encode_batch` 经 `collect_into_vec` 复用容量收集）
+    pub encoded_results: Vec<Option<(EncodedChunk, bool)>>,
+    /// 编码输出（`encode_batch` 重填）
+    pub encoded: Vec<EncodedChunk>,
+    /// 已派发位置（`commit_batch` 重填，供实体配对）
+    pub dispatched: Vec<Vector2<i32>>,
 }
 
 #[derive(Clone)]
@@ -244,6 +262,9 @@ pub struct ChunkSender {
     owner_world: Option<Weak<crate::world::World>>,
     /// 所属玩家，用于触发区块卸载插件事件。
     owner_uuid: Option<uuid::Uuid>,
+    /// 小 pending 排序驻留缓冲（轮次 19）：仅 `prepare_batch` 持
+    /// `&mut self` 锁内使用，无跨锁借用
+    sort_scratch: Vec<Vector2<i32>>,
 }
 
 impl ChunkSender {
@@ -258,6 +279,7 @@ impl ChunkSender {
             max_in_flight: 1,
             owner_world: None,
             owner_uuid: None,
+            sort_scratch: Vec::new(),
         }
     }
 
@@ -327,32 +349,37 @@ impl ChunkSender {
         // 调用方在释放锁后统一派发。
     }
 
-    fn collect_sorted_candidates(
-        &self,
+    /// 轮次 19：重填调用方驻留候选缓冲（原带配额容量新建 `Vec` 返回）；
+    /// 小 pending 排序复用自有 `sort_scratch`
+    fn collect_sorted_candidates_into(
+        &mut self,
         level: &Level,
         center: Vector2<i32>,
         view_distance: NonZero<u8>,
-    ) -> Vec<PreparedChunk> {
+        out: &mut Vec<PreparedChunk>,
+    ) {
         let quota_limit = self.send_quota.floor() as usize;
-        let mut ready = Vec::with_capacity(quota_limit);
+        out.clear();
 
         // 如果 pending_chunks 很小，直接排序可以避免扫描偏移量。
         if self.pending_chunks.len() <= 16 {
-            let mut sorted: Vec<Vector2<i32>> = self.pending_chunks.iter().copied().collect();
-            sorted.sort_unstable_by_key(|pos| {
+            self.sort_scratch.clear();
+            self.sort_scratch
+                .extend(self.pending_chunks.iter().copied());
+            self.sort_scratch.sort_unstable_by_key(|pos| {
                 let dx = (pos.x - center.x).unsigned_abs() as u64;
                 let dz = (pos.y - center.y).unsigned_abs() as u64;
                 dx * dx + dz * dz
             });
 
-            for pos in sorted {
-                if ready.len() >= quota_limit {
+            for pos in &self.sort_scratch {
+                if out.len() >= quota_limit {
                     break;
                 }
 
-                if let Some(chunk) = level.loaded_chunks.get(&pos) {
-                    ready.push(PreparedChunk {
-                        position: pos,
+                if let Some(chunk) = level.loaded_chunks.get(pos) {
+                    out.push(PreparedChunk {
+                        position: *pos,
                         chunk: chunk.value().clone(),
                     });
                 }
@@ -361,7 +388,7 @@ impl ChunkSender {
             // 复用预编译的圆柱形区块视野查找表（已按从中心向外的顺序排序）。
             let offsets = Cylindrical::get_offsets(view_distance.get());
             for &(dx, dy) in offsets {
-                if ready.len() >= quota_limit {
+                if out.len() >= quota_limit {
                     break;
                 }
 
@@ -369,7 +396,7 @@ impl ChunkSender {
                 if self.pending_chunks.contains(&pos)
                     && let Some(chunk) = level.loaded_chunks.get(&pos)
                 {
-                    ready.push(PreparedChunk {
+                    out.push(PreparedChunk {
                         position: pos,
                         chunk: chunk.value().clone(),
                     });
@@ -377,32 +404,33 @@ impl ChunkSender {
             }
 
             // 针对预计算表之外任何待处理区块的回退
-            if ready.is_empty() {
-                for &pos in &self.pending_chunks {
-                    if ready.len() >= quota_limit {
+            if out.is_empty() {
+                for pos in &self.pending_chunks {
+                    if out.len() >= quota_limit {
                         break;
                     }
-                    if let Some(chunk) = level.loaded_chunks.get(&pos) {
-                        ready.push(PreparedChunk {
-                            position: pos,
+                    if let Some(chunk) = level.loaded_chunks.get(pos) {
+                        out.push(PreparedChunk {
+                            position: *pos,
                             chunk: chunk.value().clone(),
                         });
                     }
                 }
             }
         }
-
-        ready
     }
 
-    pub fn prepare_batch(
+    /// 轮次 19：`candidates` 出参重填（原内部新建 `Vec` 随批次返回），
+    /// 返回的批次借用该缓冲，容量跨 tick 保留
+    pub fn prepare_batch<'a>(
         &mut self,
         level: &Level,
         player_chunk: Vector2<i32>,
         view_distance: NonZero<u8>,
         epoch: u32,
         version: JavaMinecraftVersion,
-    ) -> Option<PreparedBatch> {
+        candidates: &'a mut Vec<PreparedChunk>,
+    ) -> Option<PreparedBatch<'a>> {
         if version >= JavaMinecraftVersion::V_1_20_2 && self.in_flight_batches >= self.max_in_flight
         {
             return None;
@@ -415,7 +443,7 @@ impl ChunkSender {
             return None;
         }
 
-        let candidates = self.collect_sorted_candidates(level, player_chunk, view_distance);
+        self.collect_sorted_candidates_into(level, player_chunk, view_distance, candidates);
         if candidates.is_empty() {
             return None;
         }
@@ -427,15 +455,21 @@ impl ChunkSender {
         })
     }
 
+    /// 轮次 19：双出参重填（原内部 `collect` 结果 Vec + 输出
+    /// `Vec::with_capacity` 双分配）；结果经 `collect_into_vec`
+    /// 复用容量收集，再就地重填输出
     pub fn encode_batch(
         batch: &PreparedBatch,
         cache: &SharedChunkEncodeCache,
-    ) -> Vec<EncodedChunk> {
+        results: &mut Vec<Option<(EncodedChunk, bool)>>,
+        output: &mut Vec<EncodedChunk>,
+    ) {
         let version = batch.target_version;
 
         // 二元组第二元标记是否为本轮新编码（缓存命中不重复插入，
         // 否则共享缓存的字节记账会因重复插入虚增）
-        let encoded_results: Vec<Option<(EncodedChunk, bool)>> = batch
+        results.clear();
+        batch
             .chunks
             .par_iter()
             .map(|candidate| {
@@ -501,31 +535,32 @@ impl ChunkSender {
                     true,
                 ))
             })
-            .collect();
+            .collect_into_vec(results);
 
-        let mut output = Vec::with_capacity(encoded_results.len());
-        for (encoded, is_new) in encoded_results.into_iter().flatten() {
+        output.clear();
+        for (encoded, is_new) in results.drain(..).flatten() {
             if is_new {
                 cache.insert(encoded.clone(), version);
             }
             output.push(encoded);
         }
-
-        output
     }
 
+    /// 轮次 19：`dispatched` 出参重填（原 `Vec::with_capacity` 返回）；
+    /// epoch 失配或无编码块时重填结果为空，语义与原返回空 Vec 一致
     pub fn commit_batch(
         &mut self,
         batch: &PreparedBatch,
         encoded_chunks: &[EncodedChunk],
         client: &JavaClient,
         current_epoch: u32,
-    ) -> Vec<Vector2<i32>> {
+        dispatched: &mut Vec<Vector2<i32>>,
+    ) {
+        dispatched.clear();
         if current_epoch != batch.epoch_snapshot || encoded_chunks.is_empty() {
-            return Vec::new();
+            return;
         }
 
-        let mut dispatched_positions = Vec::with_capacity(encoded_chunks.len());
         let version = batch.target_version;
 
         if version >= JavaMinecraftVersion::V_1_20_2 {
@@ -544,10 +579,10 @@ impl ChunkSender {
 
             self.pending_chunks.remove(&chunk.position);
             self.sent_chunks.insert(chunk.position);
-            dispatched_positions.push(chunk.position);
+            dispatched.push(chunk.position);
         }
 
-        let sent_count = dispatched_positions.len();
+        let sent_count = dispatched.len();
         if sent_count > 0 {
             if version >= JavaMinecraftVersion::V_1_20_2 {
                 client.try_send_packet(&CChunkBatchEnd::new(sent_count as u16));
@@ -556,8 +591,6 @@ impl ChunkSender {
 
             self.send_quota -= sent_count as f32;
         }
-
-        dispatched_positions
     }
 }
 
@@ -583,27 +616,40 @@ mod tests {
         Arc::new(chunk)
     }
 
-    fn batch_of(positions: &[(i32, i32)], version: JavaMinecraftVersion) -> PreparedBatch {
+    fn prepared_chunks(positions: &[(i32, i32)]) -> Vec<PreparedChunk> {
+        positions
+            .iter()
+            .map(|&(x, z)| PreparedChunk {
+                position: Vector2::new(x, z),
+                chunk: populated_chunk(8),
+            })
+            .collect()
+    }
+
+    fn batch_of(chunks: &[PreparedChunk], version: JavaMinecraftVersion) -> PreparedBatch<'_> {
         PreparedBatch {
-            chunks: positions
-                .iter()
-                .map(|&(x, z)| PreparedChunk {
-                    position: Vector2::new(x, z),
-                    chunk: populated_chunk(8),
-                })
-                .collect(),
+            chunks,
             epoch_snapshot: 1,
             target_version: version,
         }
     }
 
+    /// 测试便利封装：驻留出参由局部 Vec 充当
+    fn encode(batch: &PreparedBatch, cache: &SharedChunkEncodeCache) -> Vec<EncodedChunk> {
+        let mut results = Vec::new();
+        let mut output = Vec::new();
+        ChunkSender::encode_batch(batch, cache, &mut results, &mut output);
+        output
+    }
+
     #[test]
     fn encode_batch_payload_matches_direct_serialization_and_cache_reuses() {
         let version = JavaMinecraftVersion::V_1_21_11;
-        let batch = batch_of(&[(0, 0), (1, 0), (2, 0)], version);
+        let chunks = prepared_chunks(&[(0, 0), (1, 0), (2, 0)]);
+        let batch = batch_of(&chunks, version);
 
         let cache = SharedChunkEncodeCache::new();
-        let encoded = ChunkSender::encode_batch(&batch, &cache);
+        let encoded = encode(&batch, &cache);
         assert_eq!(encoded.len(), 3, "全部区块应编码成功");
 
         // 线上字节与直接序列化完全一致（容量裁剪不得改动内容）
@@ -628,7 +674,7 @@ mod tests {
         assert_eq!(accounted, actual, "字节记账应与实际一致");
 
         // 缓存命中路径：同批再次编码应复用同一分配而非重新序列化
-        let encoded2 = ChunkSender::encode_batch(&batch, &cache);
+        let encoded2 = encode(&batch, &cache);
         assert_eq!(encoded2.len(), 3);
         for (first, second) in encoded.iter().zip(&encoded2) {
             assert_eq!(
@@ -644,16 +690,17 @@ mod tests {
     #[test]
     fn mutation_invalidates_cached_encoding_via_generation() {
         let version = JavaMinecraftVersion::V_1_21_11;
-        let batch = batch_of(&[(0, 0)], version);
+        let chunks = prepared_chunks(&[(0, 0)]);
+        let batch = batch_of(&chunks, version);
         let cache = SharedChunkEncodeCache::new();
 
-        let first = ChunkSender::encode_batch(&batch, &cache);
+        let first = encode(&batch, &cache);
         assert_eq!(first.len(), 1);
 
         // 内容变异（方块/光照/方块实体写路径统一经 mark_modified 收口）
         batch.chunks[0].chunk.mark_modified();
 
-        let second = ChunkSender::encode_batch(&batch, &cache);
+        let second = encode(&batch, &cache);
         assert_eq!(second.len(), 1);
         assert_ne!(
             first[0].payload.as_ptr(),
@@ -667,7 +714,7 @@ mod tests {
         assert_eq!(cache.len(), 1, "过期条目应被替换而非堆积");
 
         // 未再变异时第三次编码恢复命中
-        let third = ChunkSender::encode_batch(&batch, &cache);
+        let third = encode(&batch, &cache);
         assert_eq!(
             second[0].payload.as_ptr(),
             third[0].payload.as_ptr(),
@@ -681,13 +728,15 @@ mod tests {
         let center = Vector2::new(0, 0);
         let cache = SharedChunkEncodeCache::new();
 
-        let batch = batch_of(&[(1, 0), (0, 2), (2, 1)], version);
-        let encoded = ChunkSender::encode_batch(&batch, &cache);
+        let chunks = prepared_chunks(&[(1, 0), (0, 2), (2, 1)]);
+        let batch = batch_of(&chunks, version);
+        let encoded = encode(&batch, &cache);
         assert_eq!(encoded.len(), 3);
-        // batch drop：区块强引用全部释放，弱引用随之失效
+        // batch 仅借用 chunks（NLL 在上方最后一次使用后即结束借用），
+        // drop 持有方即可释放区块强引用，弱引用随之失效
         // （encoded 只持 Weak 与 Bytes，不影响区块存活）
-        drop(batch);
         drop(encoded);
+        drop(chunks);
 
         // 预算 0 必触发；死条目在距离逐出之前被清扫
         let evicted = cache.prune_if_over_budget(&[center], 0);
@@ -701,12 +750,10 @@ mod tests {
         let version = JavaMinecraftVersion::V_1_21_11;
         let center = Vector2::new(0, 0);
         // 3 条近（视距内量级）+ 3 条远（跨世界/远征量级）
-        let batch = batch_of(
-            &[(1, 0), (0, 2), (2, 1), (40, 0), (0, 41), (39, 40)],
-            version,
-        );
+        let chunks = prepared_chunks(&[(1, 0), (0, 2), (2, 1), (40, 0), (0, 41), (39, 40)]);
+        let batch = batch_of(&chunks, version);
         let cache = SharedChunkEncodeCache::new();
-        let encoded = ChunkSender::encode_batch(&batch, &cache);
+        let encoded = encode(&batch, &cache);
         assert_eq!(encoded.len(), 6);
 
         let total = cache.total_bytes();

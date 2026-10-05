@@ -379,6 +379,10 @@ pub struct Player {
     pub item_cooldowns: std::sync::Mutex<HashMap<String, ItemCooldown>>,
     pub experience_pick_up_delay: Mutex<u32>,
     pub chunk_sender: Mutex<crate::net::ChunkSender>,
+    /// 区块批次发送驻留暂存（轮次 19）：候选/编码结果/输出/派发
+    /// 四缓冲。`Player::tick` 逐玩家单线程执行，持锁横跨
+    /// 「准备→并行编码→提交」全程无竞争
+    pub chunk_batch_scratch: Mutex<crate::net::ChunkBatchScratch>,
     pub chunk_listener: Mutex<Receiver<(Vector2<i32>, Weak<ChunkData>)>>,
     /// 玩家当前持有的区块票：(加票中心, 视距等级, 模拟等级)。
     /// 必须连同加票时的中心一起记录：断线/跨维度清理时玩家的
@@ -633,6 +637,7 @@ impl Player {
                 sender.set_owner(world, player_uuid);
                 sender
             }),
+            chunk_batch_scratch: Mutex::new(crate::net::ChunkBatchScratch::default()),
             chunk_listener: Mutex::new(world.level.chunk_listener.add_global_chunk_listener()),
             held_chunk_tickets: Mutex::new(None),
             watched_update_lock: Mutex::new(()),
@@ -2556,54 +2561,74 @@ impl Player {
         let version = self.client.version.load();
 
         let view_distance = self.watched_section.load().view_distance;
+        // 轮次 19：批次缓冲驻留（候选/编码结果/输出/派发），持锁横跨
+        // 准备→并行编码→提交全程；`Player::tick` 逐玩家单线程执行，
+        // 本锁无竞争
+        let batch_scratch = &mut *self
+            .chunk_batch_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let prepared_batch = self.chunk_sender.try_lock().ok().and_then(|mut sender| {
-            sender.prepare_batch(&world.level, player_chunk, view_distance, epoch, version)
+            sender.prepare_batch(
+                &world.level,
+                player_chunk,
+                view_distance,
+                epoch,
+                version,
+                &mut batch_scratch.prepared,
+            )
         });
 
-        let _total_sent_chunks = prepared_batch.map_or_else(
-            || {
-                self.chunk_sender
-                    .try_lock()
-                    .map_or(0, |s| s.sent_chunks_count())
-            },
-            |batch| {
-                // 按世界共享的编码缓存：同版本玩家注视同一区块只编码
-                // 一次、驻留一份；条目仅在内容变异（改动代数递增）、
-                // 区块卸载（弱引用失效）或未缓存时重新序列化。全局字节
-                // 预算超限时按「距所有玩家最远优先」逐出至八成（各玩家
-                // 视距内热条目都保留），并顺带清扫已卸载区块的死条目。
-                const MAX_SHARED_ENCODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
+        let _total_sent_chunks = if let Some(batch) = prepared_batch {
+            // 按世界共享的编码缓存：同版本玩家注视同一区块只编码
+            // 一次、驻留一份；条目仅在内容变异（改动代数递增）、
+            // 区块卸载（弱引用失效）或未缓存时重新序列化。全局字节
+            // 预算超限时按「距所有玩家最远优先」逐出至八成（各玩家
+            // 视距内热条目都保留），并顺带清扫已卸载区块的死条目。
+            const MAX_SHARED_ENCODE_CACHE_BYTES: usize = 64 * 1024 * 1024;
 
-                let cache = &world.chunk_encode_cache;
-                if cache.total_bytes() > MAX_SHARED_ENCODE_CACHE_BYTES {
-                    // 逐出距离按「距最近玩家」计算：只收集全员中心的
-                    // 时机控制在超预算之后，常规路径零分配
-                    let centers: Vec<Vector2<i32>> = world
-                        .players
-                        .load()
-                        .iter()
-                        .map(|p| p.get_entity().chunk_pos.load())
-                        .collect();
-                    let evicted =
-                        cache.prune_if_over_budget(&centers, MAX_SHARED_ENCODE_CACHE_BYTES);
-                    if evicted > 0 {
-                        debug!("共享区块编码缓存超预算，最远优先逐出 {evicted} 条");
-                    }
+            let cache = &world.chunk_encode_cache;
+            if cache.total_bytes() > MAX_SHARED_ENCODE_CACHE_BYTES {
+                // 逐出距离按「距最近玩家」计算：只收集全员中心的
+                // 时机控制在超预算之后，常规路径零分配
+                let centers: Vec<Vector2<i32>> = world
+                    .players
+                    .load()
+                    .iter()
+                    .map(|p| p.get_entity().chunk_pos.load())
+                    .collect();
+                let evicted = cache.prune_if_over_budget(&centers, MAX_SHARED_ENCODE_CACHE_BYTES);
+                if evicted > 0 {
+                    debug!("共享区块编码缓存超预算，最远优先逐出 {evicted} 条");
                 }
-                let encoded = crate::net::ChunkSender::encode_batch(&batch, cache);
-                let current_epoch = self.chunk_send_epoch.load(Ordering::Relaxed);
-                let (sent, total_sent_chunks) = self.chunk_sender.try_lock().map_or_else(
-                    |_| (Vec::new(), 0),
-                    |mut sender| {
-                        let sent =
-                            sender.commit_batch(&batch, &encoded, &self.client, current_epoch);
-                        (sent, sender.sent_chunks_count())
-                    },
+            }
+            crate::net::ChunkSender::encode_batch(
+                &batch,
+                cache,
+                &mut batch_scratch.encoded_results,
+                &mut batch_scratch.encoded,
+            );
+            let current_epoch = self.chunk_send_epoch.load(Ordering::Relaxed);
+            let total_sent_chunks = if let Ok(mut sender) = self.chunk_sender.try_lock() {
+                sender.commit_batch(
+                    &batch,
+                    &batch_scratch.encoded,
+                    &self.client,
+                    current_epoch,
+                    &mut batch_scratch.dispatched,
                 );
-                self.pair_entities_in_chunks(&world, &sent);
-                total_sent_chunks
-            },
-        );
+                sender.sent_chunks_count()
+            } else {
+                batch_scratch.dispatched.clear();
+                0
+            };
+            self.pair_entities_in_chunks(&world, &batch_scratch.dispatched);
+            total_sent_chunks
+        } else {
+            self.chunk_sender
+                .try_lock()
+                .map_or(0, |s| s.sent_chunks_count())
+        };
 
         self.tick_counter.fetch_add(1, Ordering::Relaxed);
         self.living_entity
