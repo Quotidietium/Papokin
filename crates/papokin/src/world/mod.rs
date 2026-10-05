@@ -106,6 +106,7 @@ use papokin_protocol::{
         CBlockEvent, CParticle, CRemoveMobEffect, CSetEquipment, CUpdateMobEffect,
     },
 };
+use papokin_util::capacity::{decay_clear_map, decay_clear_vec};
 use papokin_util::resource_location::ResourceLocation;
 use papokin_util::text::{TextComponent, color::NamedColor};
 use papokin_util::version::JavaMinecraftVersion;
@@ -919,7 +920,8 @@ impl World {
             .block_event_flush_buffer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        events.clear();
+        // 轮次 20：衰减清理（容量超 4× 上轮长度才收缩，稳态零收缩）
+        decay_clear_vec(events);
         let mut queue = self
             .synced_block_event_queue
             .lock()
@@ -1432,7 +1434,7 @@ impl World {
             .tick_scratch
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        tick_scratch.players_cache.clear();
+        decay_clear_vec(&mut tick_scratch.players_cache);
         tick_scratch
             .players_cache
             .extend(players.iter().map(|player| {
@@ -1502,7 +1504,7 @@ impl World {
         };
         // 轮次 15：可 tick 实体过滤集跨 tick 复用（clear 重填；
         // 锁自玩家快照起持有，无需重取）。
-        tick_scratch.entities_cache.clear();
+        decay_clear_vec(&mut tick_scratch.entities_cache);
         // 小集合上并行过滤的池调度开销高于过滤本身
         if entities_to_tick.len() <= 256 {
             tick_scratch
@@ -1573,7 +1575,7 @@ impl World {
         self.entity_tracker.update_all(self);
 
         // 轮次 14：方块实体活跃集跨 tick 复用（与玩家快照同一守卫）
-        tick_scratch.block_entities.clear();
+        decay_clear_vec(&mut tick_scratch.block_entities);
         if self.block_entities.len() < active_chunks.len() {
             for chunk_block_entities in &self.block_entities {
                 if active_chunks.contains(chunk_block_entities.key()) {
@@ -1672,7 +1674,7 @@ impl World {
             .block_update_flush_scratch
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        scratch.changes.clear();
+        decay_clear_map(&mut scratch.changes);
         let mut guard = self
             .unsent_block_changes
             .lock()
@@ -1680,9 +1682,10 @@ impl World {
         std::mem::swap(&mut *guard, &mut scratch.changes);
         drop(guard);
 
-        // 清值留桶，重填零分配
+        // 清值留桶，重填零分配；轮次 20：逐节衰减清理，
+        // 单节变更尖峰（爆炸）回落后回收该节超额容量
         for updates in scratch.sections.values_mut() {
-            updates.clear();
+            decay_clear_vec(updates);
         }
         if scratch.changes.is_empty() {
             return;
@@ -1754,9 +1757,11 @@ impl World {
             }
         }
 
-        // 节键累积上界：长跑服务器离散节键无限累积时整图清空
+        // 节键累积上界：长跑服务器离散节键无限累积时整图清空；
+        // 轮次 20：清空后收缩桶容量（`HashMap::clear` 只清键不缩桶）
         if scratch.sections.len() > FLUSH_SECTIONS_MAX {
             scratch.sections.clear();
+            scratch.sections.shrink_to_fit();
         }
     }
 
@@ -2045,7 +2050,7 @@ impl World {
 
         // 5. 通过 Rayon 并行执行区块生成器
         if !tick_scratch.spawning_categories.is_empty() {
-            tick_scratch.spawning_chunks.clear();
+            decay_clear_vec(&mut tick_scratch.spawning_chunks);
             for pos in active_chunks.iter() {
                 if let Some(chunk) = self.level.read_chunk_sync(pos, std::clone::Clone::clone) {
                     tick_scratch.spawning_chunks.push((*pos, chunk));
@@ -2086,7 +2091,7 @@ impl World {
         // 批量执行这些开销小的查找和原子自增，避免唤醒 Rayon
         // 为每个刻的微小任务生成工作线程，同时对大集合保留并行性。
         let loaded_chunks = self.level.loaded_chunks.clone();
-        tick_scratch.active_chunks_cache.clear();
+        decay_clear_vec(&mut tick_scratch.active_chunks_cache);
         tick_scratch
             .active_chunks_cache
             .extend(active_chunks.iter().copied());

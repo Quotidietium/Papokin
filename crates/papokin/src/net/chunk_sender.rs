@@ -359,7 +359,8 @@ impl ChunkSender {
         out: &mut Vec<PreparedChunk>,
     ) {
         let quota_limit = self.send_quota.floor() as usize;
-        out.clear();
+        // 轮次 20：衰减清理（传送尖峰批回落后回收超额槽位容量）
+        papokin_util::capacity::decay_clear_vec(out);
 
         // 如果 pending_chunks 很小，直接排序可以避免扫描偏移量。
         if self.pending_chunks.len() <= 16 {
@@ -468,7 +469,7 @@ impl ChunkSender {
 
         // 二元组第二元标记是否为本轮新编码（缓存命中不重复插入，
         // 否则共享缓存的字节记账会因重复插入虚增）
-        results.clear();
+        papokin_util::capacity::decay_clear_vec(results);
         batch
             .chunks
             .par_iter()
@@ -537,7 +538,7 @@ impl ChunkSender {
             })
             .collect_into_vec(results);
 
-        output.clear();
+        papokin_util::capacity::decay_clear_vec(output);
         for (encoded, is_new) in results.drain(..).flatten() {
             if is_new {
                 cache.insert(encoded.clone(), version);
@@ -556,7 +557,7 @@ impl ChunkSender {
         current_epoch: u32,
         dispatched: &mut Vec<Vector2<i32>>,
     ) {
-        dispatched.clear();
+        papokin_util::capacity::decay_clear_vec(dispatched);
         if current_epoch != batch.epoch_snapshot || encoded_chunks.is_empty() {
             return;
         }

@@ -703,10 +703,11 @@ impl EntityTracker {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let (tracked_entities, moved_players) = scratch;
-        moved_players.clear();
+        // 轮次 20：衰减清理（容量超 4× 上轮长度才收缩，稳态零收缩）
+        papokin_util::capacity::decay_clear_vec(moved_players);
 
         // 快照后迭代，理由同 update_player_position。
-        tracked_entities.clear();
+        papokin_util::capacity::decay_clear_vec(tracked_entities);
         tracked_entities.extend(self.entity_map.iter().map(|e| e.value().clone()));
         for tracked in tracked_entities.iter() {
             let pos = tracked.entity.get_entity().pos.load();

@@ -24,6 +24,7 @@ use papokin_config::{chunk::ChunkConfig, lighting::LightingEngineConfig, world::
 use papokin_data::biome::Biome;
 use papokin_data::dimension::Dimension;
 use papokin_data::{Block, BlockStateId, block_properties::has_random_ticks, fluid::Fluid};
+use papokin_util::capacity::decay_clear_vec;
 use papokin_util::math::{position::BlockPos, vector2::Vector2};
 use papokin_util::world_seed::Seed;
 use rustc_hash::FxHashSet;
@@ -590,9 +591,12 @@ impl Level {
     ) {
         let samples_per_section = random_tick_speed.max(0);
 
-        tick_data.block_ticks.clear();
-        tick_data.fluid_ticks.clear();
-        tick_data.random_ticks.clear();
+        // 轮次 20：衰减清理替代裸 clear（尖峰回落后回收超额容量；
+        // random_ticks 紧随的 reserve 与衰减落点相容：负载不降时
+        // 上轮长度 + 地板恒不小于本次 reserve 需求）
+        decay_clear_vec(&mut tick_data.block_ticks);
+        decay_clear_vec(&mut tick_data.fluid_ticks);
+        decay_clear_vec(&mut tick_data.random_ticks);
         tick_data.random_ticks.reserve(active_chunks.len() * 3);
 
         // 1. 处理活跃区块（随机刻、方块实体）
