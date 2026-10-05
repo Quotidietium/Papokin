@@ -124,12 +124,10 @@ pub trait DynEventHandler: Send + Sync {
 }
 
 /// 与 Bukkit 兼容的分发顺序：`Lowest` 最先，`Highest` 最后；排序稳定，
-/// 同一优先级内按注册顺序定先后。
-fn order_handlers(handlers: &[Arc<dyn DynEventHandler>]) -> Vec<&Arc<dyn DynEventHandler>> {
-    let mut ordered: Vec<&Arc<dyn DynEventHandler>> = handlers.iter().collect();
+/// 同一优先级内按注册顺序定先后。注册时调用一次，派发路径不再排序。
+fn sort_handlers(handlers: &mut [Arc<dyn DynEventHandler>]) {
     // 按 `Reverse` 升序排序，即沿派生 enum 顺序反向遍历。
-    ordered.sort_by_key(|handler| std::cmp::Reverse(*handler.get_priority()));
-    ordered
+    handlers.sort_by_key(|handler| std::cmp::Reverse(*handler.get_priority()));
 }
 
 /// 根据事件的取消状态判断分发器是否可以调用 `handler`
@@ -235,9 +233,99 @@ where
     }
 }
 
-/// 事件处理器映射的类型别名，其键为静态字符串
-/// 而值是动态事件处理器的向量。
-pub type HandlerMap = HashMap<&'static str, Vec<Arc<dyn DynEventHandler>>>;
+/// 单事件处理器向量：注册时即按 Bukkit 优先级排好序
+/// （`Lowest` 最先、同优先级按注册先后），派发零排序零分配。
+type HandlerVec = ArcSwap<Vec<Arc<dyn DynEventHandler>>>;
+
+/// 事件处理器表：外层为事件键索引（仅在事件键首次出现时写），
+/// 内层每事件一份独立 `ArcSwap` 向量。
+///
+/// 旧形态（整表 `ArcSwap<HashMap>`）每次订阅/退订都 rcu 克隆
+/// 全表（367+ 事件键 × 各键向量），派发期间又整表钉住代际——
+/// 插件加载与热重载的分配量随订阅数平方放大，事件风暴与重载
+/// 叠加时多代整表并存驻留。现形态订阅只重写单事件向量，派发
+/// 只钉住单事件代际；事件键一经创建不再移除（有界于事件类型
+/// 全集，空向量对所有读取方与缺键语义一致）。
+#[derive(Default)]
+pub struct HandlerMap {
+    map: SyncRwLock<HashMap<&'static str, Arc<HandlerVec>>>,
+}
+
+impl HandlerMap {
+    /// 取事件对应的处理器向量句柄；从未注册过该事件返回 `None`。
+    fn handlers_for(&self, event: &'static str) -> Option<Arc<HandlerVec>> {
+        self.map
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(event)
+            .cloned()
+    }
+
+    /// 注册一个处理器：键首次出现时建键，随后只重写该事件的
+    /// 向量。向量始终维持派发序（[`sort_handlers`]），派发路径
+    /// 不再排序。
+    ///
+    /// `dedup_identity` 为 `Some` 时按 `handler_identity` 去重
+    /// （`Context::register_event` 语义）；为 `None` 时不去重
+    /// （`PluginManager::register_event` 语义）。
+    fn register(
+        &self,
+        event: &'static str,
+        handler: &Arc<dyn DynEventHandler>,
+        dedup_identity: Option<usize>,
+    ) {
+        let vec = self.handlers_for(event).unwrap_or_else(|| {
+            let mut map = self
+                .map
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Arc::clone(
+                map.entry(event)
+                    .or_insert_with(|| Arc::new(ArcSwap::from_pointee(Vec::new()))),
+            )
+        });
+        vec.rcu(|old| {
+            let duplicated =
+                dedup_identity.is_some_and(|id| old.iter().any(|e| e.handler_identity() == id));
+            if duplicated {
+                // 重复注册：原样返回（等价旧形态的跳过），不产新代际
+                return Arc::clone(old);
+            }
+            let mut new = (**old).clone();
+            new.push(Arc::clone(handler));
+            sort_handlers(&mut new);
+            Arc::new(new)
+        });
+    }
+
+    /// 移除某来源（插件）注册的全部处理器。只重写确实含该来源
+    /// 处理器的向量；空向量保留（键有界于事件类型全集）。
+    fn unregister_source(&self, source: &str) {
+        let vecs: Vec<Arc<HandlerVec>> = self
+            .map
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect();
+        for vec in vecs {
+            if !vec.load().iter().any(|h| h.source() == Some(source)) {
+                continue;
+            }
+            vec.rcu(|old| {
+                let mut new = (**old).clone();
+                new.retain(|h| h.source() != Some(source));
+                Arc::new(new)
+            });
+        }
+    }
+
+    /// 事件是否有至少一个已注册处理器。
+    fn has_handlers(&self, event: &'static str) -> bool {
+        self.handlers_for(event)
+            .is_some_and(|vec| !vec.load().is_empty())
+    }
+}
 
 /// 插件加载状态
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,7 +361,7 @@ type ServiceMap = Arc<RwLock<HashMap<String, (String, Arc<dyn Payload>)>>>;
 pub struct PluginManager {
     plugins: SyncRwLock<Vec<LoadedPlugin>>,
     loaders: RwLock<Vec<Arc<dyn PluginLoader>>>,
-    handlers: Arc<ArcSwap<HandlerMap>>,
+    handlers: Arc<HandlerMap>,
     unloaded_files: RwLock<HashSet<PathBuf>>,
     services: ServiceMap,
     /// 跨插件服务注册表（为原生和 wasm……提供基于名称的发现）
@@ -342,7 +430,7 @@ impl PluginManager {
                 Arc::new(NativePluginLoader),
                 Arc::new(WasmPluginLoader::new(verify_plugin_signatures)),
             ]),
-            handlers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
+            handlers: Arc::new(HandlerMap::default()),
             unloaded_files: RwLock::new(HashSet::new()),
             services: Arc::new(RwLock::new(HashMap::new())),
             service_registry: SyncRwLock::new(Vec::new()),
@@ -1772,14 +1860,7 @@ impl PluginManager {
     }
 
     fn unregister_handlers(&self, source: &str) {
-        self.handlers.rcu(|handlers| {
-            let mut new_handlers = (**handlers).clone();
-            new_handlers.retain(|_, handlers| {
-                handlers.retain(|handler| handler.source() != Some(source));
-                !handlers.is_empty()
-            });
-            Arc::new(new_handlers)
-        });
+        self.handlers.unregister_source(source);
     }
 
     /// 获取所有正在加载的插件
@@ -1841,7 +1922,7 @@ impl PluginManager {
         E: Payload + Send + Sync + 'static,
         H: EventHandler<E> + 'static,
     {
-        let typed_handler = Arc::new(TypedEventHandler {
+        let typed_handler: Arc<dyn DynEventHandler> = Arc::new(TypedEventHandler {
             handler,
             priority,
             blocking,
@@ -1850,22 +1931,13 @@ impl PluginManager {
             _phantom: std::marker::PhantomData,
         });
 
-        self.handlers.rcu(|handlers| {
-            let mut new_handlers = (**handlers).clone();
-            new_handlers
-                .entry(E::get_name_static())
-                .or_default()
-                .push(typed_handler.clone());
-            Arc::new(new_handlers)
-        });
+        self.handlers
+            .register(E::get_name_static(), &typed_handler, None);
     }
 
     #[must_use]
     pub fn has_handlers<E: Payload + 'static>(&self) -> bool {
-        self.handlers
-            .load()
-            .get(E::get_name_static())
-            .is_some_and(|handlers| !handlers.is_empty())
+        self.handlers.has_handlers(E::get_name_static())
     }
 
     /// 向所有已注册的处理器触发事件
@@ -1880,23 +1952,18 @@ impl PluginManager {
         server: &Arc<Server>,
         event: &mut E,
     ) {
-        let handlers_map = self.handlers.load();
-        if handlers_map.is_empty() {
-            return;
-        }
-
-        let Some(handlers) = handlers_map.get(E::get_name_static()) else {
+        let Some(vec) = self.handlers.handlers_for(E::get_name_static()) else {
             return;
         };
-
+        // 代际钉住范围 = 单事件向量（旧形态钉整表）：派发期间的
+        // 并发订阅/退订只多留一份该事件向量的旧代际。
+        let handlers = vec.load();
         if handlers.is_empty() {
             return;
         }
 
-        let ordered = order_handlers(handlers);
-
         for phase in [true, false] {
-            for handler in &ordered {
+            for handler in handlers.iter() {
                 if handler.is_blocking() != phase {
                     continue;
                 }
@@ -1922,16 +1989,8 @@ impl PluginManager {
         server: &Arc<Server>,
         event: &mut E,
     ) {
-        let handlers_map = self.handlers.load();
-        if handlers_map.is_empty() {
-            return;
-        }
-
-        let Some(handlers) = handlers_map.get(E::get_name_static()) else {
-            return;
-        };
-
-        if handlers.is_empty() {
+        // 无处理器时立即返回，不产生 block_on 开销
+        if !self.handlers.has_handlers(E::get_name_static()) {
             return;
         }
 
@@ -2252,15 +2311,15 @@ mod tests {
 
     #[test]
     fn bukkit_priority_order() {
-        let handlers: Vec<Arc<dyn DynEventHandler>> = vec![
+        let mut handlers: Vec<Arc<dyn DynEventHandler>> = vec![
             dummy_handler(EventPriority::Highest, true, false),
             dummy_handler(EventPriority::Low, true, false),
             dummy_handler(EventPriority::Normal, true, false),
             dummy_handler(EventPriority::Lowest, true, false),
             dummy_handler(EventPriority::High, true, false),
         ];
-        let ordered = order_handlers(&handlers);
-        let priorities: Vec<_> = ordered.iter().map(|h| *h.get_priority()).collect();
+        sort_handlers(&mut handlers);
+        let priorities: Vec<_> = handlers.iter().map(|h| *h.get_priority()).collect();
         assert_eq!(
             priorities,
             vec![
@@ -2271,6 +2330,103 @@ mod tests {
                 EventPriority::Highest,
             ]
         );
+    }
+
+    /// 构造带来源标识的处理器（退订测试用）。
+    fn sourced_handler(source: &str) -> Arc<dyn DynEventHandler> {
+        Arc::new(TypedEventHandler {
+            handler: Arc::new(DummyHandler),
+            priority: EventPriority::Normal,
+            blocking: true,
+            ignore_cancelled: false,
+            source: Some(source.to_string()),
+            _phantom: std::marker::PhantomData,
+        })
+    }
+
+    #[test]
+    fn handler_map_register_maintains_bukkit_order() {
+        let map = HandlerMap::default();
+        let name = "test_event";
+        for priority in [
+            EventPriority::Highest,
+            EventPriority::Low,
+            EventPriority::Normal,
+            EventPriority::Lowest,
+            EventPriority::High,
+        ] {
+            map.register(name, &dummy_handler(priority, true, false), None);
+        }
+        let vec = map.handlers_for(name).unwrap();
+        let priorities: Vec<_> = vec.load().iter().map(|h| *h.get_priority()).collect();
+        assert_eq!(
+            priorities,
+            vec![
+                EventPriority::Lowest,
+                EventPriority::Low,
+                EventPriority::Normal,
+                EventPriority::High,
+                EventPriority::Highest,
+            ]
+        );
+    }
+
+    #[test]
+    fn handler_map_same_priority_keeps_registration_order() {
+        let map = HandlerMap::default();
+        let name = "test_event";
+        let mut identities = Vec::new();
+        for _ in 0..4 {
+            let handler = dummy_handler(EventPriority::Normal, true, false);
+            identities.push(DynEventHandler::handler_identity(handler.as_ref()));
+            map.register(name, &handler, None);
+        }
+        let vec = map.handlers_for(name).unwrap();
+        let got: Vec<_> = vec
+            .load()
+            .iter()
+            .map(|h| DynEventHandler::handler_identity(h.as_ref()))
+            .collect();
+        assert_eq!(got, identities);
+    }
+
+    #[test]
+    fn handler_map_dedup_skips_same_identity() {
+        let map = HandlerMap::default();
+        let name = "test_event";
+        let handler = dummy_handler(EventPriority::Normal, true, false);
+        let identity = DynEventHandler::handler_identity(handler.as_ref());
+        map.register(name, &handler, Some(identity));
+        map.register(name, &handler, Some(identity));
+        let vec = map.handlers_for(name).unwrap();
+        assert_eq!(vec.load().len(), 1);
+    }
+
+    #[test]
+    fn handler_map_unregister_source_removes_only_matching() {
+        let map = HandlerMap::default();
+        let name = "test_event";
+        map.register(name, &sourced_handler("plugin_a"), None);
+        map.register(name, &sourced_handler("plugin_b"), None);
+        map.unregister_source("plugin_a");
+        let vec = map.handlers_for(name).unwrap();
+        {
+            let guard = vec.load();
+            assert_eq!(guard.len(), 1);
+            assert_eq!(guard[0].source(), Some("plugin_b"));
+        }
+        // 退订另一来源后向量为空：键保留但对读取方等价缺键
+        map.unregister_source("plugin_b");
+        assert!(!map.has_handlers(name));
+    }
+
+    #[test]
+    fn handler_map_has_handlers_reflects_emptiness() {
+        let map = HandlerMap::default();
+        let name = "test_event";
+        assert!(!map.has_handlers(name));
+        map.register(name, &dummy_handler(EventPriority::Normal, true, false), None);
+        assert!(map.has_handlers(name));
     }
 
     #[test]

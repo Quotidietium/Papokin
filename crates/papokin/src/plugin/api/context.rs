@@ -5,7 +5,6 @@ use std::{
 };
 
 use crate::{LoggerOption, command::client_suggestions, plugin::PluginMetadata, plugin_log};
-use arc_swap::ArcSwap;
 use papokin_util::{
     PermissionLvl,
     permission::{Permission, PermissionManager},
@@ -29,11 +28,11 @@ use crate::plugin::DynEventHandler;
 /// # Fields
 /// - `metadata`：插件的元数据。
 /// - `server`：插件所运行的服务器的引用。
-/// - `handlers`：事件处理器的映射，包裹在 `ArcSwap` 中以实现跨线程的无锁读取。
+/// - `handlers`：事件处理器表（内部按事件键分桶无锁换代）。
 pub struct Context {
     metadata: PluginMetadata,
     pub server: Arc<Server>,
-    pub handlers: Arc<ArcSwap<HandlerMap>>,
+    pub handlers: Arc<HandlerMap>,
     pub plugin_manager: Arc<PluginManager>,
     pub permission_manager: Arc<PermissionManager>,
     pub logger: Arc<OnceLock<LoggerOption>>,
@@ -52,7 +51,7 @@ impl Context {
     pub fn new(
         metadata: PluginMetadata,
         server: Arc<Server>,
-        handlers: Arc<ArcSwap<HandlerMap>>,
+        handlers: Arc<HandlerMap>,
         plugin_manager: Arc<PluginManager>,
         logger: Arc<OnceLock<LoggerOption>>,
     ) -> Self {
@@ -406,7 +405,7 @@ impl Context {
     ) where
         H: EventHandler<E> + 'static,
     {
-        let typed_handler = Arc::new(TypedEventHandler {
+        let typed_handler: Arc<dyn DynEventHandler> = Arc::new(TypedEventHandler {
             handler,
             priority,
             blocking,
@@ -416,19 +415,10 @@ impl Context {
         });
 
         let identity = DynEventHandler::handler_identity(typed_handler.as_ref());
-        self.handlers.rcu(|handlers| {
-            let mut new_handlers = (**handlers).clone();
-            let handlers_for_event = new_handlers.entry(E::get_name_static()).or_default();
-            // 同一处理器 Arc 重复注册同一事件时跳过：插件在回调中
-            // 误反复注册会让 Vec 无界增长，且同一处理器被多次调用。
-            if !handlers_for_event
-                .iter()
-                .any(|existing| existing.handler_identity() == identity)
-            {
-                handlers_for_event.push(typed_handler.clone());
-            }
-            Arc::new(new_handlers)
-        });
+        // 同一处理器 Arc 重复注册同一事件时跳过：插件在回调中
+        // 误反复注册会让 Vec 无界增长，且同一处理器被多次调用。
+        self.handlers
+            .register(E::get_name_static(), &typed_handler, Some(identity));
     }
 
     /// 注册可加载其他插件类型的自定义插件加载器。
