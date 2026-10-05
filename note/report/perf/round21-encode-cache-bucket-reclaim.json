@@ -1,0 +1,50 @@
+{
+  "gates": [
+    {
+      "detail": "卸载后 0xb5dfab69039a51c3/0xb5dfab69039a51c3，收尾 0xf15c801a0504b947/0xf15c801a0504b947",
+      "name": "指纹全等",
+      "pass": true
+    },
+    {
+      "detail": "无收缩 2953080 B vs 收缩 186368 B（15.8×）",
+      "name": "卸载后桶驻留 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "1 次",
+      "name": "收缩事件 ≤ 2",
+      "pass": true
+    },
+    {
+      "detail": "全程分配：无收缩 22 vs 收缩 26（差值 4）",
+      "name": "额外分配 ≤ 16",
+      "pass": true
+    }
+  ],
+  "no_shrink": {
+    "allocs_total": 22,
+    "fingerprint_final": "0xf15c801a0504b947",
+    "fingerprint_unload": "0xb5dfab69039a51c3",
+    "retained_after_unload_bytes": 2953080,
+    "retained_final_bytes": 2961400
+  },
+  "pass": true,
+  "round": 21,
+  "shrunk": {
+    "allocs_total": 26,
+    "fingerprint_final": "0xf15c801a0504b947",
+    "fingerprint_unload": "0xb5dfab69039a51c3",
+    "retained_after_unload_bytes": 186368,
+    "retained_final_bytes": 1490944,
+    "shrink_events": 1
+  },
+  "theme": "区块编码缓存逐出后的桶容量回收",
+  "workload": {
+    "budget_bytes": 589824000,
+    "explore_cycles": 8,
+    "insert_per_cycle": 2000,
+    "payload_bytes_per_entry": 24576,
+    "reexplore_cycles": 4,
+    "unload_ratio": 0.9
+  }
+}
