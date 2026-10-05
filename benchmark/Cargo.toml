@@ -13,6 +13,7 @@ papokin-config = { path = "../crates/papokin-config" }
 papokin-util = { path = "../crates/papokin-util" }
 papokin-protocol = { path = "../crates/papokin-protocol" }
 bytes = { workspace = true }
+arc-swap.workspace = true
 flate2.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
 serde_json = { workspace = true }

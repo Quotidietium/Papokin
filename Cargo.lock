@@ -2349,6 +2349,7 @@ dependencies = [
 name = "papokin-benchmark"
 version = "0.0.0"
 dependencies = [
+ "arc-swap",
  "bytes",
  "flate2",
  "papokin-config",
