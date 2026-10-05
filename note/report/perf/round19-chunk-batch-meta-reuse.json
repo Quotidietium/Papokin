@@ -1,0 +1,31 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_call_fresh": {
+    "allocs": 3268001,
+    "bytes": 434694994
+  },
+  "per_tick": {
+    "fresh_allocs": 5446.668333333333,
+    "fresh_bytes": 724491.6566666666,
+    "reused_allocs": 3365.78,
+    "reused_bytes": 257962.17666666667
+  },
+  "reused_buffers": {
+    "allocs": 2019468,
+    "bytes": 154777306
+  },
+  "round": 19,
+  "topic": "区块批次发送缓冲驻留（五缓冲重填）+ 脏实体元数据版本集栈内联",
+  "workload": {
+    "dirty_entities_per_tick": 150,
+    "max_batch_chunks": 24,
+    "meta_recipients": 10,
+    "streaming_players": 200,
+    "ticks": 600
+  }
+}
