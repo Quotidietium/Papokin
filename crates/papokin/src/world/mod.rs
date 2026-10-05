@@ -2400,7 +2400,13 @@ impl World {
         BLOCK_COLLISION_SCRATCH.with(|cell| {
             let (collisions, positions) = &mut *cell.borrow_mut();
             self.get_block_collisions_into(bounding_box, entity, collisions, positions);
-            f(collisions, positions)
+            let result = f(collisions, positions);
+            // 轮次 23：用后按本轮填充量衰减容量（4× 滞回，稳态零收缩），
+            // 尖峰（复杂地形/密集碰撞）不再随线程永久驻留；f 已执行
+            // 完毕，清理不影响其所见切片
+            decay_clear_vec(collisions);
+            decay_clear_vec(positions);
+            result
         })
     }
 
@@ -4064,7 +4070,8 @@ impl World {
     }
 
     /// 经线程局部暂存执行按盒实体查询并就地消费（轮次 17）：
-    /// 暂存容量随线程驻留，每次调用 clear 重填，稳态零分配。
+    /// 暂存容量随线程驻留，每次调用 clear 重填，稳态零分配；
+    /// 轮次 23 起用后按本轮填充量衰减，尖峰容量不再随线程驻留。
     pub fn with_entities_at_box<R>(
         &self,
         aabb: &BoundingBox,
@@ -4073,11 +4080,14 @@ impl World {
         ENTITY_BOX_SCRATCH.with(|cell| {
             let out = &mut *cell.borrow_mut();
             self.get_entities_at_box_into(aabb, out);
-            f(out)
+            let result = f(out);
+            decay_clear_vec(out);
+            result
         })
     }
 
-    /// 经线程局部暂存执行按盒玩家查询并就地消费（轮次 17）
+    /// 经线程局部暂存执行按盒玩家查询并就地消费（轮次 17）；
+    /// 轮次 23 起用后按本轮填充量衰减，理由同上。
     pub fn with_players_at_box<R>(
         &self,
         aabb: &BoundingBox,
@@ -4086,12 +4096,15 @@ impl World {
         PLAYER_BOX_SCRATCH.with(|cell| {
             let out = &mut *cell.borrow_mut();
             self.get_players_at_box_into(aabb, out);
-            f(out)
+            let result = f(out);
+            decay_clear_vec(out);
+            result
         })
     }
 
     /// 实体 + 玩家联合按盒查询并就地消费（轮次 17）：命中顺序与
-    /// 「实体收集后将玩家追加至末尾」的旧形态一致。
+    /// 「实体收集后将玩家追加至末尾」的旧形态一致；轮次 23 起用后
+    /// 按本轮填充量衰减，理由同上。
     pub fn with_entities_and_players_at_box<R>(
         &self,
         aabb: &BoundingBox,
@@ -4107,7 +4120,9 @@ impl World {
                     .filter(|player| player.get_entity().bounding_box.load().intersects(aabb))
                     .map(|player| player.clone() as Arc<dyn EntityBase>),
             );
-            f(out)
+            let result = f(out);
+            decay_clear_vec(out);
+            result
         })
     }
 
