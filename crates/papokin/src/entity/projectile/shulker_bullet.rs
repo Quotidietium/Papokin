@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use crossbeam::atomic::AtomicCell;
@@ -458,79 +457,72 @@ impl EntityBase for ShulkerBulletEntity {
             return;
         }
 
-        // 检查实体碰撞
+        // 检查实体碰撞（轮次 17：联合查询线程局部暂存就地迭代，
+        // 原为两新建 Vec 链式拼接成第三 Vec）
         let bullet_bb = entity.bounding_box.load().expand(0.1, 0.1, 0.1);
-        let nearby_entities = world.get_entities_at_box(&bullet_bb);
-        let nearby_players = world.get_players_at_box(&bullet_bb);
-        let nearby: Vec<Arc<dyn crate::entity::EntityBase>> = nearby_entities
-            .into_iter()
-            .chain(
-                nearby_players
-                    .into_iter()
-                    .map(|p| p as Arc<dyn crate::entity::EntityBase>),
-            )
-            .collect();
-        for hit_entity in nearby {
-            let he = hit_entity.get_entity();
-            // 跳过自身
-            if he.entity_id == entity.entity_id {
-                continue;
-            }
-            // 永不命中主人的潜影贝
-            if he.entity_id == self.owner_id {
-                continue;
-            }
-            // 必须是存活状态
-            if !he.is_alive() {
-                continue;
-            }
-            // 必须是生物实体
-            let Some(living) = hit_entity.get_living_entity() else {
-                continue;
-            };
-            if !living.entity.is_alive() {
-                continue;
-            }
+        world.with_entities_and_players_at_box(&bullet_bb, |nearby| {
+            for hit_entity in nearby {
+                let he = hit_entity.get_entity();
+                // 跳过自身
+                if he.entity_id == entity.entity_id {
+                    continue;
+                }
+                // 永不命中主人的潜影贝
+                if he.entity_id == self.owner_id {
+                    continue;
+                }
+                // 必须是存活状态
+                if !he.is_alive() {
+                    continue;
+                }
+                // 必须是生物实体
+                let Some(living) = hit_entity.get_living_entity() else {
+                    continue;
+                };
+                if !living.entity.is_alive() {
+                    continue;
+                }
 
-            if self.has_hit.swap(true, Ordering::SeqCst) {
+                if self.has_hit.swap(true, Ordering::SeqCst) {
+                    break;
+                }
+
+                // 造成 4 点（MOB_PROJECTILE）伤害
+                let owner_arc = world.get_entity_by_id(self.owner_id);
+                let damaged = hit_entity.damage_with_context(
+                    hit_entity.as_ref(),
+                    4.0,
+                    DamageType::MOB_PROJECTILE,
+                    None,
+                    owner_arc.as_deref(),
+                    None,
+                );
+
+                if damaged && let Some(living) = hit_entity.get_living_entity() {
+                    // 施加 200 刻的飘浮效果
+                    living.add_effect(Effect {
+                        effect_type: &StatusEffect::LEVITATION,
+                        duration: 200,
+                        amplifier: 0,
+                        ambient: false,
+                        show_particles: true,
+                        show_icon: true,
+                        blend: false,
+                    });
+                }
+
+                let pos = entity.pos.load();
+                world.spawn_particle(
+                    pos,
+                    Vector3::new(0.2, 0.2, 0.2),
+                    0.0,
+                    2,
+                    Particle::Explosion,
+                );
+                entity.remove();
                 break;
             }
-
-            // 造成 4 点（MOB_PROJECTILE）伤害
-            let owner_arc = world.get_entity_by_id(self.owner_id);
-            let damaged = hit_entity.damage_with_context(
-                hit_entity.as_ref(),
-                4.0,
-                DamageType::MOB_PROJECTILE,
-                None,
-                owner_arc.as_deref(),
-                None,
-            );
-
-            if damaged && let Some(living) = hit_entity.get_living_entity() {
-                // 施加 200 刻的飘浮效果
-                living.add_effect(Effect {
-                    effect_type: &StatusEffect::LEVITATION,
-                    duration: 200,
-                    amplifier: 0,
-                    ambient: false,
-                    show_particles: true,
-                    show_icon: true,
-                    blend: false,
-                });
-            }
-
-            let pos = entity.pos.load();
-            world.spawn_particle(
-                pos,
-                Vector3::new(0.2, 0.2, 0.2),
-                0.0,
-                2,
-                Particle::Explosion,
-            );
-            entity.remove();
-            break;
-        }
+        });
 
         if !target_alive || self.has_hit.load(Ordering::Relaxed) {
             return;

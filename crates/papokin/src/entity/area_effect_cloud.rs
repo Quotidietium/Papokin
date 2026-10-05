@@ -365,93 +365,92 @@ impl EntityBase for AreaEffectCloudEntity {
         let aabb = BoundingBox::new(min, max);
         let world = self.entity.world.load();
 
-        let mut candidates = world.get_entities_at_box(&aabb);
-        let players = world.get_players_at_box(&aabb);
-        for p in players {
-            candidates.push(p.clone() as Arc<dyn EntityBase>);
-        }
-
         // 本刻区域效果云即将影响的实体，先收集以便
         // apply 事件可覆盖整批（并将其取消）。
-        let mut to_apply: Vec<(i32, Arc<dyn EntityBase>, f32)> = Vec::new();
+        // 轮次 17：联合查询线程局部暂存就地过滤（原为两新建 Vec 拼接；
+        // 命中集克隆 Arc 逃逸出查询——事件可裁剪整批，为逐事件语义）
+        let to_apply = world.with_entities_and_players_at_box(&aabb, |candidates| {
+            let mut to_apply: Vec<(i32, Arc<dyn EntityBase>, f32)> = Vec::new();
 
-        for cand in candidates {
-            let cand_clone = cand.clone();
+            for cand in candidates {
+                let cand_clone = cand.clone();
 
-            // 跳过自身和其他 `AreaEffectCloud` 实体
-            if cand_clone.get_entity().entity_id == self.get_entity().entity_id {
-                continue;
-            }
-            if *cand_clone.get_entity().entity_type
-                == papokin_data::entity::EntityType::AREA_EFFECT_CLOUD
-            {
-                continue;
-            }
-
-            // 尽早确定候选 id
-            let ent_id = cand_clone.get_entity().entity_id;
-
-            {
-                let map = self
-                    .reapplication_map
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if map.contains_key(&ent_id) {
+                // 跳过自身和其他 `AreaEffectCloud` 实体
+                if cand_clone.get_entity().entity_id == self.get_entity().entity_id {
                     continue;
                 }
-            }
+                if *cand_clone.get_entity().entity_type
+                    == papokin_data::entity::EntityType::AREA_EFFECT_CLOUD
+                {
+                    continue;
+                }
 
-            let radius_f = *self
-                .radius
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                as f64;
-            let pos_e = cand_clone.get_entity().pos.load();
-            let dx = pos_e.x - pos.x;
-            let dy = pos_e.y - pos.y;
-            let dz = pos_e.z - pos.z;
-            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-            if dist > radius_f {
-                continue;
-            }
+                // 尽早确定候选 id
+                let ent_id = cand_clone.get_entity().entity_id;
 
-            let scale = 1.0f32 - (dist as f32 / radius_f as f32);
-
-            // 判断此次接触是否真的会施加效果
-            let effs_clone = self
-                .effects
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
-            let mut will_apply = false;
-
-            // 只有生物实体才能获得效果
-            if let Some(living_ref) = cand_clone.get_living_entity() {
-                for (eff, _, _, _, _, _) in &effs_clone {
-                    // 即时效果总是生效
-                    let is_instant = eff.id
-                        == papokin_data::effect::StatusEffect::INSTANT_DAMAGE.id
-                        || eff.id == papokin_data::effect::StatusEffect::INSTANT_HEALTH.id;
-                    if is_instant {
-                        will_apply = true;
-                        break;
-                    }
-
-                    // 仅当实体尚未拥有该效果时才应用
-                    if !living_ref.has_effect(eff) {
-                        will_apply = true;
-                        break;
+                {
+                    let map = self
+                        .reapplication_map
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if map.contains_key(&ent_id) {
+                        continue;
                     }
                 }
-            }
 
-            // 如果没有任何可应用的内容，则跳过
-            if !will_apply {
-                continue;
-            }
+                let radius_f = *self
+                    .radius
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    as f64;
+                let pos_e = cand_clone.get_entity().pos.load();
+                let dx = pos_e.x - pos.x;
+                let dy = pos_e.y - pos.y;
+                let dz = pos_e.z - pos.z;
+                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                if dist > radius_f {
+                    continue;
+                }
 
-            to_apply.push((ent_id, cand_clone, scale));
-        }
+                let scale = 1.0f32 - (dist as f32 / radius_f as f32);
+
+                // 判断此次接触是否真的会施加效果
+                let effs_clone = self
+                    .effects
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                let mut will_apply = false;
+
+                // 只有生物实体才能获得效果
+                if let Some(living_ref) = cand_clone.get_living_entity() {
+                    for (eff, _, _, _, _, _) in &effs_clone {
+                        // 即时效果总是生效
+                        let is_instant = eff.id
+                            == papokin_data::effect::StatusEffect::INSTANT_DAMAGE.id
+                            || eff.id == papokin_data::effect::StatusEffect::INSTANT_HEALTH.id;
+                        if is_instant {
+                            will_apply = true;
+                            break;
+                        }
+
+                        // 仅当实体尚未拥有该效果时才应用
+                        if !living_ref.has_effect(eff) {
+                            will_apply = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 如果没有任何可应用的内容，则跳过
+                if !will_apply {
+                    continue;
+                }
+
+                to_apply.push((ent_id, cand_clone, scale));
+            }
+            to_apply
+        });
 
         if to_apply.is_empty() {
             return;

@@ -305,9 +305,8 @@ impl FishingBobberEntity {
         .expand(0.3, 0.3, 0.3);
 
         // 基础方块碰撞，用于拦停浮漂（轮次 16：线程局部暂存就地消费）
-        let hit_block = world.with_block_collisions(search_box, caller, |block_cols, _| {
-            !block_cols.is_empty()
-        });
+        let hit_block =
+            world.with_block_collisions(search_box, caller, |block_cols, _| !block_cols.is_empty());
         if hit_block {
             self.in_ground.store(true, Ordering::Relaxed);
             entity.velocity.store(Vector3::new(0.0, 0.0, 0.0));
@@ -316,29 +315,31 @@ impl FishingBobberEntity {
 
         entity.set_pos(new_pos);
 
-        let candidates = world.get_entities_at_box(&search_box);
-        for cand in candidates {
-            if cand.get_entity().entity_id == self.owner_id
-                || cand.get_entity().entity_id == entity.entity_id
-            {
-                continue;
-            }
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+        world.with_entities_at_box(&search_box, |candidates| {
+            for cand in candidates {
+                if cand.get_entity().entity_id == self.owner_id
+                    || cand.get_entity().entity_id == entity.entity_id
+                {
+                    continue;
+                }
 
-            if is_projectile(cand.get_entity().entity_type) {
-                continue;
-            }
+                if is_projectile(cand.get_entity().entity_type) {
+                    continue;
+                }
 
-            let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
-            if ebb.intersects(&search_box) {
-                self.hooked_entity_id
-                    .store(cand.get_entity().entity_id, Ordering::Relaxed);
-                entity.set_synced_data(
-                    papokin_data::tracked_data::fishing_bobber::HOOKED_ENTITY,
-                    cand.get_entity().entity_id + 1,
-                );
-                return;
+                let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
+                if ebb.intersects(&search_box) {
+                    self.hooked_entity_id
+                        .store(cand.get_entity().entity_id, Ordering::Relaxed);
+                    entity.set_synced_data(
+                        papokin_data::tracked_data::fishing_bobber::HOOKED_ENTITY,
+                        cand.get_entity().entity_id + 1,
+                    );
+                    return;
+                }
             }
-        }
+        });
     }
 }
 

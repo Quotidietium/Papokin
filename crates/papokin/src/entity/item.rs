@@ -185,31 +185,33 @@ impl ItemEntity {
         // 走按区块分桶的索引：合并候选盒只有 0.5 格扩张，此前对全服
         // 实体做全表线性扫描，掉落物高峰（爆炸农场/刷怪塔）是每 2 刻
         // 一次的 O(N²) 放大器
-        let entities = world.get_entities_at_box(&bounding_box);
-        let items: Vec<&Self> = entities
-            .iter()
-            .filter_map(|entity: &Arc<dyn EntityBase>| {
-                entity.get_item_entity().filter(|item| {
-                    item.entity.entity_id != self.entity.entity_id
-                        && !item.never_despawn.load(Ordering::Relaxed)
-                        && item.entity.bounding_box.load().intersects(&bounding_box)
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再过滤遍历）
+        world.with_entities_at_box(&bounding_box, |entities| {
+            let items: Vec<&Self> = entities
+                .iter()
+                .filter_map(|entity: &Arc<dyn EntityBase>| {
+                    entity.get_item_entity().filter(|item| {
+                        item.entity.entity_id != self.entity.entity_id
+                            && !item.never_despawn.load(Ordering::Relaxed)
+                            && item.entity.bounding_box.load().intersects(&bounding_box)
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        for item in items {
-            if item.can_merge() {
-                if let Some(this_base) = world.get_entity_by_id(self.entity.entity_id)
-                    && let Some(this_item) = this_base.get_item_entity()
-                {
-                    this_item.try_merge_with(item);
-                }
+            for item in items {
+                if item.can_merge() {
+                    if let Some(this_base) = world.get_entity_by_id(self.entity.entity_id)
+                        && let Some(this_item) = this_base.get_item_entity()
+                    {
+                        this_item.try_merge_with(item);
+                    }
 
-                if self.entity.removed.load(Ordering::SeqCst) {
-                    break;
+                    if self.entity.removed.load(Ordering::SeqCst) {
+                        break;
+                    }
                 }
             }
-        }
+        });
     }
 
     #[expect(clippy::too_many_lines)]

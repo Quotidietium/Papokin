@@ -249,24 +249,22 @@ impl EntityBase for SplashPotionEntity {
             let max = Vector3::new(hit_pos.x + radius, hit_pos.y + radius, hit_pos.z + radius);
             let aabb = BoundingBox::new(min, max);
 
-            let mut candidates = world.get_entities_at_box(&aabb);
-            let players = world.get_players_at_box(&aabb);
-            for p in players {
-                candidates.push(p.clone() as Arc<dyn EntityBase>);
-            }
-
-            let affected_ids: Vec<i32> = candidates
-                .iter()
-                .filter(|cand| cand.get_living_entity().is_some())
-                .filter(|cand| {
-                    let pos = cand.get_entity().pos.load();
-                    let dx = pos.x - hit_pos.x;
-                    let dy = pos.y - hit_pos.y;
-                    let dz = pos.z - hit_pos.z;
-                    (dx * dx + dy * dy + dz * dz).sqrt() <= radius
-                })
-                .map(|cand| cand.get_entity().entity_id)
-                .collect();
+            // 轮次 17：联合查询线程局部暂存就地过滤（原为两新建 Vec 拼接）
+            let affected_ids: Vec<i32> =
+                world.with_entities_and_players_at_box(&aabb, |candidates| {
+                    candidates
+                        .iter()
+                        .filter(|cand| cand.get_living_entity().is_some())
+                        .filter(|cand| {
+                            let pos = cand.get_entity().pos.load();
+                            let dx = pos.x - hit_pos.x;
+                            let dy = pos.y - hit_pos.y;
+                            let dz = pos.z - hit_pos.z;
+                            (dx * dx + dy * dy + dz * dz).sqrt() <= radius
+                        })
+                        .map(|cand| cand.get_entity().entity_id)
+                        .collect()
+                });
 
             let mut event =
                 crate::plugin::api::events::entity::water_bottle_splash::WaterBottleSplashEvent::new(
@@ -287,27 +285,25 @@ impl EntityBase for SplashPotionEntity {
         let max = Vector3::new(hit_pos.x + radius, hit_pos.y + radius, hit_pos.z + radius);
         let aabb = BoundingBox::new(min, max);
 
-        // 收集实体和玩家候选
-        let mut candidates = world.get_entities_at_box(&aabb);
-        let players = world.get_players_at_box(&aabb);
-        for p in players {
-            candidates.push(p.clone() as Arc<dyn EntityBase>);
-        }
-
-        let mut affected: Vec<(Arc<dyn EntityBase>, f32)> = Vec::new();
-        for cand in candidates {
-            if cand.get_living_entity().is_some() {
-                let pos = cand.get_entity().pos.load();
-                let dx = pos.x - hit_pos.x;
-                let dy = pos.y - hit_pos.y;
-                let dz = pos.z - hit_pos.z;
-                let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-                if dist <= radius {
-                    let scale = (1.0f32 - (dist as f32 / radius as f32)).max(0.0);
-                    affected.push((cand, scale));
+        // 收集实体和玩家候选（轮次 17：联合查询线程局部暂存就地过滤，
+        // 命中集克隆 Arc 逃逸出查询——药水命中为逐事件语义，非逐 tick）
+        let mut affected = world.with_entities_and_players_at_box(&aabb, |candidates| {
+            let mut affected: Vec<(Arc<dyn EntityBase>, f32)> = Vec::new();
+            for cand in candidates {
+                if cand.get_living_entity().is_some() {
+                    let pos = cand.get_entity().pos.load();
+                    let dx = pos.x - hit_pos.x;
+                    let dy = pos.y - hit_pos.y;
+                    let dz = pos.z - hit_pos.z;
+                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                    if dist <= radius {
+                        let scale = (1.0f32 - (dist as f32 / radius as f32)).max(0.0);
+                        affected.push((cand.clone(), scale));
+                    }
                 }
             }
-        }
+            affected
+        });
 
         let affected_ids: Vec<i32> = affected
             .iter()

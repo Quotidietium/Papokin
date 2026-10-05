@@ -220,26 +220,27 @@ impl ThrownItemEntity {
             }
         });
 
-        // 实体碰撞
-        let candidates = world.get_entities_at_box(&search_box);
-        for cand in candidates {
-            if self.should_skip_collision(entity, &cand) {
-                continue;
-            }
+        // 实体碰撞（轮次 17：线程局部暂存就地迭代）
+        world.with_entities_at_box(&search_box, |candidates| {
+            for cand in candidates {
+                if self.should_skip_collision(entity, cand) {
+                    continue;
+                }
 
-            let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
-            if let Some(t) = calculate_ray_intersection(&start_pos, &delta, &ebb)
-                && t < closest_t
-            {
-                closest_t = t;
-                let hit_pos = start_pos.add(&delta.multiply(t, t, t));
-                hit = Some(ProjectileHit::Entity {
-                    entity: cand.clone(),
-                    hit_pos,
-                    normal: delta.normalize().multiply(-1.0, -1.0, -1.0),
-                });
+                let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
+                if let Some(t) = calculate_ray_intersection(&start_pos, &delta, &ebb)
+                    && t < closest_t
+                {
+                    closest_t = t;
+                    let hit_pos = start_pos.add(&delta.multiply(t, t, t));
+                    hit = Some(ProjectileHit::Entity {
+                        entity: cand.clone(),
+                        hit_pos,
+                        normal: delta.normalize().multiply(-1.0, -1.0, -1.0),
+                    });
+                }
             }
-        }
+        });
 
         // 处理命中或继续
         if let Some(h) = hit {

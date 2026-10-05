@@ -278,67 +278,73 @@ impl HopperBlockEntity {
                 pos_up_f,
                 pos_up_f.add_raw(1.0, 1.0, 1.0),
             );
-            let entities = world.get_entities_at_box(&search_box);
-            for entity_base in entities {
-                if let Some(item_entity) = entity_base.get_item_entity() {
-                    let (is_empty, registry_key) = {
-                        let stack = item_entity
-                            .get_item_stack()
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        (stack.is_empty(), stack.item.registry_key.to_string())
-                    };
-                    if !is_empty {
-                        let mut pickup_event =
-                            crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
-                                self.position,
-                                item_entity.get_entity().entity_id,
-                                registry_key,
-                            );
-                        if let Some(server) = world.server.upgrade() {
-                            server
-                                .plugin_manager
-                                .fire_blocking(&server, &mut pickup_event);
-                        }
-                        if pickup_event.cancelled {
-                            continue;
-                        }
-                        let (one_item, is_empty) = {
-                            let mut stack = item_entity
+            // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+            let picked_up = world.with_entities_at_box(&search_box, |entities| {
+                for entity_base in entities {
+                    if let Some(item_entity) = entity_base.get_item_entity() {
+                        let (is_empty, registry_key) = {
+                            let stack = item_entity
                                 .get_item_stack()
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            if stack.is_empty() {
+                            (stack.is_empty(), stack.item.registry_key.to_string())
+                        };
+                        if !is_empty {
+                            let mut pickup_event =
+                                crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
+                                    self.position,
+                                    item_entity.get_entity().entity_id,
+                                    registry_key,
+                                );
+                            if let Some(server) = world.server.upgrade() {
+                                server
+                                    .plugin_manager
+                                    .fire_blocking(&server, &mut pickup_event);
+                            }
+                            if pickup_event.cancelled {
                                 continue;
                             }
-                            let one_item = stack.split(1);
-                            let is_empty = stack.is_empty();
-                            (one_item, is_empty)
-                        };
-                        if Self::add_one_item(self, self, &one_item) {
-                            if is_empty {
-                                item_entity.get_entity().remove();
+                            let (one_item, is_empty) = {
+                                let mut stack = item_entity
+                                    .get_item_stack()
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if stack.is_empty() {
+                                    continue;
+                                }
+                                let one_item = stack.split(1);
+                                let is_empty = stack.is_empty();
+                                (one_item, is_empty)
+                            };
+                            if Self::add_one_item(self, self, &one_item) {
+                                if is_empty {
+                                    item_entity.get_entity().remove();
+                                }
+                                return true;
                             }
-                            return true;
-                        }
-                        // 放入失败：只把这一件还回物品实体。全量快照回写
-                        // 会在与其他拾取方的竞态窗口内覆盖对方的取出
-                        // （把对方拿走的数量凭空变回来，复制物品）。
-                        let restore_failed = {
-                            let mut stack = item_entity
-                                .get_item_stack()
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            !Self::restore_one(&mut stack, &one_item)
-                        };
-                        if restore_failed {
-                            // 实体上的物品已被整体替换，无处归还：掉落
-                            // 这一件，不能凭空消失。
-                            let pos = self.position.to_centered_f64();
-                            world.scatter_stack(pos.x, pos.y, pos.z, one_item);
+                            // 放入失败：只把这一件还回物品实体。全量快照回写
+                            // 会在与其他拾取方的竞态窗口内覆盖对方的取出
+                            // （把对方拿走的数量凭空变回来，复制物品）。
+                            let restore_failed = {
+                                let mut stack = item_entity
+                                    .get_item_stack()
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                !Self::restore_one(&mut stack, &one_item)
+                            };
+                            if restore_failed {
+                                // 实体上的物品已被整体替换，无处归还：掉落
+                                // 这一件，不能凭空消失。
+                                let pos = self.position.to_centered_f64();
+                                world.scatter_stack(pos.x, pos.y, pos.z, one_item);
+                            }
                         }
                     }
                 }
+                false
+            });
+            if picked_up {
+                return true;
             }
         }
         false

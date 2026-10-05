@@ -93,7 +93,9 @@ impl PressurePlate for WeightedPressurePlateBlock {
             150
         };
         let aabb = detection_box_at(pos);
-        let len = world.get_entities_at_box(&aabb).len() + world.get_players_at_box(&aabb).len();
+        // 轮次 17：线程局部暂存就地计数（原为先新建 Vec 再取长度）
+        let len = world.with_entities_at_box(&aabb, <[_]>::len)
+            + world.with_players_at_box(&aabb, <[_]>::len);
         let len = len.min(weight);
         if len > 0 {
             let f = (weight.min(len) / weight) as f32;

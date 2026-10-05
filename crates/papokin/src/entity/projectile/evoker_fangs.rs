@@ -50,33 +50,36 @@ impl EntityBase for EvokerFangsEntity {
         if warmup < 0 {
             if warmup == -8 {
                 let bb = entity.bounding_box.load().expand(0.2, 0.0, 0.2);
-                let candidates = world.get_entities_at_box(&bb);
 
                 let owner = self.owner_id.and_then(|id| world.get_entity_by_id(id));
 
-                for cand in candidates {
-                    let cand_ent = cand.get_entity();
-                    if Some(cand_ent.entity_id) == self.owner_id {
-                        continue;
-                    }
+                // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+                world.with_entities_at_box(&bb, |candidates| {
+                    for cand in candidates {
+                        let cand_ent = cand.get_entity();
+                        if Some(cand_ent.entity_id) == self.owner_id {
+                            continue;
+                        }
 
-                    if cand_ent.entity_id != entity.entity_id && cand.get_living_entity().is_some()
-                    {
-                        let damage_type = if owner.is_some() {
-                            DamageType::INDIRECT_MAGIC
-                        } else {
-                            DamageType::MAGIC
-                        };
-                        let _ = cand.damage_with_context(
-                            cand.as_ref(),
-                            6.0,
-                            damage_type,
-                            Some(entity.pos.load()),
-                            Some(entity),
-                            owner.as_deref(),
-                        );
+                        if cand_ent.entity_id != entity.entity_id
+                            && cand.get_living_entity().is_some()
+                        {
+                            let damage_type = if owner.is_some() {
+                                DamageType::INDIRECT_MAGIC
+                            } else {
+                                DamageType::MAGIC
+                            };
+                            let _ = cand.damage_with_context(
+                                cand.as_ref(),
+                                6.0,
+                                damage_type,
+                                Some(entity.pos.load()),
+                                Some(entity),
+                                owner.as_deref(),
+                            );
+                        }
                     }
-                }
+                });
             }
 
             if !self.sent_spike_event.swap(true, Ordering::SeqCst) {

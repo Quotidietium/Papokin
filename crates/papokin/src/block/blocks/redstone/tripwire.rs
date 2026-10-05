@@ -114,9 +114,8 @@ impl BlockBehaviour for TripwireBlock {
 
         let aabb = BoundingBox::from_block(args.position);
         // TODO entity.canAvoidTraps()
-        if args.world.get_entities_at_box(&aabb).is_empty()
-            && args.world.get_players_at_box(&aabb).is_empty()
-        {
+        // 轮次 17：谓词早退零分配（原为先全量收集再判空）
+        if !args.world.has_entities_at_box(&aabb) && !args.world.has_players_at_box(&aabb) {
             props.powered = false;
             let state_id = props.to_state_id(args.block);
             args.world

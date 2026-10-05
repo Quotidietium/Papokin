@@ -751,52 +751,57 @@ impl EntityBase for ArrowEntity {
         let mut hit = None;
 
         // 方块碰撞（轮次 16：线程局部暂存就地消费）
-        world.with_block_collisions(search_box, self.get_entity(), |block_cols, block_positions| {
-            for (idx, bb) in block_cols.iter().enumerate() {
-                if let Some(t) = calculate_ray_intersection(&start_pos, &velocity, bb)
-                    && t < closest_t
-                {
-                    closest_t = t;
+        world.with_block_collisions(
+            search_box,
+            self.get_entity(),
+            |block_cols, block_positions| {
+                for (idx, bb) in block_cols.iter().enumerate() {
+                    if let Some(t) = calculate_ray_intersection(&start_pos, &velocity, bb)
+                        && t < closest_t
+                    {
+                        closest_t = t;
 
-                    // 映射回方块坐标
-                    let mut curr = 0;
-                    for (len, pos) in block_positions {
-                        curr += len;
-                        if idx < curr {
-                            let hit_pos = start_pos.add(&velocity.multiply(t, t, t));
-                            hit = Some(ProjectileHit::Block {
-                                pos: *pos,
-                                face: get_hit_face(hit_pos, *pos),
-                                hit_pos,
-                                normal: velocity.normalize().multiply(-1.0, -1.0, -1.0),
-                            });
-                            break;
+                        // 映射回方块坐标
+                        let mut curr = 0;
+                        for (len, pos) in block_positions {
+                            curr += len;
+                            if idx < curr {
+                                let hit_pos = start_pos.add(&velocity.multiply(t, t, t));
+                                hit = Some(ProjectileHit::Block {
+                                    pos: *pos,
+                                    face: get_hit_face(hit_pos, *pos),
+                                    hit_pos,
+                                    normal: velocity.normalize().multiply(-1.0, -1.0, -1.0),
+                                });
+                                break;
+                            }
                         }
                     }
                 }
+            },
+        );
+
+        // 实体碰撞（轮次 17：线程局部暂存就地迭代）
+        world.with_entities_at_box(&search_box, |candidates| {
+            for cand in candidates {
+                if self.should_skip_collision(entity, cand) {
+                    continue;
+                }
+
+                let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
+                if let Some(t) = calculate_ray_intersection(&start_pos, &velocity, &ebb)
+                    && t < closest_t
+                {
+                    closest_t = t;
+                    let hit_pos = start_pos.add(&velocity.multiply(t, t, t));
+                    hit = Some(ProjectileHit::Entity {
+                        entity: cand.clone(),
+                        hit_pos,
+                        normal: velocity.normalize().multiply(-1.0, -1.0, -1.0),
+                    });
+                }
             }
         });
-
-        // 实体碰撞
-        let candidates = world.get_entities_at_box(&search_box);
-        for cand in candidates {
-            if self.should_skip_collision(entity, &cand) {
-                continue;
-            }
-
-            let ebb = cand.get_entity().bounding_box.load().expand(0.3, 0.3, 0.3);
-            if let Some(t) = calculate_ray_intersection(&start_pos, &velocity, &ebb)
-                && t < closest_t
-            {
-                closest_t = t;
-                let hit_pos = start_pos.add(&velocity.multiply(t, t, t));
-                hit = Some(ProjectileHit::Entity {
-                    entity: cand.clone(),
-                    hit_pos,
-                    normal: velocity.normalize().multiply(-1.0, -1.0, -1.0),
-                });
-            }
-        }
 
         // 处理命中
         if let Some(h) = hit {

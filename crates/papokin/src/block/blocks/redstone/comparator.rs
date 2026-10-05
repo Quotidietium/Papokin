@@ -310,21 +310,26 @@ impl ComparatorBlock {
         pos: BlockPos,
     ) -> Option<u8> {
         let direction = facing.to_block_direction();
-        let mut level = None;
-        for entity in world.get_entities_at_box(&BoundingBox::from_block(&pos)) {
-            let Some(itemframe) = entity.cast_any().downcast_ref::<ItemFrameEntity>() else {
-                continue;
-            };
-            if itemframe.get_facing() != direction {
-                continue;
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+        world.with_entities_at_box(&BoundingBox::from_block(&pos), |entities| {
+            let mut level = None;
+            let mut too_many = false;
+            for entity in entities {
+                let Some(itemframe) = entity.cast_any().downcast_ref::<ItemFrameEntity>() else {
+                    continue;
+                };
+                if itemframe.get_facing() != direction {
+                    continue;
+                }
+                if level.is_some() {
+                    // 原版只在该方块上恰好挂着一个展示框时才读取。
+                    too_many = true;
+                    break;
+                }
+                level = Some(itemframe.get_analog_output());
             }
-            if level.is_some() {
-                // 原版只在该方块上恰好挂着一个展示框时才读取。
-                return None;
-            }
-            level = Some(itemframe.get_analog_output());
-        }
-        level
+            if too_many { None } else { level }
+        })
     }
 
     fn update(&self, world: &Arc<World>, pos: BlockPos, state: &BlockState, block: &Block) {

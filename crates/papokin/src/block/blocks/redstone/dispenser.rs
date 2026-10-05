@@ -499,8 +499,8 @@ impl DispenserBlock {
         size: &EntityDimensions,
     ) -> bool {
         let bounding_box = BoundingBox::new_from_pos(spawn_pos.x, spawn_pos.y, spawn_pos.z, size);
-        ctx.world.is_space_empty(bounding_box)
-            && ctx.world.get_entities_at_box(&bounding_box).is_empty()
+        // 轮次 17：谓词早退零分配（原为先全量收集再判空）
+        ctx.world.is_space_empty(bounding_box) && !ctx.world.has_entities_at_box(&bounding_box)
     }
 
     fn dispense_boat(ctx: &DispenseContext<'_>, item: &mut ItemStack) -> bool {
@@ -973,44 +973,47 @@ impl DispenserBlock {
     fn shear_entity_in_front(ctx: &DispenseContext<'_>, item: &ItemStack) -> bool {
         let target_box = BoundingBox::from_block(&Self::target_position(ctx));
 
-        for entity in ctx.world.get_entities_at_box(&target_box) {
-            let Some(sheep) = entity.cast_any().downcast_ref::<SheepEntity>() else {
-                continue;
-            };
-            if sheep.is_sheared() || sheep.is_baby() || !entity.get_entity().is_alive() {
-                continue;
-            }
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+        ctx.world.with_entities_at_box(&target_box, |entities| {
+            for entity in entities {
+                let Some(sheep) = entity.cast_any().downcast_ref::<SheepEntity>() else {
+                    continue;
+                };
+                if sheep.is_sheared() || sheep.is_baby() || !entity.get_entity().is_alive() {
+                    continue;
+                }
 
-            let mut event =
-                crate::plugin::api::events::block::block_shear_entity::BlockShearEntityEvent::new(
-                    *ctx.position,
-                    ctx.world.clone(),
-                    entity.clone(),
-                    item.clone(),
+                let mut event =
+                    crate::plugin::api::events::block::block_shear_entity::BlockShearEntityEvent::new(
+                        *ctx.position,
+                        ctx.world.clone(),
+                        entity.clone(),
+                        item.clone(),
+                    );
+                if let Some(server) = ctx.world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                }
+                if event.cancelled {
+                    continue;
+                }
+
+                let position = entity.get_entity().pos.load();
+                sheep.set_sheared(true);
+                ctx.world
+                    .play_sound(Sound::EntitySheepShear, SoundCategory::Blocks, &position);
+
+                let count = rng().random_range(1..=3);
+                Self::drop_at(
+                    ctx.world,
+                    position,
+                    ItemStack::new(count, wool_of_color(sheep.get_color())),
                 );
-            if let Some(server) = ctx.world.server.upgrade() {
-                server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if event.cancelled {
-                continue;
+
+                return true;
             }
 
-            let position = entity.get_entity().pos.load();
-            sheep.set_sheared(true);
-            ctx.world
-                .play_sound(Sound::EntitySheepShear, SoundCategory::Blocks, &position);
-
-            let count = rng().random_range(1..=3);
-            Self::drop_at(
-                ctx.world,
-                position,
-                ItemStack::new(count, wool_of_color(sheep.get_color())),
-            );
-
-            return true;
-        }
-
-        false
+            false
+        })
     }
 
     fn dispense_glass_bottle(
@@ -1180,64 +1183,56 @@ impl DispenserBlock {
         };
 
         let target_box = BoundingBox::from_block(&Self::target_position(ctx));
-        let players = ctx
-            .world
-            .get_players_at_box(&target_box)
-            .into_iter()
-            .map(|player| player as Arc<dyn EntityBase>);
+        // 轮次 17：联合查询线程局部暂存就地迭代（原为两新建 Vec 链式拼接）
+        ctx.world.with_entities_and_players_at_box(&target_box, |entities| {
+            for entity in entities {
+                let Some(living) = entity.get_living_entity() else {
+                    continue;
+                };
+                if !living.is_part_of_game()
+                    || !is_allowed_entity(allowed_entities.as_ref(), entity.get_entity().entity_type)
+                {
+                    continue;
+                }
 
-        for entity in ctx
-            .world
-            .get_entities_at_box(&target_box)
-            .into_iter()
-            .chain(players)
-        {
-            let Some(living) = entity.get_living_entity() else {
-                continue;
-            };
-            if !living.is_part_of_game()
-                || !is_allowed_entity(allowed_entities.as_ref(), entity.get_entity().entity_type)
-            {
-                continue;
-            }
+                let mut equipment = living
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if !equipment.get(slot).is_empty() {
+                    continue;
+                }
 
-            let mut equipment = living
-                .entity_equipment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if !equipment.get(slot).is_empty() {
-                continue;
-            }
+                let mut event =
+                    crate::plugin::api::events::block::block_dispense_armor::BlockDispenseArmorEvent::new(
+                        *ctx.position,
+                        ctx.world.clone(),
+                        entity.clone(),
+                        item.clone(),
+                    );
+                if let Some(server) = ctx.world.server.upgrade() {
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                }
+                if event.cancelled {
+                    continue;
+                }
 
-            let mut event =
-                crate::plugin::api::events::block::block_dispense_armor::BlockDispenseArmorEvent::new(
-                    *ctx.position,
-                    ctx.world.clone(),
-                    entity.clone(),
-                    item.clone(),
+                let stack = item.split(1);
+                equipment.put(slot, stack.clone());
+                drop(equipment);
+
+                living.send_equipment_changes(&[(slot.clone(), stack)]);
+                ctx.world.play_sound_event(
+                    &equip_sound,
+                    SoundCategory::Blocks,
+                    &entity.get_entity().pos.load(),
                 );
-            if let Some(server) = ctx.world.server.upgrade() {
-                server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if event.cancelled {
-                continue;
+
+                return true;
             }
 
-            let stack = item.split(1);
-            equipment.put(slot, stack.clone());
-            drop(equipment);
-
-            living.send_equipment_changes(&[(slot.clone(), stack)]);
-            ctx.world.play_sound_event(
-                &equip_sound,
-                SoundCategory::Blocks,
-                &entity.get_entity().pos.load(),
-            );
-
-            return true;
-        }
-
-        false
+            false
+        })
     }
 
     fn consume_with_remainder(

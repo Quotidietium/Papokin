@@ -71,10 +71,12 @@ impl DetectorRailBlock {
         // 搜索与原版 AABB 匹配的包围盒（X 和 Z 方向 0.2 到 0.8，Y 方向 0.0 到 0.8）
         let search_box = BoundingBox::new_array([0.2, 0.0, 0.2], [0.8, 0.8, 0.8]).at_pos(*pos);
 
-        let entities = world.get_entities_at_box(&search_box);
-        let has_minecart = entities
-            .iter()
-            .any(|e| is_minecart(e.get_entity().entity_type));
+        // 轮次 17：线程局部暂存就地判定（原为先新建 Vec 再 any）
+        let has_minecart = world.with_entities_at_box(&search_box, |entities| {
+            entities
+                .iter()
+                .any(|e| is_minecart(e.get_entity().entity_type))
+        });
 
         let mut props = DetectorRailProperties::from_state_id(state_id);
         let was_pressed = props.powered;

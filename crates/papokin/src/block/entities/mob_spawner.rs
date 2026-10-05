@@ -118,20 +118,22 @@ impl MobSpawnerBlockEntity {
                 center.z + radius_horiz,
             ),
         );
-        world
-            .get_entities_at_box(&search_box)
-            .iter()
-            .filter(|e| {
-                let ent = e.get_entity();
-                if ent.entity_type.id != type_id {
-                    return false;
-                }
-                let pos = ent.pos.load();
-                (pos.x - center.x).abs() <= radius_horiz
-                    && (pos.z - center.z).abs() <= radius_horiz
-                    && (pos.y - center.y).abs() <= radius_vert
-            })
-            .count()
+        // 轮次 17：线程局部暂存就地计数（原为先新建 Vec 再迭代计数）
+        world.with_entities_at_box(&search_box, |entities| {
+            entities
+                .iter()
+                .filter(|e| {
+                    let ent = e.get_entity();
+                    if ent.entity_type.id != type_id {
+                        return false;
+                    }
+                    let pos = ent.pos.load();
+                    (pos.x - center.x).abs() <= radius_horiz
+                        && (pos.z - center.z).abs() <= radius_horiz
+                        && (pos.y - center.y).abs() <= radius_vert
+                })
+                .count()
+        })
     }
     fn update_spawns(&self, world: &Arc<World>) {
         let min_delay = self.min_delay;

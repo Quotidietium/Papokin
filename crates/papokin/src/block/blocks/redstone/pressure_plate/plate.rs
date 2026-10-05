@@ -84,9 +84,8 @@ impl PressurePlate for PressurePlateBlock {
 
     fn calculate_redstone_output(&self, world: &World, _block: &Block, pos: &BlockPos) -> u8 {
         let aabb = detection_box_at(pos);
-        if !world.get_entities_at_box(&aabb).is_empty()
-            || !world.get_players_at_box(&aabb).is_empty()
-        {
+        // 轮次 17：谓词早退零分配（原为先全量收集再判空）
+        if world.has_entities_at_box(&aabb) || world.has_players_at_box(&aabb) {
             return 15;
         }
         0

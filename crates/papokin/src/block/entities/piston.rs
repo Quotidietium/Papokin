@@ -79,34 +79,37 @@ impl PistonBlockEntity {
         let motion = Self::dir_vec(motion_dir, delta);
         let swept = block_aabb.stretch(motion);
 
-        for entity in world.get_entities_at_box(&swept) {
-            let e = entity.get_entity();
-            if e.no_physics.load(Ordering::Relaxed) {
-                continue;
-            }
-            // 玩家移动由客户端权威；原版仍会对其进行微调
-            // 通过 Entity.move(PISTON) 处理，但我们在此跳过它们以避免传送卡顿。
-            if entity.get_player().is_some() {
-                continue;
-            }
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+        world.with_entities_at_box(&swept, |entities| {
+            for entity in entities {
+                let e = entity.get_entity();
+                if e.no_physics.load(Ordering::Relaxed) {
+                    continue;
+                }
+                // 玩家移动由客户端权威；原版仍会对其进行微调
+                // 通过 Entity.move(PISTON) 处理，但我们在此跳过它们以避免传送卡顿。
+                if entity.get_player().is_some() {
+                    continue;
+                }
 
-            let entity_aabb = e.bounding_box.load();
-            let intersection = Self::intersection_size(swept, motion_dir, entity_aabb);
-            if intersection <= 0.0 {
-                continue;
-            }
-            let push_amount = intersection.min(delta) + 0.01;
-            Self::move_entity(e, motion_dir, push_amount);
+                let entity_aabb = e.bounding_box.load();
+                let intersection = Self::intersection_size(swept, motion_dir, entity_aabb);
+                if intersection <= 0.0 {
+                    continue;
+                }
+                let push_amount = intersection.min(delta) + 0.01;
+                Self::move_entity(e, motion_dir, push_amount);
 
-            // 对于正在收回的活塞头，原版还会把实体推出
-            // 活塞主体方块。没有这一步，实体会被拉入
-            // 活塞并“粘”在其上（看起来像粘性活塞的拖拽）。
-            // 对于 retract-head 方块实体，`self.position` 已经就是活塞
-            // 方块位置（它在动画期间替换活塞）。
-            if !self.extending && self.source {
-                Self::push_out_of_piston_body(e, &self.position, motion_dir, delta);
+                // 对于正在收回的活塞头，原版还会把实体推出
+                // 活塞主体方块。没有这一步，实体会被拉入
+                // 活塞并“粘”在其上（看起来像粘性活塞的拖拽）。
+                // 对于 retract-head 方块实体，`self.position` 已经就是活塞
+                // 方块位置（它在动画期间替换活塞）。
+                if !self.extending && self.source {
+                    Self::push_out_of_piston_body(e, &self.position, motion_dir, delta);
+                }
             }
-        }
+        });
     }
 
     /// 原版 `getIntersectionSize`：`entity` 沿……与 `swept` 重叠的程度

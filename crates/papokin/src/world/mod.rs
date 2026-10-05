@@ -209,6 +209,18 @@ thread_local! {
     #[allow(clippy::missing_const_for_thread_local)]
     static BLOCK_COLLISION_SCRATCH: std::cell::RefCell<BlockCollisionScratch> =
         const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+
+    /// 按盒实体查询的线程局部暂存（轮次 17）：漏斗/推挤/弹射物/红石
+    /// 等调用点在 rayon 工作线程上同步查询并就地消费；联合查询
+    /// （实体+玩家）复用同一缓冲。无重入路径（消费不回调本查询）。
+    #[allow(clippy::missing_const_for_thread_local)]
+    static ENTITY_BOX_SCRATCH: std::cell::RefCell<Vec<Arc<dyn EntityBase>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+
+    /// 按盒玩家查询的线程局部暂存（轮次 17），理由同上。
+    #[allow(clippy::missing_const_for_thread_local)]
+    static PLAYER_BOX_SCRATCH: std::cell::RefCell<Vec<Arc<Player>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// 表示一个 Minecraft 世界，包含实体、玩家以及底层的世界数据。
@@ -1379,16 +1391,18 @@ impl World {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tick_scratch.players_cache.clear();
-        tick_scratch.players_cache.extend(players.iter().map(|player| {
-            let entity = player.get_entity();
-            let pos = entity.pos.load();
-            let bb = entity.bounding_box.load().expand(1.0, 0.5, 1.0);
-            let chunk_pos = Vector2::new(
-                get_section_cord(pos.x.floor() as i32),
-                get_section_cord(pos.z.floor() as i32),
-            );
-            (player.clone(), pos, bb, chunk_pos)
-        }));
+        tick_scratch
+            .players_cache
+            .extend(players.iter().map(|player| {
+                let entity = player.get_entity();
+                let pos = entity.pos.load();
+                let bb = entity.bounding_box.load().expand(1.0, 0.5, 1.0);
+                let chunk_pos = Vector2::new(
+                    get_section_cord(pos.x.floor() as i32),
+                    get_section_cord(pos.z.floor() as i32),
+                );
+                (player.clone(), pos, bb, chunk_pos)
+            }));
 
         let t_players = std::time::Instant::now();
         let player_handle = handle.clone();
@@ -1453,9 +1467,11 @@ impl World {
                 .entities_cache
                 .extend(entities_to_tick.iter().filter_map(in_active_loaded_chunk));
         } else {
-            tick_scratch
-                .entities_cache
-                .par_extend(entities_to_tick.par_iter().filter_map(in_active_loaded_chunk));
+            tick_scratch.entities_cache.par_extend(
+                entities_to_tick
+                    .par_iter()
+                    .filter_map(in_active_loaded_chunk),
+            );
         }
 
         let server_ref = server.as_ref();
@@ -1474,8 +1490,7 @@ impl World {
                     let entity_pos = entity_inner.pos.load();
                     let entity_bb = entity_inner.bounding_box.load();
 
-                    for (player, player_pos, player_bb, player_chunk) in
-                        &tick_scratch.players_cache
+                    for (player, player_pos, player_bb, player_chunk) in &tick_scratch.players_cache
                     {
                         if (player_chunk.x - entity_chunk.x).abs() <= 1
                             && (player_chunk.y - entity_chunk.y).abs() <= 1
@@ -3891,7 +3906,9 @@ impl World {
     }
 
     // 获取某个 Box 中的所有非玩家实体
-    pub fn get_entities_at_box(&self, aabb: &BoundingBox) -> Vec<Arc<dyn EntityBase>> {
+    /// 按盒实体查询（重填模式，轮次 17）：`out` 清空后收集与
+    /// `get_entities_at_box` 相同的命中集，容量跨调用驻留。
+    pub fn get_entities_at_box_into(&self, aabb: &BoundingBox, out: &mut Vec<Arc<dyn EntityBase>>) {
         // 小范围盒子（漏斗/投掷物/压力板/绊线等高频调用）走按区块
         // 分桶的索引，代价 O(命中实体数)；范围超过阈值（64 桶，
         // 即 128×128 格）时回退全表线性扫描，保证任意大盒子仍正确。
@@ -3903,28 +3920,127 @@ impl World {
             get_section_cord(aabb.max.x.floor() as i32),
             get_section_cord(aabb.max.z.floor() as i32),
         );
-        if let Some(candidates) = self.entities_by_chunk.query(min_chunk, max_chunk, 64) {
-            return candidates
-                .into_iter()
-                .filter(|entity| entity.get_entity().bounding_box.load().intersects(aabb))
-                .collect();
+        if self
+            .entities_by_chunk
+            .query_into(min_chunk, max_chunk, 64, out)
+        {
+            // 桶内候选按精确包围盒相交原地过滤（单缓冲，无第二 Vec）
+            out.retain(|entity| entity.get_entity().bounding_box.load().intersects(aabb));
+            return;
         }
-        self.entities
-            .load()
-            .iter()
-            .filter(|entity| entity.get_entity().bounding_box.load().intersects(aabb))
-            .cloned()
-            .collect()
+        out.extend(
+            self.entities
+                .load()
+                .iter()
+                .filter(|entity| entity.get_entity().bounding_box.load().intersects(aabb))
+                .cloned(),
+        );
+    }
+
+    #[must_use]
+    pub fn get_entities_at_box(&self, aabb: &BoundingBox) -> Vec<Arc<dyn EntityBase>> {
+        let mut out = Vec::new();
+        self.get_entities_at_box_into(aabb, &mut out);
+        out
+    }
+
+    /// 按盒实体谓词（轮次 17）：任一命中即早退，全程零分配。
+    #[must_use]
+    pub fn has_entities_at_box(&self, aabb: &BoundingBox) -> bool {
+        let min_chunk = Vector2::new(
+            get_section_cord(aabb.min.x.floor() as i32),
+            get_section_cord(aabb.min.z.floor() as i32),
+        );
+        let max_chunk = Vector2::new(
+            get_section_cord(aabb.max.x.floor() as i32),
+            get_section_cord(aabb.max.z.floor() as i32),
+        );
+        let intersects =
+            |entity: &Arc<dyn EntityBase>| entity.get_entity().bounding_box.load().intersects(aabb);
+        if let Some(any) = self
+            .entities_by_chunk
+            .query_any(min_chunk, max_chunk, 64, intersects)
+        {
+            return any;
+        }
+        self.entities.load().iter().any(intersects)
+    }
+
+    /// 按盒玩家查询（重填模式，轮次 17）
+    pub fn get_players_at_box_into(&self, aabb: &BoundingBox, out: &mut Vec<Arc<Player>>) {
+        out.clear();
+        let players_guard = self.players.load();
+        out.extend(
+            players_guard
+                .iter()
+                .filter(|player| player.get_entity().bounding_box.load().intersects(aabb))
+                .cloned(),
+        );
     }
 
     // 获取某个 Box 中的所有玩家实体
+    #[must_use]
     pub fn get_players_at_box(&self, aabb: &BoundingBox) -> Vec<Arc<Player>> {
-        let players_guard = self.players.load();
-        players_guard
+        let mut out = Vec::new();
+        self.get_players_at_box_into(aabb, &mut out);
+        out
+    }
+
+    /// 按盒玩家谓词（轮次 17）：任一命中即早退，全程零分配。
+    #[must_use]
+    pub fn has_players_at_box(&self, aabb: &BoundingBox) -> bool {
+        self.players
+            .load()
             .iter()
-            .filter(|player| player.get_entity().bounding_box.load().intersects(aabb))
-            .cloned()
-            .collect()
+            .any(|player| player.get_entity().bounding_box.load().intersects(aabb))
+    }
+
+    /// 经线程局部暂存执行按盒实体查询并就地消费（轮次 17）：
+    /// 暂存容量随线程驻留，每次调用 clear 重填，稳态零分配。
+    pub fn with_entities_at_box<R>(
+        &self,
+        aabb: &BoundingBox,
+        f: impl FnOnce(&[Arc<dyn EntityBase>]) -> R,
+    ) -> R {
+        ENTITY_BOX_SCRATCH.with(|cell| {
+            let out = &mut *cell.borrow_mut();
+            self.get_entities_at_box_into(aabb, out);
+            f(out)
+        })
+    }
+
+    /// 经线程局部暂存执行按盒玩家查询并就地消费（轮次 17）
+    pub fn with_players_at_box<R>(
+        &self,
+        aabb: &BoundingBox,
+        f: impl FnOnce(&[Arc<Player>]) -> R,
+    ) -> R {
+        PLAYER_BOX_SCRATCH.with(|cell| {
+            let out = &mut *cell.borrow_mut();
+            self.get_players_at_box_into(aabb, out);
+            f(out)
+        })
+    }
+
+    /// 实体 + 玩家联合按盒查询并就地消费（轮次 17）：命中顺序与
+    /// 「实体收集后将玩家追加至末尾」的旧形态一致。
+    pub fn with_entities_and_players_at_box<R>(
+        &self,
+        aabb: &BoundingBox,
+        f: impl FnOnce(&[Arc<dyn EntityBase>]) -> R,
+    ) -> R {
+        ENTITY_BOX_SCRATCH.with(|cell| {
+            let out = &mut *cell.borrow_mut();
+            self.get_entities_at_box_into(aabb, out);
+            let players_guard = self.players.load();
+            out.extend(
+                players_guard
+                    .iter()
+                    .filter(|player| player.get_entity().bounding_box.load().intersects(aabb))
+                    .map(|player| player.clone() as Arc<dyn EntityBase>),
+            );
+            f(out)
+        })
     }
 
     /// 通过唯一 UUID 检索玩家。

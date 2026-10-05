@@ -98,40 +98,43 @@ impl HopperMinecart {
         inventory: &Arc<MinecartInventory>,
         search_box: &BoundingBox,
     ) -> bool {
-        for entity in world.get_entities_at_box(search_box) {
-            let Some(item) = entity.get_item_entity() else {
-                continue;
-            };
-            let (backup, one) = {
+        // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+        world.with_entities_at_box(search_box, |entities| {
+            for entity in entities {
+                let Some(item) = entity.get_item_entity() else {
+                    continue;
+                };
+                let (backup, one) = {
+                    let mut stack = item
+                        .get_item_stack()
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if stack.is_empty() {
+                        continue;
+                    }
+                    (stack.clone(), stack.split(1))
+                };
+                if HopperBlockEntity::add_one_item(inventory.as_ref(), inventory.as_ref(), &one) {
+                    let is_empty = {
+                        let stack = item
+                            .get_item_stack()
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        stack.is_empty()
+                    };
+                    if is_empty {
+                        item.get_entity().remove();
+                    }
+                    return true;
+                }
                 let mut stack = item
                     .get_item_stack()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if stack.is_empty() {
-                    continue;
-                }
-                (stack.clone(), stack.split(1))
-            };
-            if HopperBlockEntity::add_one_item(inventory.as_ref(), inventory.as_ref(), &one) {
-                let is_empty = {
-                    let stack = item
-                        .get_item_stack()
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    stack.is_empty()
-                };
-                if is_empty {
-                    item.get_entity().remove();
-                }
-                return true;
+                *stack = backup;
             }
-            let mut stack = item
-                .get_item_stack()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *stack = backup;
-        }
-        false
+            false
+        })
     }
 
     pub(super) fn interact(

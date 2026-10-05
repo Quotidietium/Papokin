@@ -694,82 +694,90 @@ pub trait EntityBase: Send + Sync + std::any::Any {
 
             if is_rideable_minecart && !is_vehicle {
                 let pickup_bb = entity_bb.expand(0.2, 0.0, 0.2);
-                let other_entities = world.get_entities_at_box(&pickup_bb);
+                // 轮次 17：线程局部暂存就地迭代（原为先新建 Vec 再遍历）
+                world.with_entities_at_box(&pickup_bb, |other_entities| {
+                    for other in other_entities {
+                        if other.get_entity().entity_id != self_entity.entity_id {
+                            let other_type = other.get_entity().entity_type.id;
+                            let is_iron_golem = other_type == EntityType::IRON_GOLEM.id;
+                            let is_other_minecart = is_minecart_fn(other_type);
 
-                for other in other_entities {
-                    if other.get_entity().entity_id != self_entity.entity_id {
-                        let other_type = other.get_entity().entity_type.id;
-                        let is_iron_golem = other_type == EntityType::IRON_GOLEM.id;
-                        let is_other_minecart = is_minecart_fn(other_type);
-
-                        if !is_iron_golem
-                            && !is_other_minecart
-                            && !other.is_passenger()
-                            && other.is_pushable()
-                            && other.get_entity().riding_cooldown.load(Relaxed) == 0
-                            && let Some(self_arc) = world.get_entity_by_id(self_entity.entity_id)
-                        {
-                            self_entity.add_passenger(self_arc, other.clone());
-                            picked_up = true;
-                            break;
+                            if !is_iron_golem
+                                && !is_other_minecart
+                                && !other.is_passenger()
+                                && other.is_pushable()
+                                && other.get_entity().riding_cooldown.load(Relaxed) == 0
+                                && let Some(self_arc) =
+                                    world.get_entity_by_id(self_entity.entity_id)
+                            {
+                                self_entity.add_passenger(self_arc, other.clone());
+                                picked_up = true;
+                                break;
+                            }
                         }
                     }
-                }
+                });
             }
 
             let push_bb = entity_bb.expand(1.0e-7, 1.0e-7, 1.0e-7);
 
-            let other_entities = world.get_entities_at_box(&push_bb);
-            for other in other_entities {
-                if other.get_entity().entity_id != self_entity.entity_id {
-                    let other_type = other.get_entity().entity_type.id;
-                    let is_other_minecart = is_minecart_fn(other_type);
-                    let is_iron_golem = other_type == EntityType::IRON_GOLEM.id;
+            world.with_entities_at_box(&push_bb, |other_entities| {
+                for other in other_entities {
+                    if other.get_entity().entity_id != self_entity.entity_id {
+                        let other_type = other.get_entity().entity_type.id;
+                        let is_other_minecart = is_minecart_fn(other_type);
+                        let is_iron_golem = other_type == EntityType::IRON_GOLEM.id;
 
-                    if is_rideable_minecart {
-                        if (is_iron_golem
-                            || is_other_minecart
-                            || is_vehicle
-                            || !other.get_entity().has_vehicle())
+                        if is_rideable_minecart {
+                            if (is_iron_golem
+                                || is_other_minecart
+                                || is_vehicle
+                                || !other.get_entity().has_vehicle())
+                                && other.is_pushable()
+                            {
+                                dyn_self.push(other.as_ref());
+                                pushed = true;
+                            }
+                        } else if !self.has_passenger(other.as_ref())
                             && other.is_pushable()
+                            && is_other_minecart
                         {
                             dyn_self.push(other.as_ref());
                             pushed = true;
                         }
-                    } else if !self.has_passenger(other.as_ref())
-                        && other.is_pushable()
-                        && is_other_minecart
+                    }
+                }
+            });
+
+            world.with_players_at_box(&push_bb, |players| {
+                for player in players {
+                    if player.get_entity().entity_id != self_entity.entity_id
+                        && is_rideable_minecart
                     {
+                        dyn_self.push(player.as_ref());
+                        pushed = true;
+                        // 原版中不可乘坐的矿车（漏斗、箱子矿车）不会推动玩家。
+                    }
+                }
+            });
+        } else {
+            world.with_entities_at_box(&entity_bb, |other_entities| {
+                for other in other_entities {
+                    if other.get_entity().entity_id != self_entity.entity_id {
                         dyn_self.push(other.as_ref());
                         pushed = true;
                     }
                 }
-            }
+            });
 
-            let players = world.get_players_at_box(&push_bb);
-            for player in players {
-                if player.get_entity().entity_id != self_entity.entity_id && is_rideable_minecart {
-                    dyn_self.push(player.as_ref());
-                    pushed = true;
-                    // 原版中不可乘坐的矿车（漏斗、箱子矿车）不会推动玩家。
+            world.with_players_at_box(&entity_bb, |players| {
+                for player in players {
+                    if player.get_entity().entity_id != self_entity.entity_id {
+                        dyn_self.push(player.as_ref());
+                        pushed = true;
+                    }
                 }
-            }
-        } else {
-            let other_entities = world.get_entities_at_box(&entity_bb);
-            for other in other_entities {
-                if other.get_entity().entity_id != self_entity.entity_id {
-                    dyn_self.push(other.as_ref());
-                    pushed = true;
-                }
-            }
-
-            let players = world.get_players_at_box(&entity_bb);
-            for player in players {
-                if player.get_entity().entity_id != self_entity.entity_id {
-                    dyn_self.push(player.as_ref());
-                    pushed = true;
-                }
-            }
+            });
         }
 
         picked_up && !pushed

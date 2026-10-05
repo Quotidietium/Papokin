@@ -60,17 +60,34 @@ impl<V: ?Sized + Send + Sync + 'static> ChunkedEntityIndex<V> {
         max_chunk: Vector2<i32>,
         max_buckets: usize,
     ) -> Option<Vec<Arc<V>>> {
+        let mut result = Vec::new();
+        self.query_into(min_chunk, max_chunk, max_buckets, &mut result)
+            .then_some(result)
+    }
+
+    /// 重填模式（轮次 17）：`result` 清空后按 `query` 同一逻辑收集，
+    /// 容量跨调用驻留、消去逐调用新建 `Vec`。跨度槽数超过
+    /// `max_buckets` 或溢出时返回 `false`（调用方回退线性扫描）。
+    pub fn query_into(
+        &self,
+        min_chunk: Vector2<i32>,
+        max_chunk: Vector2<i32>,
+        max_buckets: usize,
+        result: &mut Vec<Arc<V>>,
+    ) -> bool {
+        result.clear();
         // 反向区间（min > max）的 span 钳为 0，下方逐桶循环自然为空；
         // 负差值经 as usize 会回绕成巨值，先钳非负再经 u32 转换
         // （区块坐标量级约 ±1.9M，i32 减法与 u32 范围均安全）。
         let span_x = (max_chunk.x - min_chunk.x).max(0) as u32 as usize;
         let span_z = (max_chunk.y - min_chunk.y).max(0) as u32 as usize;
-        let cells = (span_x + 1).checked_mul(span_z + 1)?;
+        let Some(cells) = (span_x + 1).checked_mul(span_z + 1) else {
+            return false;
+        };
         if cells > max_buckets {
-            return None;
+            return false;
         }
 
-        let mut result: Vec<Arc<V>> = Vec::new();
         let mut emptied: Vec<Vector2<i32>> = Vec::new();
 
         for cx in min_chunk.x..=max_chunk.x {
@@ -108,7 +125,65 @@ impl<V: ?Sized + Send + Sync + 'static> ChunkedEntityIndex<V> {
             });
         }
 
-        Some(result)
+        true
+    }
+
+    /// 谓词早退查询（轮次 17）：任一存活实体满足 `f` 即提前返回
+    /// `Some(true)`，全程不收集、零分配。槽数超限或溢出返回 `None`
+    /// （调用方回退线性扫描）。死弱引用顺带剔除（与 `query` 同责）。
+    #[must_use]
+    pub fn query_any(
+        &self,
+        min_chunk: Vector2<i32>,
+        max_chunk: Vector2<i32>,
+        max_buckets: usize,
+        mut f: impl FnMut(&Arc<V>) -> bool,
+    ) -> Option<bool> {
+        let span_x = (max_chunk.x - min_chunk.x).max(0) as u32 as usize;
+        let span_z = (max_chunk.y - min_chunk.y).max(0) as u32 as usize;
+        let cells = (span_x + 1).checked_mul(span_z + 1)?;
+        if cells > max_buckets {
+            return None;
+        }
+
+        let mut found = false;
+        let mut emptied: Vec<Vector2<i32>> = Vec::new();
+        'outer: for cx in min_chunk.x..=max_chunk.x {
+            for cz in min_chunk.y..=max_chunk.y {
+                let Some(bucket) = self.buckets.get(&Vector2::new(cx, cz)) else {
+                    continue;
+                };
+                let mut items = bucket
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                // retain 需扫完整桶以完成死引用剔除；早退发生在桶间
+                items.retain(|weak| {
+                    weak.upgrade().is_some_and(|entity| {
+                        if f(&entity) {
+                            found = true;
+                        }
+                        true
+                    })
+                });
+                if items.is_empty() {
+                    emptied.push(Vector2::new(cx, cz));
+                }
+                if found {
+                    break 'outer;
+                }
+            }
+        }
+
+        for chunk in emptied {
+            self.buckets.remove_if(&chunk, |_, bucket| {
+                bucket
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_empty()
+            });
+        }
+
+        Some(found)
     }
 }
 
