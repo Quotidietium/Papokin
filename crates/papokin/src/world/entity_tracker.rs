@@ -58,6 +58,14 @@ enum PairingDecision {
     Unchanged,
 }
 
+/// 4× 滞回收缩判定（与轮次 21 编码缓存、capacity 衰减原语同参数）：
+/// 容量超 `len × 4 + 64` 才把桶数组收缩到当前负载适配值。
+fn maybe_shrink_buckets<K: Eq + std::hash::Hash, V>(map: &dashmap::DashMap<K, V>) {
+    if map.capacity() > map.len().saturating_mul(4) + 64 {
+        map.shrink_to_fit();
+    }
+}
+
 impl TrackedEntity {
     #[must_use]
     pub fn new(
@@ -739,5 +747,63 @@ impl EntityTracker {
                 tracked.entity.get_entity().send_dirty_entity_data();
             }
         }
+
+        // 轮次 22：事件高峰（刷怪塔/袭击万级实体）回落后回收桶数组——
+        // dashmap 的 remove 只减计数不缩桶，峰值槽位会驻留到世界卸载。
+        // 此处无任何分片守卫在手（上方快照 extend 早已结束，
+        // tracked_entities 持的是 Arc 克隆）；update_all 由世界 tick
+        // 单线程调用且被 scratch 互斥锁序列化，shrink 不会与自身重叠；
+        // 并发生成/消失路径的 insert/remove 仅在命中同一分片时短暂
+        // park。4× 滞回使实体数回涨 4 倍内不再收缩，防振荡。
+        maybe_shrink_buckets(&self.entity_map);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::maybe_shrink_buckets;
+
+    #[test]
+    fn maybe_shrink_buckets_reclaims_after_mass_removal() {
+        let map: dashmap::DashMap<i32, u64> = dashmap::DashMap::new();
+        for i in 0..8192 {
+            map.insert(i, i as u64);
+        }
+        let cap_before = map.capacity();
+        for i in 0..8192 {
+            map.remove(&i);
+        }
+
+        maybe_shrink_buckets(&map);
+
+        let cap_after = map.capacity();
+        assert!(
+            cap_after.saturating_mul(4) <= cap_before,
+            "全量移除后桶容量应至少回收 4 倍: {cap_before} -> {cap_after}"
+        );
+    }
+
+    #[test]
+    fn maybe_shrink_buckets_holds_within_hysteresis() {
+        let map: dashmap::DashMap<i32, u64> = dashmap::DashMap::new();
+        for i in 0..8192 {
+            map.insert(i, i as u64);
+        }
+        // 移除 1/4：3/4 占用远高于 4× 滞回线（阈值 24640，远超任意
+        // 分片数下 8192 条目的容量）。注意 dashmap 的 remove 可能
+        // 顺带收缩个别分片，容量一律以移除后实测为准
+        for i in 0..2048 {
+            map.remove(&i);
+        }
+        let cap_after_removal = map.capacity();
+        assert!(
+            cap_after_removal <= map.len().saturating_mul(4) + 64,
+            "用例前提：3/4 占用必在滞回线内（{cap_after_removal} vs len {})",
+            map.len()
+        );
+
+        maybe_shrink_buckets(&map);
+
+        assert_eq!(map.capacity(), cap_after_removal, "滞回线内不得收缩");
     }
 }

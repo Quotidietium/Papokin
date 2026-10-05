@@ -1778,6 +1778,12 @@ impl World {
             if level_time.world_age % 100 == 0 {
                 self.level.should_unload.store(true, Relaxed);
                 let cleaned_chunks = self.level.clean_memory();
+                // 轮次 22：方块实体分块表按同一 4096 槽位余量规则回收——
+                // 区块卸载路径只 remove 条目，大型机器区卸载后的峰值
+                // 桶槽位会驻留到世界卸载
+                if self.block_entities.capacity() - self.block_entities.len() >= 4096 {
+                    self.block_entities.shrink_to_fit();
+                }
                 if !cleaned_chunks.is_empty() {
                     let world_clone = self.clone();
                     if let Some(server) = self.server.upgrade() {

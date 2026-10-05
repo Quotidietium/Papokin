@@ -715,6 +715,14 @@ impl Level {
         if self.loaded_entity_chunks.capacity() - self.loaded_entity_chunks.len() >= 4096 {
             self.loaded_entity_chunks.shrink_to_fit();
         }
+
+        // 轮次 22：计划刻区块集同一规则回收——流体/岩浆扩散期万级
+        // 区块入集，消化后逐条 remove 但桶数组不缩，峰值槽位会驻留
+        if self.chunks_with_scheduled_ticks.capacity() - self.chunks_with_scheduled_ticks.len()
+            >= 4096
+        {
+            self.chunks_with_scheduled_ticks.shrink_to_fit();
+        }
         entity_chunks_to_remove
     }
 
