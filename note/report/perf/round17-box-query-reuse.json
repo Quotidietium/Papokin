@@ -1,0 +1,31 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_call_fresh": {
+    "allocs": 2959400,
+    "bytes": 242742400
+  },
+  "per_tick": {
+    "fresh_allocs": 4932.333333333333,
+    "fresh_bytes": 404570.6666666667,
+    "reused_allocs": 0.0,
+    "reused_bytes": 0.0
+  },
+  "reused_buffers": {
+    "allocs": 0,
+    "bytes": 0
+  },
+  "round": 17,
+  "topic": "按盒实体/玩家查询跨调用复用（query_into 重填 + retain 原地过滤 + 线程局部暂存 + 谓词早退零分配）",
+  "workload": {
+    "entity_queries": 3000,
+    "max_candidates": 8,
+    "player_queries": 400,
+    "predicate_queries": 500,
+    "ticks": 600
+  }
+}
