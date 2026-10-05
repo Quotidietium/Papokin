@@ -105,6 +105,28 @@ impl PermissionRegistry {
         Ok(())
     }
 
+    /// 按命名空间前缀注销权限节点（插件卸载时回收其 `{plugin}:*`
+    /// 节点），返回移除条数。
+    ///
+    /// `permissions.toml` 预声明（`from_config`）的节点跳过：服务器
+    /// 所有者的显式声明不随插件卸载消失。
+    ///
+    /// # Parameters
+    /// - `prefix`：命名空间前缀（含冒号，如 `"myplugin:"`）。
+    ///
+    /// # Returns
+    /// 实际移除的节点条数。
+    #[must_use]
+    pub fn unregister_prefix(&self, prefix: &str) -> usize {
+        let mut removed = 0usize;
+        self.permissions.retain(|node, permission| {
+            let evict = node.starts_with(prefix) && !permission.from_config;
+            removed += usize::from(evict);
+            !evict
+        });
+        removed
+    }
+
     /// 在注册表中注册一个新权限，并期望它已被注册。
     ///
     /// # Panics
@@ -507,5 +529,39 @@ mod tests {
             "第二次",
             PermissionDefault::Allow,
         ));
+    }
+
+    #[test]
+    fn unregister_prefix_removes_only_namespaced_non_config_nodes() {
+        let registry = PermissionRegistry::new();
+        registry
+            .register_permission(Permission::new(
+                "myplugin:foo",
+                "d",
+                PermissionDefault::Deny,
+            ))
+            .unwrap();
+        registry
+            .register_permission(Permission::new(
+                "myplugin:bar",
+                "d",
+                PermissionDefault::Allow,
+            ))
+            .unwrap();
+        registry
+            .register_permission(Permission::new("other:foo", "d", PermissionDefault::Deny))
+            .unwrap();
+        // toml 预声明的同前缀节点必须保留（服务器所有者的显式声明）
+        let mut predeclared =
+            Permission::new("myplugin:predeclared", "d", PermissionDefault::Allow);
+        predeclared.from_config = true;
+        registry.register_permission(predeclared).unwrap();
+
+        let removed = registry.unregister_prefix("myplugin:");
+        assert_eq!(removed, 2);
+        assert!(registry.get_permission("myplugin:foo").is_none());
+        assert!(registry.get_permission("myplugin:bar").is_none());
+        assert!(registry.get_permission("other:foo").is_some());
+        assert!(registry.get_permission("myplugin:predeclared").is_some());
     }
 }

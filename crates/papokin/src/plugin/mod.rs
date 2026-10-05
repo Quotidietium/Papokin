@@ -1679,6 +1679,17 @@ impl PluginManager {
         plugin.context.unregister_commands();
         self.unregister_all_service_providers(name).await;
         self.unregister_all_incoming_channels(name);
+        // 回收该插件命名空间下的权限节点（`permissions.toml` 预声明
+        // 除外）：不回收则每次热重载累积一份，且同名节点重新注册
+        // 会撞「already registered」。
+        let reclaimed = plugin
+            .context
+            .permission_manager
+            .registry
+            .unregister_prefix(&format!("{name}:"));
+        if reclaimed > 0 {
+            debug!("回收插件 \"{name}\" 的 {reclaimed} 个权限节点");
+        }
         self.restore_plugin_chunk_generators(name);
         // 回收该插件注册的运行期结构模板：全局模板缓存按插件
         // 归属追踪，不回收则模板永久可解析并占住主机内存。
