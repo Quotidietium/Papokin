@@ -360,6 +360,8 @@ context.register_permission(Permission {
 > **命名空间强制**：节点**必须**以 `插件名:` 开头（如插件叫 `my-plugin`，节点必须是 `my-plugin:xxx`），否则 `register_permission` 在 enable 阶段报错 `权限 <节点> 必须使用插件的命名空间（<插件名>）`（全仓汉化后中文文案，`plugin/api/context.rs:363`）并导致插件 enable 失败。`register_command` 的权限参数同理。
 >
 > **运行时附件写入同规则（2026-09-28 起）**：Player 资源的 `set-permission` / `unset-permission` 等权限附件写入同样受命名空间约束——裸名称（不含 `:`）自动补 `插件名:` 前缀；带其他命名空间前缀的节点（含 `minecraft:*` 内置节点）直接报错拒绝。这堵住了插件给自己之外的命名空间授予权限的提权路径。
+>
+> **卸载时命名空间回收（2026-10-05 起，轮次 25）**：插件卸载时宿主自动回收其 `插件名:*` 全部权限节点（`PermissionRegistry::unregister_prefix`，`permissions.toml` 预声明的节点除外——服务器所有者的显式声明不随插件卸载消失）。因此热重载后同名节点可干净重注册，不再累积、不再撞 `already registered`。
 
 - 权限级别 0-4：`zero(普通) / one(moderator) / two(gamemaster) / three(admin) / four(owner)`。
 - 服务器管理员可用 **`permissions.toml`**（服务端根目录）覆盖声明：default 支持 `true/false/deny/allow/op/op:<0-4>`，并可按玩家 UUID 授予/拒绝。启动时加载。
@@ -489,7 +491,7 @@ entity.has_custom_data("myplugin", "title");          // bool
 
 WIT 侧最大的一块 API 面（函数数：`world` 282 · `block-entity` 172 · `player` 107 · `item-stack` 28 · `inventory` 28 · `server` 71）。
 
-### 11.1 Server（70 个方法）
+### 11.1 Server（71 个方法）
 
 - **玩家**：`get_all_players / get_player_by_name / get_player_by_uuid`、`get_player_count`、`get_players_in_world`、`get_offline_player_by_uuid`
 - **世界**：`get_all_worlds / get_world_by_name / has_world / create_world / unload_world / save_all`
@@ -683,7 +685,7 @@ log 2 · i18n 2 · config 2 · metadata 1 · ipc 1 · 其余为类型/枚举定�
 
 - `PLUGIN_API_VERSION = 7`：门控 **`PluginMetadata` 布局**（原生 dylib ABI）兼容性；WASM 组件按 WIT 契约校验。（3→4：第三轮 WIT 大扩面 + 事件布局变更；4→5：基岩版移除——forms/bedrock-packets 接口删除，player/event/scoreboard/text 的 Bedrock 成员摘除；6→7：新增 `plugin-manager` 接口，第三方插件动态管理。）
 - WIT 采用 **v0.1 直接演进**：允许破坏性变更（用户决策记录于 note/11）；新增函数对旧组件向后兼容（组件只导入其所需子集）。
-- 服务端版本：`0.3.13+1.21.11`；i18n 翻译按客户端版本执行。
+- 服务端版本：`0.3.35+1.21.11`；i18n 翻译按客户端版本执行。
 
 ### 16.3 端到端验证基线
 
