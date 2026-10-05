@@ -254,6 +254,9 @@ impl DynamicOps for JsonOps {
         }
     }
 
+    // 数值收缩：整数用 try_from 精确判定可否放入更窄类型；
+    // f64→f32 只能有损探测（strict 相等正是精确往返判据），故就地豁免
+    #[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
     fn convert_to<U>(&self, out_ops: &impl DynamicOps<Value = U>, input: Self::Value) -> U {
         match input {
             Value::Null => out_ops.empty(),
@@ -265,18 +268,19 @@ impl DynamicOps for JsonOps {
             Value::Number(n) => {
                 // 首先，检查可能的整数
                 if let Some(l) = n.as_i64() {
-                    if (l as i8) as i64 == l {
-                        return out_ops.create_byte(l as i8);
-                    } else if (l as i16) as i64 == l {
-                        return out_ops.create_short(l as i16);
-                    } else if (l as i32) as i64 == l {
-                        return out_ops.create_int(l as i32);
+                    if let Ok(b) = i8::try_from(l) {
+                        return out_ops.create_byte(b);
+                    } else if let Ok(s) = i16::try_from(l) {
+                        return out_ops.create_short(s);
+                    } else if let Ok(i) = i32::try_from(l) {
+                        return out_ops.create_int(i);
                     }
                     out_ops.create_long(l)
                 // 如果不可能为整数，则检查可能的浮点值。
                 } else if let Some(f) = n.as_f64() {
-                    if (f as f32) as f64 == f {
-                        return out_ops.create_float(f as f32);
+                    let g = f as f32;
+                    if f64::from(g) == f {
+                        return out_ops.create_float(g);
                     }
                     out_ops.create_double(f)
                 } else {

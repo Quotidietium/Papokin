@@ -244,12 +244,18 @@ impl<R> DataResult<R> {
     }
 
     /// 尝试从此 `DataResult` 获取完整结果。如果不存在这样的结果，此函数会以自定义消息 panic。
+    ///
+    /// # Panics
+    /// 如果不存在完整结果，则以 `message` 为消息 panic。
     #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     pub fn expect(self, message: &str) -> R {
         self.into_result().unwrap_or_else(|| panic!("{}", message))
     }
 
     /// 尝试从此 `DataResult` 获取完整或部分结果。如果不存在这样的结果，此函数会以自定义消息 panic。
+    ///
+    /// # Panics
+    /// 如果既不存在完整结果也不存在部分结果，则以 `message` 为消息 panic。
     #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     pub fn expect_or_partial(self, message: &str) -> R {
         self.into_result_or_partial()

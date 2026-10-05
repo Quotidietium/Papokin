@@ -12,12 +12,14 @@ pub enum Number {
     Double(f64),
 }
 
+// 对齐 Java 数值窄化语义：浮点取整截断为有意行为
+#[allow(clippy::cast_possible_truncation)]
 impl From<Number> for i64 {
     fn from(num: Number) -> Self {
         match num {
-            Number::Byte(b) => b as Self,
-            Number::Short(s) => s as Self,
-            Number::Int(i) => i as Self,
+            Number::Byte(b) => Self::from(b),
+            Number::Short(s) => Self::from(s),
+            Number::Int(i) => Self::from(i),
             Number::Long(l) => l,
             Number::Float(f) => f as Self,
             Number::Double(d) => d as Self,
@@ -25,11 +27,13 @@ impl From<Number> for i64 {
     }
 }
 
+// 对齐 Java 数值窄化语义：截断为有意行为
+#[allow(clippy::cast_possible_truncation)]
 impl From<Number> for i32 {
     fn from(num: Number) -> Self {
         match num {
-            Number::Byte(b) => b as Self,
-            Number::Short(s) => s as Self,
+            Number::Byte(b) => Self::from(b),
+            Number::Short(s) => Self::from(s),
             Number::Int(i) => i,
             Number::Long(l) => l as Self,
             Number::Float(f) => f as Self,
@@ -38,6 +42,8 @@ impl From<Number> for i32 {
     }
 }
 
+// 对齐 Java 数值窄化语义：截断为有意行为
+#[allow(clippy::cast_possible_truncation)]
 impl From<Number> for i16 {
     fn from(num: Number) -> Self {
         // 与 Java 类似，我们先将数字转换为 `i16`，再转换为 `i8`。
@@ -45,6 +51,8 @@ impl From<Number> for i16 {
     }
 }
 
+// 对齐 Java 数值窄化语义：截断为有意行为
+#[allow(clippy::cast_possible_truncation)]
 impl From<Number> for i8 {
     fn from(num: Number) -> Self {
         // 与 Java 类似，我们先将数字转换为 `i32`，再转换为 `i8`。
@@ -52,17 +60,21 @@ impl From<Number> for i8 {
     }
 }
 
+// 对齐 Java 数值窄化语义：截断与符号丢失为有意行为
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 impl From<Number> for u8 {
     fn from(num: Number) -> Self {
         i32::from(num) as Self
     }
 }
 
+// 对齐 Java 转换语义：i32/i64→f32 精度损失与 f64→f32 截断为有意行为
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 impl From<Number> for f32 {
     fn from(num: Number) -> Self {
         match num {
-            Number::Byte(b) => b as Self,
-            Number::Short(s) => s as Self,
+            Number::Byte(b) => Self::from(b),
+            Number::Short(s) => Self::from(s),
             Number::Int(i) => i as Self,
             Number::Long(l) => l as Self,
             Number::Float(f) => f,
@@ -71,14 +83,16 @@ impl From<Number> for f32 {
     }
 }
 
+// 对齐 Java 转换语义：i64→f64 精度损失为有意行为
+#[allow(clippy::cast_precision_loss)]
 impl From<Number> for f64 {
     fn from(num: Number) -> Self {
         match num {
-            Number::Byte(b) => b as Self,
-            Number::Short(s) => s as Self,
-            Number::Int(i) => i as Self,
+            Number::Byte(b) => Self::from(b),
+            Number::Short(s) => Self::from(s),
+            Number::Int(i) => Self::from(i),
             Number::Long(l) => l as Self,
-            Number::Float(f) => f as Self,
+            Number::Float(f) => Self::from(f),
             Number::Double(d) => d,
         }
     }

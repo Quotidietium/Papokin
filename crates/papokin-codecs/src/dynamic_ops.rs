@@ -263,7 +263,7 @@ where {
     {
         self.merge_into_map(input.clone(), self.create_string(key), value)
             .into_result()
-            .unwrap_or(input.clone())
+            .unwrap_or_else(|| input.clone())
     }
 
     /// 尝试用……更新此 `DynamicOps` 表示的映射中由此 `DynamicOps` 表示的一个值，
@@ -277,7 +277,7 @@ where {
         self.get_element(input, key)
             .map(|v| self.set_element(input, key, f(v)))
             .into_result()
-            .unwrap_or(input.clone())
+            .unwrap_or_else(|| input.clone())
     }
 
     /// 尝试用……更新此 `DynamicOps` 表示的映射中由此 `DynamicOps` 表示的一个值，
@@ -291,7 +291,7 @@ where {
         self.get_element_generic(input, key)
             .flat_map(|v| self.merge_into_map(input.clone(), key.clone(), f(v)))
             .into_result()
-            .unwrap_or(input.clone())
+            .unwrap_or_else(|| input.clone())
     }
 
     /// 将由此 `DynamicOps` 表示的值转换为由另一个 `DynamicOps` 表示的值。
