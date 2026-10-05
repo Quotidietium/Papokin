@@ -1,0 +1,32 @@
+{
+  "gates": {
+    "all_pass": true,
+    "allocations_reduced": true,
+    "bytes_reduced": true,
+    "content_equal": true
+  },
+  "per_call_fresh": {
+    "allocs": 3016800,
+    "bytes": 461442600
+  },
+  "per_tick": {
+    "fresh_allocs": 5028.0,
+    "fresh_bytes": 769071.0,
+    "reused_allocs": 1034.0,
+    "reused_bytes": 44979.0
+  },
+  "reused_buffers": {
+    "allocs": 620400,
+    "bytes": 26987400
+  },
+  "round": 18,
+  "topic": "广播扇出单趟化（栈内联版本槽）+ 方块冲刷驻留交换（swap 接替 mem::take + 分组图驻留）",
+  "workload": {
+    "broadcasts_per_tick": 940,
+    "flush_changes_per_tick": 400,
+    "flush_events_per_tick": 80,
+    "flush_sections": 60,
+    "recipients_per_broadcast": 12,
+    "ticks": 600
+  }
+}
