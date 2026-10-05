@@ -1088,6 +1088,9 @@ impl PluginManager {
                                 path.clone(),
                             ));
                             loader_found = true;
+                            // 文件已被加载器认领：从待重试集中移除（可能
+                            // 因更早阶段无加载器而入集），避免无谓重试
+                            self.unloaded_files.write().await.remove(&path);
                         }
                         Err(err) => error!("从 {:?} 加载插件失败：{}", path, err),
                     }
@@ -1488,6 +1491,10 @@ impl PluginManager {
                         "权限被拒绝".to_string(),
                     )));
                 }
+
+                // 文件已被加载器认领并进入初始化：从待重试集中移除，
+                // 避免后续重试对已处理文件做无意义的重复加载
+                self.unloaded_files.write().await.remove(path);
 
                 return self
                     .spawn_plugin_initialization(
