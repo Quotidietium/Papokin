@@ -1,0 +1,43 @@
+{
+  "blob": {
+    "output_fingerprint": "0xd17b294ddb6363ba",
+    "retained_bytes": 3209272,
+    "save_allocs": 375324,
+    "save_ns": 23461300
+  },
+  "gates": [
+    {
+      "detail": "解析驻留 0xd17b294ddb6363ba vs blob 驻留 0xd17b294ddb6363ba",
+      "name": "输出指纹全等",
+      "pass": true
+    },
+    {
+      "detail": "解析驻留 7815672 B vs blob 3209272 B（2.4×）",
+      "name": "驻留 ≥3× 压缩",
+      "pass": false
+    },
+    {
+      "detail": "解析臂 27.15 ms vs blob 臂 23.46 ms（0.86×）",
+      "name": "落盘耗时 ≤3×",
+      "pass": true
+    },
+    {
+      "detail": "解析臂 315122 次 vs blob 臂 375324 次",
+      "name": "落盘分配 ≤2×",
+      "pass": true
+    }
+  ],
+  "parsed": {
+    "output_fingerprint": "0xd17b294ddb6363ba",
+    "retained_bytes": 7815672,
+    "save_allocs": 315122,
+    "save_ns": 27151900
+  },
+  "pass": false,
+  "round": 24,
+  "theme": "区块保留字段序列化驻留（parsed → blob）",
+  "workload": {
+    "chunks": 2000,
+    "corpus": "合成 vanilla 导入：structures/LastUpdate/未建模高度图/blending_data/mod 字段"
+  }
+}
