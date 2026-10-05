@@ -452,8 +452,8 @@ impl TrackedEntity {
             .iter()
             .filter(|p| self.seen_by.contains(&p.gameprofile.id));
 
-        let recipients_by_version = World::collect_java_recipients_by_version(recipients);
-        World::broadcast_java_grouped(&je_packet, recipients_by_version);
+        // 轮次 18：单趟内联版本槽广播（原为 BTreeMap 分组两步式）
+        World::broadcast_java_clients(&je_packet, recipients.map(|p| &*p.client));
 
         self.seen_by.clear();
     }
@@ -477,8 +477,9 @@ impl TrackedEntity {
         let recipients = players
             .iter()
             .filter(|p| self.seen_by.contains(&p.gameprofile.id));
-        let recipients_by_version = World::collect_java_recipients_by_version(recipients);
-        World::broadcast_java_grouped(packet, recipients_by_version);
+        // 轮次 18：单趟内联版本槽广播（原为 BTreeMap 分组两步式）；
+        // 本函数是实体移动/属性包的主扇出，每移动实体每 tick 至少一次
+        World::broadcast_java_clients(packet, recipients.map(|p| &*p.client));
     }
 
     pub fn send_to_tracking_players_and_self<P: ClientPacket + Sync>(
@@ -516,8 +517,8 @@ impl TrackedEntity {
         let recipients = players
             .iter()
             .filter(|p| self.seen_by.contains(&p.gameprofile.id) && filter(p));
-        let recipients_by_version = World::collect_java_recipients_by_version(recipients);
-        World::broadcast_java_grouped(packet, recipients_by_version);
+        // 轮次 18：单趟内联版本槽广播（原为 BTreeMap 分组两步式）
+        World::broadcast_java_clients(packet, recipients.map(|p| &*p.client));
     }
 }
 

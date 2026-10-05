@@ -197,6 +197,23 @@ struct TickScratch {
     spawning_categories: Vec<&'static MobCategory>,
 }
 
+/// 方块变更冲刷驻留缓冲（轮次 18）：`flush_block_updates` 的交换
+/// 缓冲与分节分组图，容量跨 tick 保留——`swap` 接替 `mem::take`
+/// （生产者队列不再每 tick 从零下限逐级重分配），分组图清值留桶
+/// 重填。本缓冲与事件冲刷缓冲刻意分两把锁：事件冲刷循环会经活塞
+/// 处理器触达插件回调，插件可经结构放置等 API 重入
+/// `flush_block_updates`，共用一把 `Mutex` 会互锁。
+#[derive(Default)]
+struct BlockUpdateFlushScratch {
+    /// 方块变更交换缓冲（与 `unsent_block_changes` 对调）
+    changes: HashMap<BlockPos, BlockStateId>,
+    /// 分节分组图（清值留桶）；条数超阈值时整图清空防离散节键累积
+    sections: HashMap<Vector3<i32>, Vec<(BlockPos, BlockStateId)>>,
+}
+
+/// 分节分组图驻留条数上限：超出即整图清空（放弃存量容量换内存上界）
+const FLUSH_SECTIONS_MAX: usize = 4096;
+
 /// 实体移动碰撞收集暂存：碰撞形状 + 「累计形状数 + 方块坐标」位置映射
 /// （轮次 16）
 type BlockCollisionScratch = (Vec<BoundingBox>, Vec<(usize, BlockPos)>);
@@ -264,6 +281,12 @@ pub struct World {
     synced_block_event_queue: std::sync::Mutex<Vec<BlockEvent>>,
     /// 未发送方块变更的映射，以方块位置为键。
     unsent_block_changes: std::sync::Mutex<HashMap<BlockPos, BlockStateId>>,
+    /// 方块变更冲刷驻留缓冲（轮次 18，见 `BlockUpdateFlushScratch`）
+    block_update_flush_scratch: std::sync::Mutex<BlockUpdateFlushScratch>,
+    /// 同步方块事件冲刷的驻留交换缓冲（轮次 18）：与变更冲刷分锁，
+    /// 因事件循环经活塞处理器可触达插件回调、插件可重入
+    /// `flush_block_updates`
+    block_event_flush_buffer: std::sync::Mutex<Vec<BlockEvent>>,
     /// 持久化的原版 POI 存储，用于传送门和村民查找。
     pub portal_poi: std::sync::Mutex<portal::PortalPoiStorage>,
     /// 村民的工作站点及其当前所有者。
@@ -416,6 +439,8 @@ impl World {
             min_y: i32::from(generation_settings.shape.min_y),
             synced_block_event_queue: std::sync::Mutex::new(Vec::new()),
             unsent_block_changes: std::sync::Mutex::new(HashMap::new()),
+            block_update_flush_scratch: std::sync::Mutex::new(BlockUpdateFlushScratch::default()),
+            block_event_flush_buffer: std::sync::Mutex::new(Vec::new()),
             portal_poi: std::sync::Mutex::new(portal_poi),
             villager_poi: std::sync::Mutex::new(villager_poi::VillagerPoiStorage::default()),
             raids: std::sync::Mutex::new(raid::Raids::default()),
@@ -888,15 +913,21 @@ impl World {
     pub fn flush_synced_block_events(self: &Arc<Self>) {
         // 这非常重要
         // 它既能防止死锁，也免去了添加新同步方块时等待锁的需要
-        let events = {
-            let mut queue = self
-                .synced_block_event_queue
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut *queue)
-        };
+        // 轮次 18：驻留交换缓冲 `swap` 接替 `mem::take`（队列容量跨
+        // tick 保留）；冲刷期间新入队的事件仍下一 tick 处理，语义不变
+        let events = &mut *self
+            .block_event_flush_buffer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        events.clear();
+        let mut queue = self
+            .synced_block_event_queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::swap(&mut *queue, events);
+        drop(queue);
 
-        for event in events {
+        for event in &*events {
             let block = self.get_block(&event.pos);
             if !self.block_registry.on_synced_block_event(
                 block,
@@ -935,44 +966,57 @@ impl World {
         recipients_by_version
     }
 
+    /// 单趟按版本懒序列化广播（轮次 18）：逐收件人查栈上内联版本
+    /// 槽——命中共享字节直发；空槽序列化一份填入再发。取代原先
+    /// 「`BTreeMap` 分组 + 逐版本 `Vec`」的两段式（每次广播约 2-3
+    /// 次堆分配）；绝大多数服务器全员同一协议版本，首槽即命中，
+    /// 分组结构零分配。数据槽为 `None` 标记该版本序列化失败
+    /// （不支持/写错误），后续同版本收件人直接跳过，与原先
+    /// `continue` 语义一致；错误日志仍在每个版本首次失败时输出
+    /// 一次。超过槽位数的版本同播时，超出的收件人退化为逐个序列化
+    /// 直发（投递语义不变，仅失同版本共享）。
     pub fn broadcast_java_clients<'a, P: ClientPacket>(
         packet: &P,
         recipients: impl Iterator<Item = &'a JavaClient>,
     ) {
-        let mut recipients_by_version: BTreeMap<JavaMinecraftVersion, Vec<&JavaClient>> =
-            BTreeMap::new();
-        for client in recipients {
-            recipients_by_version
-                .entry(client.version.load())
-                .or_default()
-                .push(client);
-        }
-        Self::broadcast_java_grouped(packet, recipients_by_version);
-    }
-
-    fn broadcast_java_grouped<P: ClientPacket>(
-        packet: &P,
-        recipients_by_version: BTreeMap<JavaMinecraftVersion, Vec<&JavaClient>>,
-    ) {
-        for (version, recipients) in recipients_by_version {
-            let packet_data = match JavaClient::serialize_packet_for_version(packet, version) {
-                Ok(packet_data) => packet_data,
-                Err(papokin_protocol::ser::WritingError::UnsupportedVersion(_)) => {
-                    continue;
+        let mut slots: [Option<(JavaMinecraftVersion, Option<bytes::Bytes>)>; 4] =
+            [const { None }; 4];
+        'recipients: for client in recipients {
+            let version = client.version.load();
+            for slot in &mut slots {
+                match slot {
+                    Some((cached_version, data)) if *cached_version == version => {
+                        if let Some(bytes) = data {
+                            client.try_enqueue_packet(bytes.clone());
+                        }
+                        continue 'recipients;
+                    }
+                    None => {
+                        let data = match JavaClient::serialize_packet_for_version(packet, version) {
+                            Ok(bytes) => Some(bytes),
+                            Err(papokin_protocol::ser::WritingError::UnsupportedVersion(_)) => None,
+                            Err(err) => {
+                                error!(
+                                    "序列化数据包 {}（版本 {:?}）失败：{}",
+                                    std::any::type_name::<P>(),
+                                    version,
+                                    err
+                                );
+                                None
+                            }
+                        };
+                        if let Some(bytes) = &data {
+                            client.try_enqueue_packet(bytes.clone());
+                        }
+                        *slot = Some((version, data));
+                        continue 'recipients;
+                    }
+                    _ => {}
                 }
-                Err(err) => {
-                    error!(
-                        "序列化数据包 {}（版本 {:?}）失败：{}",
-                        std::any::type_name::<P>(),
-                        version,
-                        err
-                    );
-                    continue;
-                }
-            };
-
-            for recipient in recipients {
-                recipient.try_enqueue_packet(packet_data.clone());
+            }
+            // 内联槽满（>4 种协议版本同播）：逐收件人序列化直发
+            if let Ok(bytes) = JavaClient::serialize_packet_for_version(packet, version) {
+                client.try_enqueue_packet(bytes);
             }
         }
     }
@@ -984,8 +1028,7 @@ impl World {
     /// **注意：** 此函数会获取 `current_players` 映射上的锁，以确保线程安全。
     pub fn broadcast_packet_all<P: ClientPacket>(&self, packet: &P) {
         let players = self.players.load();
-        let recipients_by_version = Self::collect_java_recipients_by_version(players.iter());
-        Self::broadcast_java_grouped(packet, recipients_by_version);
+        Self::broadcast_java_clients(packet, players.iter().map(|p| &*p.client));
     }
 
     pub fn broadcast_system_message(&self, message: &TextComponent, overlay: bool) {
@@ -1132,12 +1175,13 @@ impl World {
     /// **注意：** 此函数会获取 `current_players` 映射上的锁，以确保线程安全。
     pub fn broadcast_packet_except<P: ClientPacket>(&self, except: &[uuid::Uuid], packet: &P) {
         let players = self.players.load();
-        let recipients_by_version = Self::collect_java_recipients_by_version(
+        Self::broadcast_java_clients(
+            packet,
             players
                 .iter()
-                .filter(|candidate| !except.contains(&candidate.gameprofile.id)),
+                .filter(|candidate| !except.contains(&candidate.gameprofile.id))
+                .map(|p| &*p.client),
         );
-        Self::broadcast_java_grouped(packet, recipients_by_version);
     }
 
     pub fn spawn_particle(
@@ -1287,8 +1331,7 @@ impl World {
             is_within_chebyshev_distance(chunk_pos, center, audible_chunks)
         });
 
-        let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
-        Self::broadcast_java_grouped(&packet, recipients_by_version);
+        Self::broadcast_java_clients(&packet, recipients.map(|p| &*p.client));
     }
 
     pub fn play_sound_raw_expect(
@@ -1317,8 +1360,7 @@ impl World {
             is_within_chebyshev_distance(chunk_pos, center, audible_chunks)
         });
 
-        let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
-        Self::broadcast_java_grouped(&packet, recipients_by_version);
+        Self::broadcast_java_clients(&packet, recipients.map(|p| &*p.client));
     }
 
     pub fn play_block_sound(&self, sound: Sound, category: SoundCategory, position: BlockPos) {
@@ -1624,28 +1666,39 @@ impl World {
     }
 
     pub fn flush_block_updates(&self) {
-        let mut block_state_updates_by_chunk_section: HashMap<
-            Vector3<i32>,
-            Vec<(BlockPos, BlockStateId)>,
-        > = HashMap::new();
-        let changes = {
-            let mut guard = self
-                .unsent_block_changes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            std::mem::take(&mut *guard)
-        };
-        for (position, block_state_id) in changes {
-            let chunk_section = chunk_section_from_pos(&position);
-            block_state_updates_by_chunk_section
+        // 轮次 18：驻留交换缓冲 + 驻留分组图（原为每 tick `mem::take`
+        // 丢队列容量 + 新建分组 HashMap 与逐节 Vec）
+        let scratch = &mut *self
+            .block_update_flush_scratch
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        scratch.changes.clear();
+        let mut guard = self
+            .unsent_block_changes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        std::mem::swap(&mut *guard, &mut scratch.changes);
+        drop(guard);
+
+        // 清值留桶，重填零分配
+        for updates in scratch.sections.values_mut() {
+            updates.clear();
+        }
+        if scratch.changes.is_empty() {
+            return;
+        }
+        for (position, block_state_id) in &scratch.changes {
+            let chunk_section = chunk_section_from_pos(position);
+            scratch
+                .sections
                 .entry(chunk_section)
                 .or_default()
-                .push((position, block_state_id));
+                .push((*position, *block_state_id));
         }
 
         // TODO: 只向已加载相应区块的玩家发送数据包
         // TODO: 发送光照更新，以更新紧邻被破坏方块的导线
-        for (chunk_section, updates) in block_state_updates_by_chunk_section {
+        for (chunk_section, updates) in &scratch.sections {
             if updates.is_empty() {
                 continue;
             }
@@ -1678,13 +1731,12 @@ impl World {
                         .is_within_distance(chunk_pos.x, chunk_pos.y)
                 });
 
-                let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
-                Self::broadcast_java_grouped(
-                    &CMultiBlockUpdate::new(&updates),
-                    recipients_by_version,
+                Self::broadcast_java_clients(
+                    &CMultiBlockUpdate::new(updates),
+                    recipients.map(|p| &*p.client),
                 );
 
-                for (block_pos, _) in &updates {
+                for (block_pos, _) in updates {
                     if let Some(block_entity) = self.get_block_entity(block_pos)
                         && let Some(nbt) = block_entity.chunk_data_nbt()
                     {
@@ -1700,6 +1752,11 @@ impl World {
                     }
                 }
             }
+        }
+
+        // 节键累积上界：长跑服务器离散节键无限累积时整图清空
+        if scratch.sections.len() > FLUSH_SECTIONS_MAX {
+            scratch.sections.clear();
         }
     }
 
@@ -6284,8 +6341,7 @@ impl World {
                 .is_within_distance(chunk_pos.x, chunk_pos.y)
         });
 
-        let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
-        Self::broadcast_java_grouped(packet, recipients_by_version);
+        Self::broadcast_java_clients(packet, recipients.map(|p| &*p.client));
     }
 
     /// 向区块观察者广播数据包，但排除特定玩家。
@@ -6306,8 +6362,7 @@ impl World {
                 .is_within_distance(chunk_pos.x, chunk_pos.y)
         });
 
-        let recipients_by_version = Self::collect_java_recipients_by_version(recipients);
-        Self::broadcast_java_grouped(packet, recipients_by_version);
+        Self::broadcast_java_clients(packet, recipients.map(|p| &*p.client));
     }
 
     pub fn emit_game_event(self: &Arc<Self>, event_key: impl Into<String>, position: Vector3<f64>) {
