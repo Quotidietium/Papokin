@@ -89,8 +89,11 @@ fn full_collect(set: &[Pos]) -> (Vec<Pos>, u64) {
     let mut removed = Vec::new();
     for (i, pos) in collected.iter().enumerate() {
         // 模拟对 loaded_chunks 的访问（哈希滚动，防优化）
-        hash = (hash ^ (pos.0 as u64).wrapping_add(pos.1 as u64).wrapping_add(i as u64))
-            .wrapping_mul(0x0000_0100_0000_01B3);
+        hash = (hash
+            ^ (pos.0 as u64)
+                .wrapping_add(pos.1 as u64)
+                .wrapping_add(i as u64))
+        .wrapping_mul(0x0000_0100_0000_01B3);
         if needs_removal(i) {
             removed.push(*pos);
         }
@@ -107,8 +110,11 @@ fn on_demand_collect(set: &[Pos]) -> (Vec<Pos>, u64) {
     let mut removed = Vec::new();
     for (i, pos) in set.iter().enumerate() {
         // 同样的 loaded_chunks 访问（分片锁在访问前已释放，安全）
-        hash = (hash ^ (pos.0 as u64).wrapping_add(pos.1 as u64).wrapping_add(i as u64))
-            .wrapping_mul(0x0000_0100_0000_01B3);
+        hash = (hash
+            ^ (pos.0 as u64)
+                .wrapping_add(pos.1 as u64)
+                .wrapping_add(i as u64))
+        .wrapping_mul(0x0000_0100_0000_01B3);
         if needs_removal(i) {
             removed.push(*pos);
         }
@@ -149,7 +155,10 @@ fn measure(label: &str, f: fn(&[Pos]) -> (Vec<Pos>, u64)) -> Tally {
         removed_fp,
         access_fp,
     };
-    eprintln!("{label}: 分配 {} 次 / {} B", tally.allocs, tally.alloc_bytes);
+    eprintln!(
+        "{label}: 分配 {} 次 / {} B",
+        tally.allocs, tally.alloc_bytes
+    );
     tally
 }
 

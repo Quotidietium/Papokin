@@ -194,7 +194,10 @@ fn per_tick_fresh(tick: usize) -> Fingerprints {
 
     let mut entity_fp = 0xcbf2_9ce4_8422_2325u64;
     for item in &tickable {
-        entity_fp = fp_mix(entity_fp, item.id ^ (item.chunk.0 as u64) ^ (item.chunk.1 as u64));
+        entity_fp = fp_mix(
+            entity_fp,
+            item.id ^ (item.chunk.0 as u64) ^ (item.chunk.1 as u64),
+        );
     }
     let mut spawn_fp = 0xcbf2_9ce4_8422_2325u64;
     for item in &spawning {
@@ -214,10 +217,7 @@ fn per_tick_fresh(tick: usize) -> Fingerprints {
     for item in &random_ticks {
         tick_data_fp = fp_mix(
             tick_data_fp,
-            (item.pos.0 as u64)
-                ^ (item.pos.1 as u64)
-                ^ (item.pos.2 as u64)
-                ^ u64::from(item.flags),
+            (item.pos.0 as u64) ^ (item.pos.1 as u64) ^ (item.pos.2 as u64) ^ u64::from(item.flags),
         );
     }
     Fingerprints {
@@ -255,9 +255,11 @@ impl ReusedVecs {
 
     fn refill(&mut self, tick: usize) -> Fingerprints {
         self.tickable.clear();
-        self.tickable.extend((0..ENTITIES).map(|i| entity_item(i, tick)));
+        self.tickable
+            .extend((0..ENTITIES).map(|i| entity_item(i, tick)));
         self.spawning.clear();
-        self.spawning.extend((0..ACTIVE_CHUNKS).map(|i| spawn_item(i, tick)));
+        self.spawning
+            .extend((0..ACTIVE_CHUNKS).map(|i| spawn_item(i, tick)));
         self.active_vec.clear();
         self.active_vec
             .extend((0..ACTIVE_CHUNKS).map(|i| chunk_pos(i, tick)));
@@ -273,7 +275,10 @@ impl ReusedVecs {
 
         let mut entity_fp = 0xcbf2_9ce4_8422_2325u64;
         for item in &self.tickable {
-            entity_fp = fp_mix(entity_fp, item.id ^ (item.chunk.0 as u64) ^ (item.chunk.1 as u64));
+            entity_fp = fp_mix(
+                entity_fp,
+                item.id ^ (item.chunk.0 as u64) ^ (item.chunk.1 as u64),
+            );
         }
         let mut spawn_fp = 0xcbf2_9ce4_8422_2325u64;
         for item in &self.spawning {

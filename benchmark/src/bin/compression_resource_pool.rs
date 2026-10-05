@@ -18,8 +18,8 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use flate2::{Compress, Compression, FlushCompress, Status};
@@ -120,7 +120,8 @@ const fn packet_size(rng: &mut Rng) -> usize {
 /// 由 (conn, seq) 确定性派生一个数据包负载（不落语料库，三模式
 /// 各自现算、逐包一致；半数可压缩内容半数随机字节，同轮次 8）
 fn gen_packet(conn: usize, seq: usize) -> Vec<u8> {
-    let seed = ((conn as u64) * 0x9E37_79B9_7F4A_7C15) ^ ((seq as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
+    let seed = ((conn as u64) * 0x9E37_79B9_7F4A_7C15)
+        ^ ((seq as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F) | 1);
     let mut rng = Rng(seed);
     let size = packet_size(&mut rng);
     let mut data = Vec::with_capacity(size);
@@ -306,7 +307,8 @@ fn run_global(workers: usize) -> ModeResult {
             let wire_bytes = &wire_bytes;
             let wire_hash = &wire_hash;
             scope.spawn(move || {
-                let conns: Vec<usize> = (0..CONNECTIONS).filter(|c| c % workers == worker).collect();
+                let conns: Vec<usize> =
+                    (0..CONNECTIONS).filter(|c| c % workers == worker).collect();
                 let mut rolling: u64 = 0xcbf2_9ce4_8422_2325;
                 let mut bytes = 0usize;
                 let mut local_created = 0usize;
@@ -315,8 +317,9 @@ fn run_global(workers: usize) -> ModeResult {
                         let packet = gen_packet(conn, seq);
                         bytes += packet.len();
                         let mut resources = {
-                            let mut guard =
-                                pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut guard = pool
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             guard.pop()
                         }
                         .unwrap_or_else(|| {
@@ -326,8 +329,9 @@ fn run_global(workers: usize) -> ModeResult {
                         let hash = resources.compress_one(&packet);
                         give_back_governance(&mut resources);
                         {
-                            let mut guard =
-                                pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let mut guard = pool
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
                             if guard.len() < GLOBAL_POOL_CAP {
                                 guard.push(resources);
                             }
@@ -368,8 +372,8 @@ fn main() {
 
         let hashes_equal =
             legacy.wire_hash == thread_local.wire_hash && legacy.wire_hash == global.wire_hash;
-        let bytes_equal = legacy.wire_bytes == thread_local.wire_bytes
-            && legacy.wire_bytes == global.wire_bytes;
+        let bytes_equal =
+            legacy.wire_bytes == thread_local.wire_bytes && legacy.wire_bytes == global.wire_bytes;
         all_equal &= hashes_equal && bytes_equal;
 
         scenarios[format!("w{workers}")] = serde_json::json!({

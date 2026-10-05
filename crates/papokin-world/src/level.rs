@@ -655,8 +655,12 @@ impl Level {
             let pos = *pos_ref;
             if let Some(chunk) = self.loaded_chunks.get(&pos) {
                 let chunk = chunk.value();
-                tick_data.block_ticks.append(&mut chunk.block_ticks.step_tick());
-                tick_data.fluid_ticks.append(&mut chunk.fluid_ticks.step_tick());
+                tick_data
+                    .block_ticks
+                    .append(&mut chunk.block_ticks.step_tick());
+                tick_data
+                    .fluid_ticks
+                    .append(&mut chunk.fluid_ticks.step_tick());
 
                 // 如果它不再有刻，则标记移除（本 tick 结束后统一删）
                 if !chunk.block_ticks.has_ticks() && !chunk.fluid_ticks.has_ticks() {

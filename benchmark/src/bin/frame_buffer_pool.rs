@@ -252,7 +252,9 @@ fn run_conn_global(conn: usize, pool: &Mutex<Vec<Vec<u8>>>, created: &AtomicUsiz
 
     let frame_once = |packet: &[u8]| {
         let mut buffer = {
-            let mut guard = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut guard = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.pop()
         }
         .unwrap_or_else(|| {
@@ -263,7 +265,9 @@ fn run_conn_global(conn: usize, pool: &Mutex<Vec<Vec<u8>>>, created: &AtomicUsiz
         let hash = frame_one(packet, &mut buffer);
         give_back_governance(&mut buffer);
         {
-            let mut guard = pool.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut guard = pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if guard.len() < GLOBAL_POOL_CAP {
                 guard.push(buffer);
             }
@@ -449,7 +453,11 @@ fn main() {
     let path = "note/report/perf/round10-frame-buffer-pool.json";
     match std::fs::File::create(path) {
         Ok(mut file) => {
-            if let Err(err) = file.write_all(serde_json::to_string_pretty(&report).unwrap_or_default().as_bytes()) {
+            if let Err(err) = file.write_all(
+                serde_json::to_string_pretty(&report)
+                    .unwrap_or_default()
+                    .as_bytes(),
+            ) {
                 eprintln!("写入报告失败: {err}");
                 std::process::exit(1);
             }

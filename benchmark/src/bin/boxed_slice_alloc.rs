@@ -125,8 +125,8 @@ fn measure(label: &str, f: impl Fn() -> Box<[u8]>) -> Tally {
     for _ in 0..ROUNDS {
         let buf = f();
         for (i, v) in buf.iter().enumerate() {
-            hash = (hash ^ (u64::from(*v).wrapping_add(i as u64)))
-                .wrapping_mul(0x0000_0100_0000_01B3);
+            hash =
+                (hash ^ (u64::from(*v).wrapping_add(i as u64))).wrapping_mul(0x0000_0100_0000_01B3);
         }
     }
     let (a1, b1) = counters();
@@ -135,7 +135,10 @@ fn measure(label: &str, f: impl Fn() -> Box<[u8]>) -> Tally {
         alloc_bytes: b1 - b0,
         content_hash: hash,
     };
-    eprintln!("{label}: 分配 {} 次 / {} B", tally.allocs, tally.alloc_bytes);
+    eprintln!(
+        "{label}: 分配 {} 次 / {} B",
+        tally.allocs, tally.alloc_bytes
+    );
     tally
 }
 
@@ -147,8 +150,8 @@ fn measure_i64(label: &str, f: impl Fn() -> Box<[i64]>) -> Tally {
     for _ in 0..ROUNDS {
         let buf = f();
         for (i, v) in buf.iter().enumerate() {
-            hash = (hash ^ ((*v as u64).wrapping_add(i as u64)))
-                .wrapping_mul(0x0000_0100_0000_01B3);
+            hash =
+                (hash ^ ((*v as u64).wrapping_add(i as u64))).wrapping_mul(0x0000_0100_0000_01B3);
         }
     }
     let (a1, b1) = counters();
@@ -157,7 +160,10 @@ fn measure_i64(label: &str, f: impl Fn() -> Box<[i64]>) -> Tally {
         alloc_bytes: b1 - b0,
         content_hash: hash,
     };
-    eprintln!("{label}: 分配 {} 次 / {} B", tally.allocs, tally.alloc_bytes);
+    eprintln!(
+        "{label}: 分配 {} 次 / {} B",
+        tally.allocs, tally.alloc_bytes
+    );
     tally
 }
 
@@ -169,8 +175,8 @@ fn measure_u16(label: &str, f: impl Fn() -> Box<[u16]>) -> Tally {
     for _ in 0..ROUNDS {
         let buf = f();
         for (i, v) in buf.iter().enumerate() {
-            hash = (hash ^ (u64::from(*v).wrapping_add(i as u64)))
-                .wrapping_mul(0x0000_0100_0000_01B3);
+            hash =
+                (hash ^ (u64::from(*v).wrapping_add(i as u64))).wrapping_mul(0x0000_0100_0000_01B3);
         }
     }
     let (a1, b1) = counters();
@@ -179,7 +185,10 @@ fn measure_u16(label: &str, f: impl Fn() -> Box<[u16]>) -> Tally {
         alloc_bytes: b1 - b0,
         content_hash: hash,
     };
-    eprintln!("{label}: 分配 {} 次 / {} B", tally.allocs, tally.alloc_bytes);
+    eprintln!(
+        "{label}: 分配 {} 次 / {} B",
+        tally.allocs, tally.alloc_bytes
+    );
     tally
 }
 
@@ -196,13 +205,11 @@ fn main() {
         && palette_legacy.content_hash == palette_new.content_hash
         && light_legacy.content_hash == light_new.content_hash;
 
-    let legacy_allocs =
-        heightmap_legacy.allocs + palette_legacy.allocs + light_legacy.allocs;
+    let legacy_allocs = heightmap_legacy.allocs + palette_legacy.allocs + light_legacy.allocs;
     let new_allocs = heightmap_new.allocs + palette_new.allocs + light_new.allocs;
     let legacy_bytes =
         heightmap_legacy.alloc_bytes + palette_legacy.alloc_bytes + light_legacy.alloc_bytes;
-    let new_bytes =
-        heightmap_new.alloc_bytes + palette_new.alloc_bytes + light_new.alloc_bytes;
+    let new_bytes = heightmap_new.alloc_bytes + palette_new.alloc_bytes + light_new.alloc_bytes;
 
     // 硬闸门：内容全等 + 新路径分配不增
     let allocs_not_worse = new_allocs <= legacy_allocs;

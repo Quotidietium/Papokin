@@ -127,7 +127,9 @@ fn per_tick_fresh(tick: usize) -> (u64, u64) {
     // 玩家快照：每 tick 新建 Vec
     let players_cache: Vec<Snapshot> = (0..PLAYERS).map(|i| player_snapshot(i, tick)).collect();
     // 方块实体活跃集：每 tick 新建 Vec
-    let block_entities: Vec<u64> = (0..BLOCK_ENTITIES).map(|i| block_entity_id(i, tick)).collect();
+    let block_entities: Vec<u64> = (0..BLOCK_ENTITIES)
+        .map(|i| block_entity_id(i, tick))
+        .collect();
 
     // 嵌套碰撞检测 O(E×P)，滚动哈希记录判定结果
     let mut collision_fp: u64 = 0xcbf2_9ce4_8422_2325;

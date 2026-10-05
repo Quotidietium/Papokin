@@ -87,7 +87,8 @@ impl Heightmap {
     fn fingerprint(&self) -> u64 {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
         for (i, v) in self.data.iter().enumerate() {
-            hash = (hash ^ ((*v as u64).wrapping_add(i as u64))).wrapping_mul(0x0000_0100_0000_01B3);
+            hash =
+                (hash ^ ((*v as u64).wrapping_add(i as u64))).wrapping_mul(0x0000_0100_0000_01B3);
         }
         hash
     }
