@@ -77,10 +77,13 @@ impl EncodedChunk {
             && self.generation == held.modification_generation()
     }
 
-    /// 条目的线上字节数（编码缓存预算记账用）
+    /// 条目的记账字节数（编码缓存预算用）：线上负载 + 条目与键的结构开销，
+    /// 避免海量小负载条目在账外堆积
     #[must_use]
     pub fn encoded_bytes(&self) -> usize {
-        self.payload.len() + self.light_payload.as_ref().map_or(0, Bytes::len)
+        const ENTRY_OVERHEAD: usize = std::mem::size_of::<EncodedChunk>()
+            + std::mem::size_of::<(JavaMinecraftVersion, Vector2<i32>)>();
+        ENTRY_OVERHEAD + self.payload.len() + self.light_payload.as_ref().map_or(0, Bytes::len)
     }
 }
 
@@ -237,6 +240,15 @@ impl SharedChunkEncodeCache {
                     evicted += 1;
                 }
             }
+        }
+
+        // 大规模逐出后整体回收桶数组：dashmap 的 remove 只减计数不缩桶，
+        // 探索期爬升过的桶容量会永远驻留。此处无任何分片守卫在手（上面的
+        // iter/remove 均已结束），shrink_to_fit 逐分片顺序加写锁，单次停顿
+        // 为微秒级；pruning CAS 仍持，不会有并发 prune 与之重叠。
+        // 4 倍迟滞与 capacity 衰减原语同阈，避免稳态反复收缩-重分配抖动。
+        if evicted > 0 && self.map.capacity() > self.map.len() * 4 + 64 {
+            self.map.shrink_to_fit();
         }
 
         self.pruning.store(false, Relaxed);
@@ -744,6 +756,61 @@ mod tests {
         assert_eq!(evicted, 3, "三条死条目应全部清扫: {evicted}");
         assert_eq!(cache.len(), 0);
         assert_eq!(cache.total_bytes(), 0, "清扫后记账应归零");
+    }
+
+    #[test]
+    fn prune_reclaims_bucket_capacity_after_mass_eviction() {
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let center = Vector2::new(0, 0);
+        let cache = SharedChunkEncodeCache::new();
+
+        // 千级条目把桶数组撑到远超空置需求（模拟探索期爬升）
+        let coords: Vec<(i32, i32)> = (0..32).flat_map(|x| (0..32).map(move |z| (x, z))).collect();
+        let chunks = prepared_chunks(&coords);
+        let batch = batch_of(&chunks, version);
+        let encoded = encode(&batch, &cache);
+        assert_eq!(encoded.len(), 1024);
+        let cap_before = cache.map.capacity();
+
+        // 释放区块强引用使弱引用全部失效，预算 0 触发全量死条目清扫
+        drop(encoded);
+        drop(chunks);
+        let evicted = cache.prune_if_over_budget(&[center], 0);
+        assert_eq!(evicted, 1024, "死条目应全部清扫: {evicted}");
+
+        let cap_after = cache.map.capacity();
+        assert!(
+            cap_after.saturating_mul(4) <= cap_before,
+            "全量清扫后桶容量应至少回收 4 倍: {cap_before} -> {cap_after}"
+        );
+    }
+
+    #[test]
+    fn prune_keeps_buckets_within_hysteresis() {
+        let version = JavaMinecraftVersion::V_1_21_11;
+        let center = Vector2::new(0, 0);
+        let cache = SharedChunkEncodeCache::new();
+
+        let coords: Vec<(i32, i32)> = (0..32).flat_map(|x| (0..32).map(move |z| (x, z))).collect();
+        let chunks = prepared_chunks(&coords);
+        let batch = batch_of(&chunks, version);
+        let encoded = encode(&batch, &cache);
+        assert_eq!(encoded.len(), 1024);
+        let cap_before = cache.map.capacity();
+
+        // 区块保持存活（距离逐出路径）；预算令目标 ≈ 总量 79%，
+        // 仅逐出约两成最远条目，占用远高于 4 倍迟滞线
+        let total = cache.total_bytes();
+        let max = total * 99 / 100;
+        let evicted = cache.prune_if_over_budget(&[center], max);
+        assert!(evicted > 0, "应有部分条目被逐出");
+        assert!(evicted < 1024 / 2, "不应逐出过半: {evicted}");
+        assert_eq!(
+            cache.map.capacity(),
+            cap_before,
+            "迟滞线内的部分逐出不得收缩桶容量"
+        );
+        drop(encoded);
     }
 
     #[test]
