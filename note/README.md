@@ -2,7 +2,7 @@
 
 > 基线：2026-09-19 由 codebase-analyzer 技能生成（采样深度分析模式），此后随代码演进持续修订。
 > 范围：`F:\Github\repo\Papokin` 全仓库，**排除 `REF/` 参考资料目录**（用户指定）
-> 规模：19 个 workspace 成员（17 crate + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2801 个 Rust 文件 · 约 142.5 万行 · 测试基线 1185 通过（2026-10-03）
+> 规模：20 个 workspace 成员（17 生产 crate + benchmark + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2825 个 Rust 文件 · 约 143.8 万行 · 测试基线 1226 通过（2026-10-06）
 >
 > **快照说明**：01–06 为架构分析文档，已随 Bedrock 移除与 Papokin 改名同步修订；其中 `文件:行号` 形式的证据标注可能随代码演进漂移，论断以就近代码为准。历史记录类文档（07–11、13–15）按成文时点保留，记录中的旧状态是其历史事实的一部分。
 
