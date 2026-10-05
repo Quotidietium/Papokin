@@ -6,6 +6,7 @@
 
     python tools/clean_stale_artifacts.py           # 干跑预览
     python tools/clean_stale_artifacts.py --apply   # 执行清理
+    python tools/clean_stale_artifacts.py --apply --keep 1  # 深度档
 
 规则（按安全性从高到低，与 AGENTS.md「编译缓存清理」一致，只动纯缓存，
 绝不动 deps 里在册可复用产物、dist/、~/.cargo/registry）：
@@ -39,6 +40,14 @@ bug——① ``find_targets`` 只检查子目录的 ``target``，仓库根自己
 （``papokin-data-<hash>``）的差异，多词 crate 永远匹配不上，一旦修好
 ①就会把在册产物误判成孤儿大规模误删。本轮修复两处并把键名比较统一
 为归一化形式，同时新增规则 4 清理同日多轮门禁积累的被取代哈希簇。
+
+2026-10-06 新增 ``--keep`` 参数（默认仍 2）：``--keep 1`` 深度档在版本
+递增后清掉上一代指纹的全部 deps（该代确认不会复用，代价仅为 checkout
+回旧提交重建时重编）。首次深度实跑：常规档 1.76 GB + 深度档 7.28 GB
+（大头为两代 debug 主 crate rlib 各 ~1.08 GB 与旧 test exe），另删
+``target/cpu-repro``（note/16 已定案的诊断物料 102 MB）；target 总量
+20 GB → 12 GB；清理后 ``cargo check`` 增量命中 12 秒，无误删。
+``target/papo-ref``（Papo 对拍环境）为活的分析基准，保留不动。
 """
 
 from __future__ import annotations
@@ -115,12 +124,12 @@ def unit_kind(fp_unit_dir: str) -> str:
     return "other"
 
 
-def scan_profile(profile_dir: str) -> list[str]:
+def scan_profile(profile_dir: str, keep: int = KEEP_PER_UNIT) -> list[str]:
     """返回该 profile（如 target/debug）下确认不会复用的条目路径。
 
     deps 条目按 (crate, hash) 聚簇：指纹键缺失的整簇判孤儿（规则 3）；
     指纹在册的按 (crate, 单元种类, 产物签名) 分组，组内保最新
-    KEEP_PER_UNIT 簇，更旧的整簇连同指纹目录一起删除（规则 4）。
+    ``keep`` 簇，更旧的整簇连同指纹目录一起删除（规则 4）。
     """
     stale: list[str] = []
     fp_dir = os.path.join(profile_dir, ".fingerprint")
@@ -168,7 +177,7 @@ def scan_profile(profile_dir: str) -> list[str]:
         for _group, members in superseded.items():
             members.sort(key=lambda c: c["mtime"], reverse=True)
             newest_mtime = members[0]["mtime"]
-            for cluster in members[KEEP_PER_UNIT:]:
+            for cluster in members[keep:]:
                 if newest_mtime - cluster["mtime"] < FRESH_MARGIN_SECONDS:
                     continue  # 同批产出，可能仍是并发在册单元，保留
                 stale.extend(cluster["files"])
@@ -206,6 +215,13 @@ def find_targets(root: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="清理 cargo 陈旧构建产物（默认干跑）")
     parser.add_argument("--apply", action="store_true", help="真正删除（默认只统计）")
+    parser.add_argument(
+        "--keep",
+        type=int,
+        default=KEEP_PER_UNIT,
+        help=f"每组保留的最新哈希簇数（默认 {KEEP_PER_UNIT}；"
+        "--keep 1 为深度档，版本递增后清掉上一代，代价是回退重建需重编）",
+    )
     args = parser.parse_args()
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -232,7 +248,7 @@ def main() -> int:
                 if os.path.isdir(os.path.join(pdir, "deps")) or os.path.isdir(
                     os.path.join(pdir, ".fingerprint")
                 ):
-                    to_delete.update(scan_profile(pdir))
+                    to_delete.update(scan_profile(pdir, args.keep))
 
     total = sum(path_size(p) for p in to_delete)
     verb = "删除" if args.apply else "可释放（干跑，加 --apply 执行）"
