@@ -1,0 +1,72 @@
+{
+  "gates": [
+    {
+      "detail": "实体 0x1f499e1388c3e8a2、计划刻 0x48194f0f147dd85e、方块实体 0xe6bffa6994bc4688（收尾一致：true）",
+      "name": "指纹全等",
+      "pass": true
+    },
+    {
+      "detail": "无收缩 1182752 B vs 收缩 229376 B（5.2×）",
+      "name": "实体表桶驻留 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "无收缩 2483840 B vs 收缩 157696 B（15.8×）",
+      "name": "计划刻+方块实体桶驻留 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "总 3 次，再波动 0 次",
+      "name": "收缩事件 ≤ 3 且再波动零收缩",
+      "pass": true
+    },
+    {
+      "detail": "全程分配：无收缩 26 vs 收缩 32（差值 6）",
+      "name": "额外分配 ≤ 32",
+      "pass": true
+    }
+  ],
+  "no_shrink": {
+    "allocs_total": 26,
+    "fingerprint_final": "(10187889983966045400, 9903610876513050299, 6479771276495951357)",
+    "fingerprint_mid": "(2254506895211751586, 5195270571335473246, 16627283680649037448)",
+    "retained_final_bytes": [
+      1236928,
+      209544,
+      2276200
+    ],
+    "retained_mid_bytes": [
+      1182752,
+      208280,
+      2275560
+    ]
+  },
+  "pass": true,
+  "round": 22,
+  "shrunk": {
+    "allocs_total": 32,
+    "fingerprint_final": "(10187889983966045400, 9903610876513050299, 6479771276495951357)",
+    "fingerprint_mid": "(2254506895211751586, 5195270571335473246, 16627283680649037448)",
+    "retained_final_bytes": [
+      458752,
+      28672,
+      286720
+    ],
+    "retained_mid_bytes": [
+      229376,
+      14336,
+      143360
+    ],
+    "shrink_after_rechurn": 0,
+    "shrink_events": 3
+  },
+  "theme": "实体/计划刻/方块实体三表峰值桶驻留回收",
+  "workload": {
+    "be_survivor_ratio": 0.1,
+    "block_entities_peak": 30000,
+    "clean_slack": 4096,
+    "entity_peak": 50000,
+    "entity_survivor_ratio": 0.1,
+    "sched_peak": 20000
+  }
+}
