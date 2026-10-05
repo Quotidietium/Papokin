@@ -1,0 +1,55 @@
+{
+  "decayed": {
+    "allocs_total": 224,
+    "fingerprint": "0xb1fa838b50bd58ca",
+    "retained_after_spike_bytes": 37888,
+    "retained_final_bytes": 37888,
+    "shrink_after_tick100": 0,
+    "shrink_events": 24
+  },
+  "gates": [
+    {
+      "detail": "无衰减 0xb1fa838b50bd58ca vs 衰减 0xb1fa838b50bd58ca",
+      "name": "指纹全等",
+      "pass": true
+    },
+    {
+      "detail": "无衰减 2883584 B vs 衰减 37888 B（76.1×）",
+      "name": "尖峰后驻留 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "无衰减 2883584 B vs 衰减 37888 B（76.1×）",
+      "name": "收尾驻留 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "总 24 次（上界 24），第 100 tick 后 0 次",
+      "name": "收缩有界且稳态零收缩",
+      "pass": true
+    },
+    {
+      "detail": "全程分配：无衰减 200 vs 衰减 224（差值 24）",
+      "name": "额外分配 ≤ 64",
+      "pass": true
+    }
+  ],
+  "no_decay": {
+    "allocs_total": 200,
+    "fingerprint": "0xb1fa838b50bd58ca",
+    "retained_after_spike_bytes": 2883584,
+    "retained_final_bytes": 2883584
+  },
+  "pass": true,
+  "round": 23,
+  "theme": "线程局部暂存的用后容量衰减",
+  "workload": {
+    "box_spike": 4096,
+    "box_steady": 48,
+    "collision_spike": 8192,
+    "collision_steady": 32,
+    "spike_tick": 10,
+    "threads": 8,
+    "ticks": 600
+  }
+}
