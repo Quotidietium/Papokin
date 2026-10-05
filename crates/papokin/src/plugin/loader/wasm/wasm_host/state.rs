@@ -290,10 +290,11 @@ impl PluginHostState {
     }
 
     /// 派发成功：结束记录并丢弃记录（不重放，避免误删访客持有的
-    /// 活句柄——资源已按正常生命周期释放）。
+    /// 活句柄——资源已按正常生命周期释放）。容量按衰减策略回收：
+    /// 大派发撑大的向量在下一轮小派发即缩回（4× 滞回稳态零抖动）。
     pub fn end_dispatch_guard_success(&mut self) {
         self.dispatch_guard_depth = self.dispatch_guard_depth.saturating_sub(1);
-        self.dispatch_guard.clear();
+        papokin_util::capacity::decay_clear_vec(&mut self.dispatch_guard);
     }
 
     /// 派发失败（访客 trap/panic/宿主降载失败）：重放回收全部被
@@ -981,5 +982,29 @@ mod tests {
                 .expect("软限低于硬上限，push 必须成功");
         }
         assert!(state.resource_table_exceeds_dispatch_soft_limit());
+    }
+
+    /// 护栏向量容量衰减（与 `end_dispatch_guard_success` 同规则
+    /// `decay_clear_vec`）：尖峰派发在 4× 滞回带内不缩，下一轮小
+    /// 规模派发即回收，防止一次大派发永久撑大每插件驻留。
+    #[test]
+    fn dispatch_guard_decay_reclaims_spike_capacity_next_round() {
+        let mut guard: Vec<ResourceTableDeleter> = Vec::new();
+        for _ in 0..1000 {
+            guard.push(Box::new(|_| {}));
+        }
+        papokin_util::capacity::decay_clear_vec(&mut guard);
+        assert!(
+            guard.capacity() >= 1000,
+            "尖峰轮容量 {} 应在滞回带内不收缩",
+            guard.capacity()
+        );
+        guard.push(Box::new(|_| {}));
+        papokin_util::capacity::decay_clear_vec(&mut guard);
+        assert!(
+            guard.capacity() <= 128,
+            "小轮应缩到 len+64 附近，实际 {}",
+            guard.capacity()
+        );
     }
 }
