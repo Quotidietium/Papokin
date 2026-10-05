@@ -2428,11 +2428,10 @@ mod tests {
         map.register(name, &sourced_handler("plugin_b"), None);
         map.unregister_source("plugin_a");
         let vec = map.handlers_for(name).unwrap();
-        {
-            let guard = vec.load();
-            assert_eq!(guard.len(), 1);
-            assert_eq!(guard[0].source(), Some("plugin_b"));
-        }
+        let guard = vec.load();
+        assert_eq!(guard.len(), 1);
+        assert_eq!(guard[0].source(), Some("plugin_b"));
+        drop(guard);
         // 退订另一来源后向量为空：键保留但对读取方等价缺键
         map.unregister_source("plugin_b");
         assert!(!map.has_handlers(name));
@@ -2443,7 +2442,11 @@ mod tests {
         let map = HandlerMap::default();
         let name = "test_event";
         assert!(!map.has_handlers(name));
-        map.register(name, &dummy_handler(EventPriority::Normal, true, false), None);
+        map.register(
+            name,
+            &dummy_handler(EventPriority::Normal, true, false),
+            None,
+        );
         assert!(map.has_handlers(name));
     }
 
