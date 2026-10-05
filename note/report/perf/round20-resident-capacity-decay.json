@@ -1,0 +1,57 @@
+{
+  "decayed": {
+    "allocs_total": 4616,
+    "bytes_total": 17050176,
+    "fingerprint": "0x5767d6608803ed31",
+    "late_allocs": 0,
+    "retained_after_burst_bytes": 8073216,
+    "retained_final_bytes": 1896192,
+    "steady_allocs": 216
+  },
+  "gates": [
+    {
+      "detail": "无衰减 0x5767d6608803ed31 vs 衰减 0x5767d6608803ed31",
+      "name": "指纹全等",
+      "pass": true
+    },
+    {
+      "detail": "无衰减 8073216 B vs 衰减 8073216 B",
+      "name": "尖峰末保留一致",
+      "pass": true
+    },
+    {
+      "detail": "无衰减 8073216 B vs 衰减 1896192 B（4.3×）",
+      "name": "收尾保留容量 ≥4× 回收",
+      "pass": true
+    },
+    {
+      "detail": "稳态时代分配：无衰减 0 vs 衰减 216（差值 216）",
+      "name": "一次性收缩波 ≤ 232",
+      "pass": true
+    },
+    {
+      "detail": "第 100 tick 后分配：无衰减 0 vs 衰减 0（差值 0）",
+      "name": "晚段稳态零抖动",
+      "pass": true
+    }
+  ],
+  "no_decay": {
+    "allocs_total": 4400,
+    "bytes_total": 15977152,
+    "fingerprint": "0x5767d6608803ed31",
+    "late_allocs": 0,
+    "retained_after_burst_bytes": 8073216,
+    "retained_final_bytes": 8073216,
+    "steady_allocs": 0
+  },
+  "pass": true,
+  "round": 20,
+  "theme": "驻留缓冲容量衰减治理（负载尖峰后的保留容量回收）",
+  "workload": {
+    "burst": "10000变更/200节×50 + 400事件 + 批500×50玩家",
+    "burst_ticks": 10,
+    "players": 50,
+    "steady": "400变更/60节×7 + 80事件 + 批24×50玩家",
+    "ticks": 600
+  }
+}
