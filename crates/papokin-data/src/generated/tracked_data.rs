@@ -26570,14 +26570,14 @@ pub mod firework_rocket {
     };
     pub const DATA_ATTACHED_TO_TARGET: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
+            v1_21: 9u8,
+            v1_21_2: 9u8,
+            v1_21_4: 9u8,
+            v1_21_5: 9u8,
+            v1_21_6: 9u8,
+            v1_21_7: 9u8,
+            v1_21_9: 9u8,
+            v1_21_11: 9u8,
             v26_1: 9u8,
             v26_2: 9u8,
             v26_3: 9u8,
@@ -26618,22 +26618,6 @@ pub mod firework_rocket {
     };
     pub const DATA_ID_FIREWORKS_ITEM: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
-            v26_1: 8u8,
-            v26_2: 8u8,
-            v26_3: 8u8,
-        },
-        r#type: MetaDataType::ITEM_STACK,
-    };
-    pub const DATA_ITEM: TrackedData = TrackedData {
-        id: TrackedId {
             v1_21: 8u8,
             v1_21_2: 8u8,
             v1_21_4: 8u8,
@@ -26642,9 +26626,9 @@ pub mod firework_rocket {
             v1_21_7: 8u8,
             v1_21_9: 8u8,
             v1_21_11: 8u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
+            v26_1: 8u8,
+            v26_2: 8u8,
+            v26_3: 8u8,
         },
         r#type: MetaDataType::ITEM_STACK,
     };
@@ -26698,14 +26682,14 @@ pub mod firework_rocket {
     };
     pub const DATA_SHOT_AT_ANGLE: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
+            v1_21: 10u8,
+            v1_21_2: 10u8,
+            v1_21_4: 10u8,
+            v1_21_5: 10u8,
+            v1_21_6: 10u8,
+            v1_21_7: 10u8,
+            v1_21_9: 10u8,
+            v1_21_11: 10u8,
             v26_1: 10u8,
             v26_2: 10u8,
             v26_3: 10u8,
@@ -26744,57 +26728,27 @@ pub mod firework_rocket {
         },
         r#type: MetaDataType::INT,
     };
-    pub const SHOOTER_ENTITY_ID: TrackedData = TrackedData {
-        id: TrackedId {
-            v1_21: 9u8,
-            v1_21_2: 9u8,
-            v1_21_4: 9u8,
-            v1_21_5: 9u8,
-            v1_21_6: 9u8,
-            v1_21_7: 9u8,
-            v1_21_9: 9u8,
-            v1_21_11: 9u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
-        },
-        r#type: MetaDataType::OPTIONAL_UNSIGNED_INT,
-    };
-    pub const SHOT_AT_ANGLE: TrackedData = TrackedData {
-        id: TrackedId {
-            v1_21: 10u8,
-            v1_21_2: 10u8,
-            v1_21_4: 10u8,
-            v1_21_5: 10u8,
-            v1_21_6: 10u8,
-            v1_21_7: 10u8,
-            v1_21_9: 10u8,
-            v1_21_11: 10u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
-        },
-        r#type: MetaDataType::BOOLEAN,
-    };
     pub const AIR_SUPPLY_ID: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const DATA_AIR_SUPPLY: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const AIR_SUPPLY: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const AIR: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const ATTACHED_TO_TARGET: TrackedData = DATA_ATTACHED_TO_TARGET;
+    pub const SHOOTER_ENTITY_ID: TrackedData = DATA_ATTACHED_TO_TARGET;
     pub const CUSTOM_NAME: TrackedData = DATA_CUSTOM_NAME;
     pub const CUSTOM_NAME_VISIBLE: TrackedData = DATA_CUSTOM_NAME_VISIBLE;
     pub const ID_FIREWORKS_ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
-    pub const ITEM: TrackedData = DATA_ITEM;
-    pub const STACK: TrackedData = DATA_ITEM;
+    pub const DATA_ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
+    pub const ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
+    pub const STACK: TrackedData = DATA_ID_FIREWORKS_ITEM;
     pub const NO_GRAVITY: TrackedData = DATA_NO_GRAVITY;
     pub const POSE: TrackedData = DATA_POSE;
     pub const SHARED_FLAGS_ID: TrackedData = DATA_SHARED_FLAGS_ID;
     pub const DATA_SHARED_FLAGS: TrackedData = DATA_SHARED_FLAGS_ID;
     pub const SHARED_FLAGS: TrackedData = DATA_SHARED_FLAGS_ID;
+    pub const SHOT_AT_ANGLE: TrackedData = DATA_SHOT_AT_ANGLE;
     pub const SILENT: TrackedData = DATA_SILENT;
     pub const TICKS_FROZEN: TrackedData = DATA_TICKS_FROZEN;
     pub const FROZEN_TICKS: TrackedData = DATA_TICKS_FROZEN;
-    pub const SHOOTER_ENTITY: TrackedData = SHOOTER_ENTITY_ID;
 }
 pub mod firework_rocket_entity {
     use super::*;
@@ -26816,14 +26770,14 @@ pub mod firework_rocket_entity {
     };
     pub const DATA_ATTACHED_TO_TARGET: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
+            v1_21: 9u8,
+            v1_21_2: 9u8,
+            v1_21_4: 9u8,
+            v1_21_5: 9u8,
+            v1_21_6: 9u8,
+            v1_21_7: 9u8,
+            v1_21_9: 9u8,
+            v1_21_11: 9u8,
             v26_1: 9u8,
             v26_2: 9u8,
             v26_3: 9u8,
@@ -26864,22 +26818,6 @@ pub mod firework_rocket_entity {
     };
     pub const DATA_ID_FIREWORKS_ITEM: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
-            v26_1: 8u8,
-            v26_2: 8u8,
-            v26_3: 8u8,
-        },
-        r#type: MetaDataType::ITEM_STACK,
-    };
-    pub const DATA_ITEM: TrackedData = TrackedData {
-        id: TrackedId {
             v1_21: 8u8,
             v1_21_2: 8u8,
             v1_21_4: 8u8,
@@ -26888,9 +26826,9 @@ pub mod firework_rocket_entity {
             v1_21_7: 8u8,
             v1_21_9: 8u8,
             v1_21_11: 8u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
+            v26_1: 8u8,
+            v26_2: 8u8,
+            v26_3: 8u8,
         },
         r#type: MetaDataType::ITEM_STACK,
     };
@@ -26944,14 +26882,14 @@ pub mod firework_rocket_entity {
     };
     pub const DATA_SHOT_AT_ANGLE: TrackedData = TrackedData {
         id: TrackedId {
-            v1_21: 255u8,
-            v1_21_2: 255u8,
-            v1_21_4: 255u8,
-            v1_21_5: 255u8,
-            v1_21_6: 255u8,
-            v1_21_7: 255u8,
-            v1_21_9: 255u8,
-            v1_21_11: 255u8,
+            v1_21: 10u8,
+            v1_21_2: 10u8,
+            v1_21_4: 10u8,
+            v1_21_5: 10u8,
+            v1_21_6: 10u8,
+            v1_21_7: 10u8,
+            v1_21_9: 10u8,
+            v1_21_11: 10u8,
             v26_1: 10u8,
             v26_2: 10u8,
             v26_3: 10u8,
@@ -26990,57 +26928,27 @@ pub mod firework_rocket_entity {
         },
         r#type: MetaDataType::INT,
     };
-    pub const SHOOTER_ENTITY_ID: TrackedData = TrackedData {
-        id: TrackedId {
-            v1_21: 9u8,
-            v1_21_2: 9u8,
-            v1_21_4: 9u8,
-            v1_21_5: 9u8,
-            v1_21_6: 9u8,
-            v1_21_7: 9u8,
-            v1_21_9: 9u8,
-            v1_21_11: 9u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
-        },
-        r#type: MetaDataType::OPTIONAL_UNSIGNED_INT,
-    };
-    pub const SHOT_AT_ANGLE: TrackedData = TrackedData {
-        id: TrackedId {
-            v1_21: 10u8,
-            v1_21_2: 10u8,
-            v1_21_4: 10u8,
-            v1_21_5: 10u8,
-            v1_21_6: 10u8,
-            v1_21_7: 10u8,
-            v1_21_9: 10u8,
-            v1_21_11: 10u8,
-            v26_1: 255u8,
-            v26_2: 255u8,
-            v26_3: 255u8,
-        },
-        r#type: MetaDataType::BOOLEAN,
-    };
     pub const AIR_SUPPLY_ID: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const DATA_AIR_SUPPLY: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const AIR_SUPPLY: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const AIR: TrackedData = DATA_AIR_SUPPLY_ID;
     pub const ATTACHED_TO_TARGET: TrackedData = DATA_ATTACHED_TO_TARGET;
+    pub const SHOOTER_ENTITY_ID: TrackedData = DATA_ATTACHED_TO_TARGET;
     pub const CUSTOM_NAME: TrackedData = DATA_CUSTOM_NAME;
     pub const CUSTOM_NAME_VISIBLE: TrackedData = DATA_CUSTOM_NAME_VISIBLE;
     pub const ID_FIREWORKS_ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
-    pub const ITEM: TrackedData = DATA_ITEM;
-    pub const STACK: TrackedData = DATA_ITEM;
+    pub const DATA_ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
+    pub const ITEM: TrackedData = DATA_ID_FIREWORKS_ITEM;
+    pub const STACK: TrackedData = DATA_ID_FIREWORKS_ITEM;
     pub const NO_GRAVITY: TrackedData = DATA_NO_GRAVITY;
     pub const POSE: TrackedData = DATA_POSE;
     pub const SHARED_FLAGS_ID: TrackedData = DATA_SHARED_FLAGS_ID;
     pub const DATA_SHARED_FLAGS: TrackedData = DATA_SHARED_FLAGS_ID;
     pub const SHARED_FLAGS: TrackedData = DATA_SHARED_FLAGS_ID;
+    pub const SHOT_AT_ANGLE: TrackedData = DATA_SHOT_AT_ANGLE;
     pub const SILENT: TrackedData = DATA_SILENT;
     pub const TICKS_FROZEN: TrackedData = DATA_TICKS_FROZEN;
     pub const FROZEN_TICKS: TrackedData = DATA_TICKS_FROZEN;
-    pub const SHOOTER_ENTITY: TrackedData = SHOOTER_ENTITY_ID;
 }
 pub mod fishing_bobber {
     use super::*;

@@ -32,6 +32,18 @@ pub trait ItemBehaviour: Send + Sync {
         self.normal_use(item, player);
     }
 
+    /// 按实际使用的手处理物品，保留既有行为的旋转入口。
+    fn normal_use_in_hand(
+        &self,
+        stack: &ItemStack,
+        player: &Player,
+        _hand: papokin_util::Hand,
+        yaw: f32,
+        pitch: f32,
+    ) {
+        self.normal_use_with_rotation(stack.item, player, yaw, pitch);
+    }
+
     #[expect(clippy::too_many_arguments)]
     fn use_on_block(
         &self,

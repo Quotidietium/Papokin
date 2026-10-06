@@ -71,8 +71,19 @@ pub(crate) fn build() -> TokenStream {
                     .or_default()
                     .insert(entity);
             }
-            let dest: &mut BTreeMap<String, RawTrackedField> = merged.entry(canonical).or_default();
+            let dest: &mut BTreeMap<String, RawTrackedField> =
+                merged.entry(canonical.clone()).or_default();
             for (name, info) in fields {
+                // 烟花物品字段在 Yarn 与 Mojang 资源中名称不同。
+                let name = if matches!(
+                    canonical.as_str(),
+                    "firework_rocket" | "firework_rocket_entity"
+                ) && name == "ITEM"
+                {
+                    "DATA_ID_FIREWORKS_ITEM".to_string()
+                } else {
+                    name
+                };
                 dest.insert(name, info);
             }
         }
@@ -373,6 +384,8 @@ fn canonicalize_tracked_field_name(name: &str) -> String {
         "SILENT" => "DATA_SILENT".to_string(),
         "NO_GRAVITY" => "DATA_NO_GRAVITY".to_string(),
         "POSE" => "DATA_POSE".to_string(),
+        "SHOT_AT_ANGLE" => "DATA_SHOT_AT_ANGLE".to_string(),
+        "SHOOTER_ENTITY_ID" | "ATTACHED_TO_TARGET" => "DATA_ATTACHED_TO_TARGET".to_string(),
         "FROZEN_TICKS" => "DATA_TICKS_FROZEN".to_string(),
         "LIVING_FLAGS" => "DATA_LIVING_ENTITY_FLAGS".to_string(),
         "HEALTH" => "DATA_HEALTH_ID".to_string(),
@@ -491,6 +504,12 @@ fn is_valid_ident(name: &str) -> bool {
 
 fn add_semantic_aliases(entity: &str, field: &str, aliases: &mut Vec<String>) {
     match (entity, field) {
+        ("firework_rocket" | "firework_rocket_entity", "DATA_ATTACHED_TO_TARGET") => {
+            aliases.push("SHOOTER_ENTITY_ID".to_string());
+        }
+        ("firework_rocket" | "firework_rocket_entity", "DATA_ID_FIREWORKS_ITEM") => {
+            aliases.extend(["DATA_ITEM", "ITEM", "STACK"].map(str::to_string));
+        }
         (_, "DATA_LIVING_ENTITY_FLAGS") => {
             aliases.push("LIVING_FLAGS".to_string());
         }
@@ -674,6 +693,28 @@ mod tests {
         assert!(flags.contains("v1_21 : 8u8"));
         assert!(flags.contains("v1_21_11 : 8u8"));
         assert!(flags.contains("v26_1 : 8u8"));
+    }
+
+    #[test]
+    fn firework_attachment_merges_all_protocol_versions() {
+        let generated = build().to_string();
+        let attachment = field_body(&generated, "firework_rocket", "DATA_ATTACHED_TO_TARGET");
+        let item = field_body(&generated, "firework_rocket", "DATA_ID_FIREWORKS_ITEM");
+        let angle = field_body(&generated, "firework_rocket", "DATA_SHOT_AT_ANGLE");
+        for version in ["v1_21", "v1_21_11", "v26_1", "v26_3"] {
+            assert!(
+                item.contains(&format!("{version} : 8u8")),
+                "烟花物品字段缺失：{item}"
+            );
+            assert!(
+                angle.contains(&format!("{version} : 10u8")),
+                "烟花发射角度字段缺失：{angle}"
+            );
+            assert!(
+                attachment.contains(&format!("{version} : 9u8")),
+                "烟花绑定字段缺失：{attachment}"
+            );
+        }
     }
 
     fn field_body(generated: &str, module: &str, field: &str) -> String {

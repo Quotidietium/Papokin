@@ -743,7 +743,7 @@ impl DispenserBlock {
     }
 
     fn dispense_firework_rocket(ctx: &DispenseContext<'_>, item: &mut ItemStack) {
-        let _ = item.split(1);
+        let rocket_stack = item.split(1);
         let facing = to_normal(ctx.facing);
         // 原版把烟花生成在更靠近发射器出口面且略高于中心的位置。
         let position = ctx
@@ -769,6 +769,7 @@ impl DispenserBlock {
                 Self::FIREWORK_PROJECTILE_POWER,
                 Self::FIREWORK_PROJECTILE_POWER,
             );
+        rocket.set_item_stack(rocket_stack);
         let rocket_entity = rocket.get_entity();
         rocket_entity.set_velocity(velocity);
         rocket_entity.set_rotation(
