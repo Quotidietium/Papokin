@@ -1882,7 +1882,6 @@ impl World {
     #[expect(clippy::too_many_lines)]
     pub fn tick_chunks(self: &Arc<Self>, server: &Arc<Server>) {
         const BATCH_SIZE: usize = 32;
-        const SPAWN_BATCH_SIZE: usize = 32;
         const INHABITED_TIME_BATCH_SIZE: usize = 1024;
         // 单刻执行的方块刻/流体刻上限（对齐原版 65536）：超出部分按原
         // 优先级以 0 延迟顺延到下一游戏刻。缺少上限时，敌意构造的刻积压
@@ -2054,7 +2053,7 @@ impl World {
             &mut tick_scratch.spawning_categories,
         );
 
-        // 5. 通过 Rayon 并行执行区块生成器
+        // 5. 按随机区块顺序执行自然生成并即时更新数量预算
         if !tick_scratch.spawning_categories.is_empty() {
             decay_clear_vec(&mut tick_scratch.spawning_chunks);
             for pos in active_chunks.iter() {
@@ -2067,30 +2066,15 @@ impl World {
 
             let world = self.clone();
             let spawn_handle = handle;
-            let spawn_batch = |batch: &[(Vector2<i32>, SyncChunk)]| {
-                let _guard = spawn_handle.enter();
-                let world = world.clone();
-                let s_state = spawn_state.clone();
-                for (pos, chunk) in batch {
-                    world.tick_spawning_chunk(
-                        *pos,
-                        chunk,
-                        &tick_scratch.spawning_categories,
-                        &s_state,
-                    );
-                }
-            };
-            // 少量候选区块直接串行；大批次再摊给 Rayon 池
-            if tick_scratch.spawning_chunks.len() <= 2 * SPAWN_BATCH_SIZE {
-                tick_scratch
-                    .spawning_chunks
-                    .chunks(SPAWN_BATCH_SIZE)
-                    .for_each(spawn_batch);
-            } else {
-                tick_scratch
-                    .spawning_chunks
-                    .par_chunks(SPAWN_BATCH_SIZE)
-                    .for_each(spawn_batch);
+            // 自然生成按区块串行提交，确保全局/局部预算和势能在下一次尝试前更新。
+            let _guard = spawn_handle.enter();
+            for (pos, chunk) in &tick_scratch.spawning_chunks {
+                world.tick_spawning_chunk(
+                    *pos,
+                    chunk,
+                    &tick_scratch.spawning_categories,
+                    &spawn_state,
+                );
             }
         }
 
@@ -2511,7 +2495,7 @@ impl World {
             return;
         }
         // TODO this.level.canSpawnEntitiesInChunk(chunkPos)
-        let entities = spawn_for_chunk(
+        spawn_for_chunk(
             self,
             chunk_pos,
             chunk,
@@ -2519,27 +2503,6 @@ impl World {
             spawn_list,
             is_thundering,
         );
-        for entity in entities {
-            // 自然生成闸门：插件可否决个别生成。
-            let mut spawn_event =
-                crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
-                    entity_id: entity.get_entity().entity_id,
-                    entity_type: entity.get_entity().entity_type.resource_name.to_string(),
-                    position: entity.get_entity().pos.load(),
-                    world: self.clone(),
-                    spawn_reason: "NATURAL".to_string(),
-                    cancelled: false,
-                };
-            if let Some(server) = self.server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut spawn_event);
-            }
-            if spawn_event.cancelled {
-                continue;
-            }
-            self.spawn_entity_non_save(entity);
-        }
     }
 
     pub fn get_world_age(&self) -> i64 {

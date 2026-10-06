@@ -3,7 +3,6 @@ use crate::entity::EntityBase;
 use crate::entity::r#type::{check_spawn_rules, from_type};
 use crate::world::World;
 use arc_swap::ArcSwap;
-use crossbeam::atomic::AtomicCell;
 use dashmap::DashMap;
 use papokin_data::biome::Spawner;
 use papokin_data::chunk::Biome;
@@ -23,7 +22,6 @@ use papokin_util::random::xoroshiro128::Xoroshiro;
 use papokin_util::random::{RandomImpl, get_seed};
 use papokin_world::chunk::{ChunkData, ChunkHeightmapType};
 use papokin_world::generation::proto_chunk::GenerationCache;
-use rand::seq::IndexedRandom;
 use rand::{RngExt, rng};
 use std::fmt;
 use std::sync::Arc;
@@ -187,10 +185,10 @@ struct PointCharge(BlockPos, f64);
 
 impl PointCharge {
     fn get_potential_change(&self, pos: &BlockPos) -> f64 {
-        let dx = self.0.0.x - pos.0.x;
-        let dy = self.0.0.y - pos.0.y;
-        let dz = self.0.0.z - pos.0.z;
-        let dist_sq = (dx * dx + dy * dy + dz * dz) as f64;
+        let dx = f64::from(self.0.0.x) - f64::from(pos.0.x);
+        let dy = f64::from(self.0.0.y) - f64::from(pos.0.y);
+        let dz = f64::from(self.0.0.z) - f64::from(pos.0.z);
+        let dist_sq = dx * dx + dy * dy + dz * dz;
         if dist_sq == 0.0 {
             f64::INFINITY
         } else {
@@ -256,7 +254,6 @@ pub struct SpawnState {
     pub mob_category_counts: MobCounts,
     spawn_potential: PotentialCalculator,
     local_mob_cap_calculator: LocalMobCapCalculator,
-    last_checked: AtomicCell<Option<(BlockPos, &'static EntityType, f64)>>,
 }
 
 impl Clone for SpawnState {
@@ -266,7 +263,6 @@ impl Clone for SpawnState {
             mob_category_counts: self.mob_category_counts.clone(),
             spawn_potential: self.spawn_potential.clone(),
             local_mob_cap_calculator: self.local_mob_cap_calculator.clone(),
-            last_checked: AtomicCell::new(self.last_checked.load()),
         }
     }
 }
@@ -278,7 +274,6 @@ impl fmt::Debug for SpawnState {
             .field("mob_category_counts", &self.mob_category_counts)
             .field("spawn_potential", &self.spawn_potential)
             .field("local_mob_cap_calculator", &self.local_mob_cap_calculator)
-            .field("last_checked", &self.last_checked)
             .finish()
     }
 }
@@ -291,7 +286,6 @@ impl SpawnState {
             mob_category_counts: MobCounts::default(),
             spawn_potential: PotentialCalculator::default(),
             local_mob_cap_calculator: LocalMobCapCalculator::default(),
-            last_checked: AtomicCell::new(None),
         }
     }
 
@@ -396,7 +390,6 @@ impl SpawnState {
             mob_category_counts: counter,
             spawn_potential: potential,
             local_mob_cap_calculator: local_mob_cap,
-            last_checked: AtomicCell::new(None),
         }
     }
 
@@ -426,51 +419,11 @@ impl SpawnState {
         biome
             .spawn_costs
             .get(entity_type.resource_name)
-            .map_or_else(
-                || {
-                    self.last_checked.store(Some((*pos, entity_type, 0.0)));
-                    true
-                },
-                |cost| {
-                    self.last_checked
-                        .store(Some((*pos, entity_type, cost.charge)));
-                    self.spawn_potential
-                        .get_potential_energy_change(pos, cost.charge)
-                        <= cost.energy_budget
-                },
-            )
-    }
-
-    pub fn after_spawn(
-        &self,
-        entity_type: &'static EntityType,
-        pos: &BlockPos,
-        world: &Arc<World>,
-    ) {
-        let charge = if let Some((l_pos, l_type, l_charge)) = self.last_checked.load()
-            && l_pos.eq(pos)
-            && l_type == entity_type
-        {
-            Some(l_charge)
-        } else {
-            None
-        };
-
-        let charge = charge.unwrap_or_else(|| {
-            let biome = world.level.get_rough_biome(pos);
-            biome
-                .spawn_costs
-                .get(entity_type.resource_name)
-                .map_or(0.0, |cost| cost.charge)
-        });
-
-        self.spawn_potential.add_charge(pos, charge);
-        self.mob_category_counts.add(entity_type.category);
-        self.local_mob_cap_calculator.add_mob(
-            Vector2::<i32>::new(get_section_cord(pos.0.x), get_section_cord(pos.0.z)),
-            world,
-            entity_type.category,
-        );
+            .is_none_or(|cost| {
+                self.spawn_potential
+                    .get_potential_energy_change(pos, cost.charge)
+                    <= cost.energy_budget
+            })
     }
 }
 
@@ -510,7 +463,7 @@ pub fn spawn_for_chunk(
     spawn_state: &SpawnState,
     spawn_list: &Vec<&'static MobCategory>,
     is_thundering: bool,
-) -> Vec<Arc<dyn EntityBase>> {
+) -> usize {
     // 将此生成批次关联到最近的非旁观玩家
     // 区块（原版刷怪笼仅激活玩家附近的区块）。插件
     // 可能会取消该玩家的整个批次。
@@ -540,28 +493,30 @@ pub fn spawn_for_chunk(
                 server.plugin_manager.fire_blocking(&server, &mut event);
             }
             if event.cancelled {
-                return Vec::new();
+                return 0;
             }
         }
     }
 
-    let mut entities = Vec::new();
+    let mut spawned = 0;
     for category in spawn_list {
-        if spawn_state.can_spawn_for_category_local(world, category, chunk_pos) {
+        if spawn_state.can_spawn_for_category_global(category)
+            && spawn_state.can_spawn_for_category_local(world, category, chunk_pos)
+        {
             let random_pos = get_random_pos_within(world.min_y, &chunk_pos, chunk);
             if random_pos.0.y > world.min_y {
-                entities.extend(spawn_category_for_position(
+                spawned += spawn_category_for_position(
                     category,
                     world,
                     random_pos,
                     &chunk_pos,
                     spawn_state,
                     is_thundering,
-                ));
+                );
             }
         }
     }
-    entities
+    spawned
 }
 
 pub fn get_random_pos_within(
@@ -601,7 +556,7 @@ pub fn spawn_mobs_for_chunk_generation(
     let zo = chunk_z << 4;
 
     while rand::random::<f32>() < biome.creature_spawn_probability {
-        let Some(spawner_data) = creatures.choose(&mut rand::rng()) else {
+        let Some(spawner_data) = choose_spawner(creatures, &mut rand::rng()) else {
             continue;
         };
 
@@ -790,12 +745,12 @@ pub fn spawn_category_for_position(
     chunk_pos: &Vector2<i32>,
     spawn_state: &SpawnState,
     is_thundering: bool,
-) -> Vec<Arc<dyn EntityBase>> {
-    let mut batch_buffer = Vec::new();
+) -> usize {
+    let mut spawned = 0;
     let y_start = pos.0.y;
     let state = world.get_block_state(&pos);
     if state.is_solid_block() || state.is_full_cube() {
-        return batch_buffer;
+        return spawned;
     }
 
     let mut cluster_size = 0;
@@ -809,6 +764,12 @@ pub fn spawn_category_for_position(
         let mut ll = 0;
 
         while ll < max {
+            // 每次尝试都重查预算；成功实体立即登记，下一次抽取可见最新计数。
+            if !spawn_state.can_spawn_for_category_global(category)
+                || !spawn_state.can_spawn_for_category_local(world, category, *chunk_pos)
+            {
+                return spawned;
+            }
             x += rng().random_range(0..6) - rng().random_range(0..6);
             z += rng().random_range(0..6) - rng().random_range(0..6);
             let check_pos = BlockPos::new(x, y_start, z);
@@ -874,6 +835,15 @@ pub fn spawn_category_for_position(
                 ) && spawn_state.can_spawn(entity_type, &check_pos, world)
                 {
                     let spawn_pos_f64 = Vector3::new(xx, f64::from(y_start), zz);
+                    let mut pre_event = crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
+                        spawn_pos_f64, world.clone(), format!("minecraft:{}", entity_type.resource_name), "NATURAL".to_string());
+                    if let Some(server) = world.server.upgrade() {
+                        server.plugin_manager.fire_blocking(&server, &mut pre_event);
+                    }
+                    if pre_event.cancelled {
+                        ll += 1;
+                        continue;
+                    }
                     let entity = from_type(entity_type, spawn_pos_f64, world, Uuid::new_v4());
                     entity
                         .get_entity()
@@ -886,12 +856,28 @@ pub fn spawn_category_for_position(
                     });
 
                     if is_valid_for_mob {
+                        let mut event = crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                            entity_id: entity.get_entity().entity_id,
+                            entity_type: entity_type.resource_name.to_string(),
+                            position: spawn_pos_f64,
+                            world: world.clone(),
+                            spawn_reason: "NATURAL".to_string(),
+                            cancelled: false,
+                        };
+                        if let Some(server) = world.server.upgrade() {
+                            server.plugin_manager.fire_blocking(&server, &mut event);
+                        }
+                        if event.cancelled {
+                            ll += 1;
+                            continue;
+                        }
+                        entity.init_data_tracker();
+                        world.spawn_entity_non_save(entity);
+                        spawned += 1;
                         cluster_size += 1;
                         group_size += 1;
-                        batch_buffer.push(entity);
-                        spawn_state.after_spawn(entity_type, &check_pos, world);
                         if cluster_size >= entity_type.limit_per_chunk {
-                            return batch_buffer;
+                            return spawned;
                         }
 
                         if entity_type.resource_name == "tropical_fish" && group_size >= 8 {
@@ -904,7 +890,7 @@ pub fn spawn_category_for_position(
             ll += 1;
         }
     }
-    batch_buffer
+    spawned
 }
 
 #[must_use]
@@ -987,6 +973,25 @@ pub fn can_spawn_mob_at(
     })
 }
 
+/// 使用数据包权重抽取生物；空列表和全零权重均不生成。
+fn choose_spawner<'a>(spawners: &'a [Spawner], random: &mut impl RngExt) -> Option<&'a Spawner> {
+    let total: u64 = spawners.iter().map(|entry| u64::from(entry.weight)).sum();
+    if total == 0 {
+        return None;
+    }
+    spawner_at_weight(spawners, random.random_range(0..total))
+}
+
+fn spawner_at_weight(spawners: &[Spawner], mut weight: u64) -> Option<&Spawner> {
+    for entry in spawners {
+        if weight < u64::from(entry.weight) {
+            return Some(entry);
+        }
+        weight -= u64::from(entry.weight);
+    }
+    None
+}
+
 #[must_use]
 pub fn get_random_spawn_mob_at(
     world: &Arc<World>,
@@ -1000,7 +1005,7 @@ pub fn get_random_spawn_mob_at(
     {
         None
     } else {
-        match category.id {
+        let spawners = match category.id {
             id if id == MobCategory::MONSTER.id => biome.spawners.monster,
             id if id == MobCategory::CREATURE.id => biome.spawners.creature,
             id if id == MobCategory::AMBIENT.id => biome.spawners.ambient,
@@ -1012,8 +1017,8 @@ pub fn get_random_spawn_mob_at(
             id if id == MobCategory::WATER_AMBIENT.id => biome.spawners.water_ambient,
             id if id == MobCategory::MISC.id => biome.spawners.misc,
             _ => biome.spawners.misc,
-        }
-        .choose(&mut rng())
+        };
+        choose_spawner(spawners, &mut rng())
     }
 }
 
@@ -1196,6 +1201,74 @@ fn is_burning_block(block: &Block) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawn_potential_handles_world_border_distances() {
+        let charge = PointCharge(BlockPos::new(-29_999_984, 64, 0), 1.0);
+        let energy = charge.get_potential_change(&BlockPos::new(29_999_984, 64, 0));
+        assert!(energy.is_finite() && energy > 0.0);
+        assert_eq!(charge.get_potential_change(&charge.0), f64::INFINITY);
+    }
+
+    #[test]
+    fn weighted_spawn_ranges_preserve_vanilla_rarity() {
+        let entries = [
+            Spawner {
+                r#type: "minecraft:zombie",
+                weight: 100,
+                min_count: 4,
+                max_count: 4,
+            },
+            Spawner {
+                r#type: "minecraft:zombie_villager",
+                weight: 5,
+                min_count: 1,
+                max_count: 1,
+            },
+            Spawner {
+                r#type: "minecraft:creeper",
+                weight: 0,
+                min_count: 1,
+                max_count: 1,
+            },
+        ];
+        assert_eq!(
+            spawner_at_weight(&entries, 0).map(|s| s.r#type),
+            Some("minecraft:zombie")
+        );
+        assert_eq!(
+            spawner_at_weight(&entries, 99).map(|s| s.r#type),
+            Some("minecraft:zombie")
+        );
+        assert_eq!(
+            spawner_at_weight(&entries, 100).map(|s| s.r#type),
+            Some("minecraft:zombie_villager")
+        );
+        assert_eq!(
+            spawner_at_weight(&entries, 104).map(|s| s.r#type),
+            Some("minecraft:zombie_villager")
+        );
+        assert!(spawner_at_weight(&entries, 105).is_none());
+        assert!(choose_spawner(&[], &mut rng()).is_none());
+        assert!(choose_spawner(&entries[2..], &mut rng()).is_none());
+    }
+
+    #[test]
+    fn category_budget_and_gamerules_stop_spawning() {
+        let mut state = SpawnState::empty();
+        state.set_spawnable_chunk_count(MAGIC_NUMBER);
+        let mut categories = Vec::new();
+        get_filtered_spawning_categories(&state, true, false, true, &mut categories);
+        assert!(!categories.contains(&&MobCategory::MONSTER));
+        get_filtered_spawning_categories(&state, false, true, false, &mut categories);
+        assert_eq!(categories, vec![&MobCategory::MONSTER]);
+        for _ in 0..MobCategory::MONSTER.max {
+            state.mob_category_counts.add(&MobCategory::MONSTER);
+        }
+        assert!(!state.can_spawn_for_category_global(&MobCategory::MONSTER));
+        state.mob_category_counts.remove(&MobCategory::MONSTER);
+        assert!(state.can_spawn_for_category_global(&MobCategory::MONSTER));
+    }
 
     #[test]
     fn vanilla_spawn_floor_predicates_are_preserved() {

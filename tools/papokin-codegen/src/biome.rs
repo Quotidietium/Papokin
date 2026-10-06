@@ -112,6 +112,8 @@ struct SpawnGroups {
 struct Spawner {
     /// 带命名空间的实体类型 ID（例如 `"minecraft:zombie"`）。
     r#type: String,
+    /// 该条目在同一类别中的抽取权重。
+    weight: u32,
     /// 生成组中的最小实体数量。
     min_count: i32,
     /// 生成组中的最大实体数量。
@@ -123,6 +125,7 @@ impl<'de> Deserialize<'de> for Spawner {
         #[derive(Deserialize)]
         struct Raw {
             r#type: String,
+            weight: u32,
             #[serde(default, alias = "minCount")]
             min_count: Option<i32>,
             #[serde(default, alias = "maxCount")]
@@ -152,6 +155,7 @@ impl<'de> Deserialize<'de> for Spawner {
         };
         Ok(Self {
             r#type: raw.r#type,
+            weight: raw.weight,
             min_count,
             max_count,
         })
@@ -162,11 +166,13 @@ impl Spawner {
     /// 将此刷怪笼条目转换为 `TokenStream`，供生成的代码使用。
     pub fn to_tokens(&self) -> TokenStream {
         let r#type = &self.r#type;
+        let weight = self.weight;
         let min_count = &self.min_count;
         let max_count = &self.max_count;
         quote! {
             Spawner {
                 r#type: #r#type,
+                weight: #weight,
                 min_count: #min_count,
                 max_count: #max_count,
             }
@@ -522,6 +528,7 @@ pub fn build() -> TokenStream {
         #[derive(Debug)]
         pub struct Spawner {
             pub r#type: &'static str,
+            pub weight: u32,
             pub min_count: i32,
             pub max_count: i32,
         }
@@ -951,5 +958,31 @@ pub fn build() -> TokenStream {
 
         pub const OVERWORLD_BIOME_SOURCE: BiomeTree = #overworld_tree;
         pub const NETHER_BIOME_SOURCE: BiomeTree = #nether_tree;
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::Spawner;
+
+    #[test]
+    fn preserve_weight_and_count_formats() {
+        for (json, expected) in [
+            (
+                r#"{"type":"minecraft:zombie","weight":95,"minCount":2,"maxCount":4}"#,
+                (95, 2, 4),
+            ),
+            (
+                r#"{"type":"minecraft:zombie","weight":100,"count":4}"#,
+                (100, 4, 4),
+            ),
+            (
+                r#"{"type":"minecraft:zombie","weight":5,"count":{"min_inclusive":1,"max_inclusive":2}}"#,
+                (5, 1, 2),
+            ),
+        ] {
+            let entry: Spawner = serde_json::from_str(json).expect("有效的生成配置");
+            assert_eq!((entry.weight, entry.min_count, entry.max_count), expected);
+        }
     }
 }
