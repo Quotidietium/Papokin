@@ -44,45 +44,44 @@ impl ItemBehaviour for FireworkRocketItem {
             &EntityType::FIREWORK_ROCKET,
         );
         let entity = FireworkRocketEntity::new(entity);
+        entity.set_item_stack(item.clone());
         world.spawn_entity(Arc::new(entity));
         item.decrement_unless_creative(player.gamemode.load(), 1);
         BlockActionResult::Success
     }
 
-    fn normal_use(&self, _item: &Item, player: &Player) {
-        if player.get_entity().is_fall_flying() {
-            let world = player.world();
-            let entity = Entity::new(
-                world.clone(),
-                player.get_entity().pos.load(),
-                &EntityType::FIREWORK_ROCKET,
-            );
-            let entity = FireworkRocketEntity::new_shot(entity, player.get_entity());
-            world.spawn_entity(Arc::new(entity));
-
-            let mut held = player.inventory().held_item();
-            let mut is_main = true;
-            if held.is_empty() || held.item.id != Item::FIREWORK_ROCKET.id {
-                held = player.inventory().off_hand_item();
-                is_main = false;
-                if held.is_empty() || held.item.id != Item::FIREWORK_ROCKET.id {
-                    return;
-                }
-            }
-            // 原子扣减：读取-校验-扣减-写回在写锁内完成，防止
-            // 期间并入该槽位的物品被陈旧快照覆盖
-            let hand = if is_main {
-                papokin_util::Hand::Right
-            } else {
-                papokin_util::Hand::Left
-            };
-            player.inventory().update_held(hand, |mut s| {
-                if !s.is_empty() && s.item.id == Item::FIREWORK_ROCKET.id {
-                    s.decrement_unless_creative(player.gamemode.load(), 1);
-                }
-                (s, ())
-            });
+    fn normal_use_in_hand(
+        &self,
+        stack: &ItemStack,
+        player: &Player,
+        hand: papokin_util::Hand,
+        _yaw: f32,
+        _pitch: f32,
+    ) {
+        if !player.get_entity().is_fall_flying() {
+            return;
         }
+        // 使用实际操作的手；扣减成功后才生成，避免副手误扣主手和空手生成。
+        let rocket_stack = player.inventory().update_held(hand, |mut current| {
+            if current.is_empty() || !current.are_items_and_components_equal(stack) {
+                return (current, None);
+            }
+            let rocket_stack = current.clone();
+            current.decrement_unless_creative(player.gamemode.load(), 1);
+            (current, Some(rocket_stack))
+        });
+        let Some(rocket_stack) = rocket_stack else {
+            return;
+        };
+        let world = player.world();
+        let entity = Entity::new(
+            world.clone(),
+            player.get_entity().pos.load(),
+            &EntityType::FIREWORK_ROCKET,
+        );
+        let rocket = FireworkRocketEntity::new_shot(entity, player.get_entity());
+        rocket.set_item_stack(rocket_stack);
+        world.spawn_entity(Arc::new(rocket));
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
