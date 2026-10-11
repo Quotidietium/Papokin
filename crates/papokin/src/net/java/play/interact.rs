@@ -86,6 +86,7 @@ impl JavaClient {
                         ActionType::Interact | ActionType::InteractAt => {
                             if event.action == ActionType::InteractAt
                                 && let Some(pos) = interact.target_position
+                                && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_interact_at_entity::PlayerInteractAtEntityEvent>()
                             {
                                 let mut at_event = crate::plugin::api::events::player::player_interact_at_entity::PlayerInteractAtEntityEvent::new(
                                     player.clone(),

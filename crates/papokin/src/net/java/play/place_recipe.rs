@@ -20,15 +20,25 @@ impl JavaClient {
         let target_id = packet.recipe_display_id.0 as usize;
         let use_max = packet.use_max_items;
 
-        let mut click_event = crate::plugin::api::events::player::player_recipe_book_click::PlayerRecipeBookClickEvent::new(
-            player.clone(),
-            format!("display_{}", packet.recipe_display_id.0),
-            use_max,
-        );
-        server
-            .plugin_manager
-            .fire_blocking(server, &mut click_event);
-        if click_event.cancelled {
+        // 订阅者先行：无监听时跳过构造（format! String）。
+        let cancelled =
+            if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_recipe_book_click::PlayerRecipeBookClickEvent>()
+            {
+                let mut click_event = crate::plugin::api::events::player::player_recipe_book_click::PlayerRecipeBookClickEvent::new(
+                    player.clone(),
+                    format!("display_{}", packet.recipe_display_id.0),
+                    use_max,
+                );
+                server
+                    .plugin_manager
+                    .fire_blocking(server, &mut click_event);
+                click_event.cancelled
+            } else {
+                false
+            };
+        if cancelled {
             return;
         }
 

@@ -15,19 +15,27 @@ impl JavaClient {
         let item_stack = packet
             .clicked_item
             .to_stack_for_version(&self.version.load());
-        let mut creative_event =
-            crate::plugin::api::events::inventory::inventory_creative::InventoryCreativeEvent::new(
-                player.clone(),
-                packet.slot,
-                item_stack.item.registry_key.to_string(),
-                item_stack.item_count,
-            );
-        if let Some(server) = player.world().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut creative_event);
-        }
-        if creative_event.cancelled {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        let cancelled =
+            if let Some(server) = player.world().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::inventory_creative::InventoryCreativeEvent>()
+            {
+                let mut creative_event = crate::plugin::api::events::inventory::inventory_creative::InventoryCreativeEvent::new(
+                    player.clone(),
+                    packet.slot,
+                    item_stack.item.registry_key.to_string(),
+                    item_stack.item_count,
+                );
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut creative_event);
+                creative_event.cancelled
+            } else {
+                false
+            };
+        if cancelled {
             // 插件取消后必须全量重同步：创造客户端在发送该包时已
             // 乐观地在本地应用了槽位变更，不重同步会让客户端继续
             // 显示并不存在的幻影物品。

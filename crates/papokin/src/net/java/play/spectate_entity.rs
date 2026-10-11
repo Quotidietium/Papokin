@@ -72,13 +72,21 @@ impl JavaClient {
             let _ = server;
             return true;
         };
-        let mut event = crate::plugin::api::events::player::player_start_spectating_entity::PlayerStartSpectatingEntityEvent::new(
-            player.clone(),
-            target_id,
-        );
-        server_arc
+        if server_arc
             .plugin_manager
-            .fire_blocking(&server_arc, &mut event);
-        !event.cancelled
+            .has_handlers::<crate::plugin::api::events::player::player_start_spectating_entity::PlayerStartSpectatingEntityEvent>()
+        {
+            let mut event = crate::plugin::api::events::player::player_start_spectating_entity::PlayerStartSpectatingEntityEvent::new(
+                player.clone(),
+                target_id,
+            );
+            server_arc
+                .plugin_manager
+                .fire_blocking(&server_arc, &mut event);
+            if event.cancelled {
+                return false;
+            }
+        }
+        true
     }
 }

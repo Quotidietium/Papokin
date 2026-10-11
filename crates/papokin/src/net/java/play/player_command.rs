@@ -50,13 +50,22 @@ impl JavaClient {
             Action::StartFlyingElytra => {
                 let fall_flying = entity.check_fall_flying();
                 if entity.is_fall_flying() != fall_flying {
-                    let mut event = crate::plugin::api::events::entity::entity_toggle_glide::EntityToggleGlideEvent::new(
-                        entity.entity_id,
-                        fall_flying,
-                    );
-                    server.plugin_manager.fire_blocking(server, &mut event);
-                    if !event.cancelled {
-                        entity.set_fall_flying(event.is_gliding);
+                    let (is_gliding, cancelled) = if server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::entity::entity_toggle_glide::EntityToggleGlideEvent>()
+                    {
+                        let mut event =
+                            crate::plugin::api::events::entity::entity_toggle_glide::EntityToggleGlideEvent::new(
+                                entity.entity_id,
+                                fall_flying,
+                            );
+                        server.plugin_manager.fire_blocking(server, &mut event);
+                        (event.is_gliding, event.cancelled)
+                    } else {
+                        (fall_flying, false)
+                    };
+                    if !cancelled {
+                        entity.set_fall_flying(is_gliding);
                     }
                 }
             }

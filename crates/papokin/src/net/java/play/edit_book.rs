@@ -15,6 +15,9 @@ impl JavaClient {
 
         if let Some(player_arc) = player.world().get_player_by_uuid(player.gameprofile.id)
             && let Some(server) = player.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_edit_book::PlayerEditBookEvent>()
         {
             let mut event =
                 crate::plugin::api::events::player::player_edit_book::PlayerEditBookEvent {

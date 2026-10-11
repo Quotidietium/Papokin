@@ -29,15 +29,24 @@ impl JavaClient {
 
         let mut item_in_hand = inventory.get_stack_in_hand(hand);
 
-        let mut consume_event =
-            crate::plugin::api::events::player::player_item_consume::PlayerItemConsumeEvent::new(
-                player.clone(),
-                item_in_hand.item.registry_key.to_string(),
-            );
-        server
-            .plugin_manager
-            .fire_blocking(server, &mut consume_event);
-        if consume_event.cancelled {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        let cancelled =
+            if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_item_consume::PlayerItemConsumeEvent>()
+            {
+                let mut consume_event = crate::plugin::api::events::player::player_item_consume::PlayerItemConsumeEvent::new(
+                    player.clone(),
+                    item_in_hand.item.registry_key.to_string(),
+                );
+                server
+                    .plugin_manager
+                    .fire_blocking(server, &mut consume_event);
+                consume_event.cancelled
+            } else {
+                false
+            };
+        if cancelled {
             return;
         }
 

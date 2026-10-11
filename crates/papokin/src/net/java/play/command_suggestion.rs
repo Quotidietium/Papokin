@@ -44,34 +44,46 @@ impl JavaClient {
             .into_iter()
             .map(|suggestion| suggestion.suggestion)
             .collect();
-        let mut tab_event =
-            crate::plugin::api::events::player::async_tab_complete::AsyncTabCompleteEvent::new(
+        // 订阅者先行：两事件的 completions/suggestions 均可被
+        // 处理器改写，无监听时原列表直通（truncate 语义保持）。
+        let mut completions = completions;
+        if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::player::async_tab_complete::AsyncTabCompleteEvent>()
+        {
+            let mut tab_event = crate::plugin::api::events::player::async_tab_complete::AsyncTabCompleteEvent::new(
                 Some(player.clone()),
                 packet.command.to_string(),
                 completions,
             );
-        server.plugin_manager.fire_blocking(server, &mut tab_event);
-        if tab_event.cancelled {
-            return;
+            server.plugin_manager.fire_blocking(server, &mut tab_event);
+            if tab_event.cancelled {
+                return;
+            }
+            completions = tab_event.completions;
         }
-
-        let mut send_event = crate::plugin::api::events::player::async_player_send_suggestions::AsyncPlayerSendSuggestionsEvent::new(
-            player.clone(),
-            packet.command.to_string(),
-            tab_event.completions,
-        );
-        server.plugin_manager.fire_blocking(server, &mut send_event);
-        if send_event.cancelled {
-            return;
+        if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::player::async_player_send_suggestions::AsyncPlayerSendSuggestionsEvent>()
+        {
+            let mut send_event = crate::plugin::api::events::player::async_player_send_suggestions::AsyncPlayerSendSuggestionsEvent::new(
+                player.clone(),
+                packet.command.to_string(),
+                completions,
+            );
+            server.plugin_manager.fire_blocking(server, &mut send_event);
+            if send_event.cancelled {
+                return;
+            }
+            completions = send_event.suggestions;
         }
-        send_event.suggestions.truncate(Self::MAX_SUGGESTIONS);
+        completions.truncate(Self::MAX_SUGGESTIONS);
 
         let response = CCommandSuggestions::new(
             packet.id,
             (start as i32).into(),
             (length as i32).into(),
-            send_event
-                .suggestions
+            completions
                 .into_iter()
                 .map(|suggestion| CommandSuggestion::new(suggestion, None))
                 .collect(),

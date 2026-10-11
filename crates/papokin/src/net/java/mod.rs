@@ -1058,27 +1058,33 @@ impl JavaClient {
             id if id == SClientInformationPlay::to_id(version) => {
                 let packet = SClientInformationPlay::read(&mut payload, &version)?;
                 // 客户端选项变更通知（仅 play 阶段；
-                // 配置阶段变体尚无玩家对象）。
-                let mut options_event = crate::plugin::api::events::player::player_client_options_change::PlayerClientOptionsChangeEvent::new(
-                    player.clone(),
-                    packet.locale.to_string(),
-                    i32::from(packet.view_distance),
-                    match packet.chat_mode.0 {
-                        0 => "enabled".to_string(),
-                        1 => "commands_only".to_string(),
-                        _ => "hidden".to_string(),
-                    },
-                    packet.chat_colors,
-                    if packet.main_hand.0 == 0 {
-                        "left".to_string()
-                    } else {
-                        "right".to_string()
-                    },
-                    u32::from(packet.skin_parts),
-                );
-                server
+                // 配置阶段变体尚无玩家对象）。订阅者先行：
+                // 无监听时跳过构造（3 个 String 分配）。
+                if server
                     .plugin_manager
-                    .fire_blocking(server, &mut options_event);
+                    .has_handlers::<crate::plugin::api::events::player::player_client_options_change::PlayerClientOptionsChangeEvent>()
+                {
+                    let mut options_event = crate::plugin::api::events::player::player_client_options_change::PlayerClientOptionsChangeEvent::new(
+                        player.clone(),
+                        packet.locale.to_string(),
+                        i32::from(packet.view_distance),
+                        match packet.chat_mode.0 {
+                            0 => "enabled".to_string(),
+                            1 => "commands_only".to_string(),
+                            _ => "hidden".to_string(),
+                        },
+                        packet.chat_colors,
+                        if packet.main_hand.0 == 0 {
+                            "left".to_string()
+                        } else {
+                            "right".to_string()
+                        },
+                        u32::from(packet.skin_parts),
+                    );
+                    server
+                        .plugin_manager
+                        .fire_blocking(server, &mut options_event);
+                }
                 self.handle_client_information(server, player, &packet);
             }
             id if id == SClientCommand::to_id(version) => {
@@ -1309,18 +1315,30 @@ impl JavaClient {
                 // 未检查的符号变更钩子（原始行，校验之前）；
                 // 取消会丢弃本次更新。已通过校验的 SignChangeEvent
                 // handle_sign_update 内部的处理仍独立运行。
-                let mut sign_event = crate::plugin::api::events::player::unchecked_sign_change::UncheckedSignChangeEvent::new(
-                    player.clone(),
-                    packet.location,
-                    vec![
-                        packet.line_1.to_string(),
-                        packet.line_2.to_string(),
-                        packet.line_3.to_string(),
-                        packet.line_4.to_string(),
-                    ],
-                );
-                server.plugin_manager.fire_blocking(server, &mut sign_event);
-                if !sign_event.cancelled {
+                // 订阅者先行：无监听时跳过构造（4 行 String + Vec）。
+                let cancelled =
+                    if server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::unchecked_sign_change::UncheckedSignChangeEvent>()
+                    {
+                        let mut sign_event = crate::plugin::api::events::player::unchecked_sign_change::UncheckedSignChangeEvent::new(
+                            player.clone(),
+                            packet.location,
+                            vec![
+                                packet.line_1.to_string(),
+                                packet.line_2.to_string(),
+                                packet.line_3.to_string(),
+                                packet.line_4.to_string(),
+                            ],
+                        );
+                        server
+                            .plugin_manager
+                            .fire_blocking(server, &mut sign_event);
+                        sign_event.cancelled
+                    } else {
+                        false
+                    };
+                if !cancelled {
                     self.handle_sign_update(player, &packet);
                 }
             }
@@ -1370,12 +1388,22 @@ impl JavaClient {
             id if id == SCustomPayload::to_id(version) => {
                 let payload = SCustomPayload::read(&mut payload, &version)?;
                 let channel_str = payload.channel.to_string();
-                let mut event = PlayerCustomPayloadEvent::new(
-                    player.clone(),
-                    channel_str.clone(),
-                    Bytes::copy_from_slice(payload.data),
-                );
-                server.plugin_manager.fire_blocking(server, &mut event);
+                // 订阅者先行：无监听时跳过构造（Bytes 拷贝）；
+                // 事件可被处理器改写 data，分发经 `event_data`
+                // 取「事件值（已监听）或源数据重建（未监听）」。
+                let mut event_data = None;
+                if server
+                    .plugin_manager
+                    .has_handlers::<PlayerCustomPayloadEvent>()
+                {
+                    let mut event = PlayerCustomPayloadEvent::new(
+                        player.clone(),
+                        channel_str.clone(),
+                        Bytes::copy_from_slice(payload.data),
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                    event_data = Some(event.data);
+                }
 
                 // 分发到注册了此消息通道的插件。
                 if !server
@@ -1385,7 +1413,9 @@ impl JavaClient {
                 {
                     let channel = channel_str.clone();
                     let player_uuid = player.gameprofile.id;
-                    let data = event.data.to_vec();
+                    let data = event_data
+                        .unwrap_or_else(|| Bytes::copy_from_slice(payload.data))
+                        .to_vec();
                     let plugin_manager = server.plugin_manager.clone();
                     server.spawn_task(async move {
                         plugin_manager
@@ -1398,17 +1428,22 @@ impl JavaClient {
                     if let Ok(channels_data) = std::str::from_utf8(payload.data) {
                         for ch in channels_data.split('\0') {
                             if !ch.is_empty() {
-                                let mut reg_event = crate::plugin::api::events::player::player_register_channel::PlayerRegisterChannelEvent::new(
-                                    player.clone(),
-                                    ch.to_string(),
-                                );
-                                server.plugin_manager.fire_blocking(server, &mut reg_event);
-                                let mut ch_event = crate::plugin::api::events::player::player_channel::PlayerChannelEvent {
-                                    player: player.clone(),
-                                    channel: ch.to_string(),
-                                    cancelled: false,
-                                };
-                                server.plugin_manager.fire_blocking(server, &mut ch_event);
+                                // 订阅者先行：各事件分别判门。
+                                if server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_register_channel::PlayerRegisterChannelEvent>() {
+                                    let mut reg_event = crate::plugin::api::events::player::player_register_channel::PlayerRegisterChannelEvent::new(
+                                        player.clone(),
+                                        ch.to_string(),
+                                    );
+                                    server.plugin_manager.fire_blocking(server, &mut reg_event);
+                                }
+                                if server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_channel::PlayerChannelEvent>() {
+                                    let mut ch_event = crate::plugin::api::events::player::player_channel::PlayerChannelEvent {
+                                        player: player.clone(),
+                                        channel: ch.to_string(),
+                                        cancelled: false,
+                                    };
+                                    server.plugin_manager.fire_blocking(server, &mut ch_event);
+                                }
                             }
                         }
                     }
@@ -1417,13 +1452,16 @@ impl JavaClient {
                 {
                     for ch in channels_data.split('\0') {
                         if !ch.is_empty() {
-                            let mut unreg_event = crate::plugin::api::events::player::player_unregister_channel::PlayerUnregisterChannelEvent::new(
-                                player.clone(),
-                                ch.to_string(),
-                            );
-                            server
-                                .plugin_manager
-                                .fire_blocking(server, &mut unreg_event);
+                            // 订阅者先行：无监听时跳过构造。
+                            if server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_unregister_channel::PlayerUnregisterChannelEvent>() {
+                                let mut unreg_event = crate::plugin::api::events::player::player_unregister_channel::PlayerUnregisterChannelEvent::new(
+                                    player.clone(),
+                                    ch.to_string(),
+                                );
+                                server
+                                    .plugin_manager
+                                    .fire_blocking(server, &mut unreg_event);
+                            }
                         }
                     }
                 }
@@ -1456,12 +1494,18 @@ impl JavaClient {
                     &mut payload,
                     &version,
                 )?;
-                let mut event = crate::plugin::api::events::dialog::dialog_click_action::DialogClickActionEvent::new(
-                    player.clone(),
-                    packet.action_id.to_string(),
-                    packet.payload.map(Bytes::copy_from_slice),
-                );
-                server.plugin_manager.fire_blocking(server, &mut event);
+                // 订阅者先行：无监听时跳过构造（String + 可选 Bytes）。
+                if server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::dialog::dialog_click_action::DialogClickActionEvent>()
+                {
+                    let mut event = crate::plugin::api::events::dialog::dialog_click_action::DialogClickActionEvent::new(
+                        player.clone(),
+                        packet.action_id.to_string(),
+                        packet.payload.map(Bytes::copy_from_slice),
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                }
             }
             id if id == SSelectTrade::to_id(version) => {
                 self.handle_select_trade(player, &SSelectTrade::read(&mut payload, &version)?);

@@ -51,8 +51,13 @@ impl JavaClient {
             match current_val {
                 GameRuleValue::Int(_) => {
                     if let Ok(val) = entry.value.parse::<i64>() {
-                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）
-                        if let Some(server) = &server_arc {
+                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）；
+                        // 订阅者先行，无监听时跳过构造（2 个 String）。
+                        if let Some(server) = &server_arc
+                            && server
+                                .plugin_manager
+                                .has_handlers::<crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent>()
+                        {
                             let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
                                 world.clone(),
                                 rule.to_string(),
@@ -77,8 +82,13 @@ impl JavaClient {
                 }
                 GameRuleValue::Bool(_) => {
                     if let Ok(val) = entry.value.parse::<bool>() {
-                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）
-                        if let Some(server) = &server_arc {
+                        // 先发事件并尊重取消（与 /gamerule 命令路径一致）；
+                        // 订阅者先行，无监听时跳过构造（2 个 String）。
+                        if let Some(server) = &server_arc
+                            && server
+                                .plugin_manager
+                                .has_handlers::<crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent>()
+                        {
                             let mut event = crate::plugin::api::events::world::world_game_rule_change::WorldGameRuleChangeEvent::new(
                                 world.clone(),
                                 rule.to_string(),

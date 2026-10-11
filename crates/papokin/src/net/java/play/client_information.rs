@@ -77,7 +77,11 @@ impl JavaClient {
                 server.plugin_manager.fire_blocking(server, &mut event);
             }
 
-            if locale_changed {
+            if locale_changed
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_locale_change::PlayerLocaleChangeEvent>()
+            {
                 let mut event = crate::plugin::api::events::player::player_locale_change::PlayerLocaleChangeEvent {
                     player: player.clone(),
                     new_locale: client_information.locale.to_string(),

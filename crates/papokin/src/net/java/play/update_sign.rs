@@ -36,7 +36,18 @@ impl JavaClient {
             sign_data.line_4.to_string(),
         ];
 
-        if let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id) {
+        // 订阅者先行：无监听时跳过构造与玩家查表（4 行 String
+        // + Vec 在上方 `lines` 构造——一并移入门内）。
+        if let Some(player_arc) = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::sign_change::SignChangeEvent>()
+            })
+            .and_then(|_| world.get_player_by_uuid(player.gameprofile.id))
+        {
             let mut event = crate::plugin::api::events::block::sign_change::SignChangeEvent::new(
                 player_arc,
                 sign_data.location,

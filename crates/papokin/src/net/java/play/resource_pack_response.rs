@@ -18,12 +18,18 @@ impl JavaClient {
             player.gameprofile.name, packet.uuid, result
         );
 
-        let mut event = PlayerResourcePackStatusEvent::new(
-            player.clone(),
-            packet.uuid.to_string(),
-            format!("{result:?}"),
-        );
-        server.plugin_manager.fire_blocking(server, &mut event);
+        // 订阅者先行：无监听时跳过构造（2 个 String 分配）。
+        if server
+            .plugin_manager
+            .has_handlers::<PlayerResourcePackStatusEvent>()
+        {
+            let mut event = PlayerResourcePackStatusEvent::new(
+                player.clone(),
+                packet.uuid.to_string(),
+                format!("{result:?}"),
+            );
+            server.plugin_manager.fire_blocking(server, &mut event);
+        }
 
         if server.advanced_config.resource_pack.java.force
             && (result == PlayResourcePackResult::Declined

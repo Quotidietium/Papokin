@@ -12,15 +12,24 @@ impl JavaClient {
         if !player.has_client_loaded() {
             return;
         }
-        let mut input_event =
-            crate::plugin::api::events::player::player_input::PlayerInputEvent::new(
-                player.clone(),
-                format!("{:b}", input.input),
-            );
-        server
+        // 订阅者先行：无监听时跳过构造（format! String）。
+        let cancelled = if server
             .plugin_manager
-            .fire_blocking(server, &mut input_event);
-        if input_event.cancelled {
+            .has_handlers::<crate::plugin::api::events::player::player_input::PlayerInputEvent>(
+        ) {
+            let mut input_event =
+                crate::plugin::api::events::player::player_input::PlayerInputEvent::new(
+                    player.clone(),
+                    format!("{:b}", input.input),
+                );
+            server
+                .plugin_manager
+                .fire_blocking(server, &mut input_event);
+            input_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 

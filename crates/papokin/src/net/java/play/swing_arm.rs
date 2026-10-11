@@ -14,15 +14,24 @@ impl JavaClient {
             return;
         };
 
-        let mut anim_event = crate::plugin::api::events::player::player_animation::PlayerAnimationEvent::new(
-            player.clone(),
-            match hand {
-                Hand::Left => crate::plugin::api::events::player::player_animation::PlayerAnimationType::ArmSwingOff,
-                Hand::Right => crate::plugin::api::events::player::player_animation::PlayerAnimationType::ArmSwingMain,
-            },
-        );
-        server.plugin_manager.fire_blocking(server, &mut anim_event);
-        if anim_event.cancelled {
+        let cancelled = if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::player::player_animation::PlayerAnimationEvent>()
+        {
+            let mut anim_event =
+                crate::plugin::api::events::player::player_animation::PlayerAnimationEvent::new(
+                    player.clone(),
+                    match hand {
+                        Hand::Left => crate::plugin::api::events::player::player_animation::PlayerAnimationType::ArmSwingOff,
+                        Hand::Right => crate::plugin::api::events::player::player_animation::PlayerAnimationType::ArmSwingMain,
+                    },
+                );
+            server.plugin_manager.fire_blocking(server, &mut anim_event);
+            anim_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 

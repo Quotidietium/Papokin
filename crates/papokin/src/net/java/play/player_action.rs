@@ -22,7 +22,13 @@ impl JavaClient {
                     let world = entity.world.load_full();
                     let (block, state) = world.get_block_and_state(&position);
 
-                    if let Some(server_arc) = world.server.upgrade() {
+                    if let Some(server_arc) = world
+                        .server
+                        .upgrade()
+                        && server_arc
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::block::block_damage::BlockDamageEvent>()
+                    {
                         let mut event =
                             crate::plugin::api::events::block::block_damage::BlockDamageEvent::new(
                                 player.clone(),
@@ -145,7 +151,13 @@ impl JavaClient {
                     // 方块交互距离稽查已移除（反作弊属插件职责）。
                     let entity = &player.get_entity();
                     let world = entity.world.load_full();
-                    if let Some(server_arc) = world.server.upgrade() {
+                    if let Some(server_arc) = world
+                        .server
+                        .upgrade()
+                        && server_arc
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::block::block_damage_abort::BlockDamageAbortEvent>()
+                    {
                         let mut abort_event = crate::plugin::api::events::block::block_damage_abort::BlockDamageAbortEvent::new(
                             player.clone(),
                             player_action.position,
@@ -271,8 +283,16 @@ impl JavaClient {
                         .clone();
                     if let Some(stack) = item_in_use {
                         // 停止使用物品的通知（例如放开弓）。
-                        let world = player.get_entity().world.load_full();
-                        if let Some(server_arc) = world.server.upgrade() {
+                        if let Some(server_arc) = player
+                            .get_entity()
+                            .world
+                            .load()
+                            .server
+                            .upgrade()
+                            && server_arc
+                                .plugin_manager
+                                .has_handlers::<crate::plugin::api::events::player::player_stop_using_item::PlayerStopUsingItemEvent>()
+                        {
                             let mut stop_event = crate::plugin::api::events::player::player_stop_using_item::PlayerStopUsingItemEvent::new(
                                 player.clone(),
                                 stack.clone(),
