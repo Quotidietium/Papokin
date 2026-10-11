@@ -246,9 +246,15 @@ pub fn fill_chest_inventory(
     let inv_size = inventory.size();
     let mut rng = Xoroshiro::from_seed(seed as u64);
 
-    let mut available_slots: Vec<usize> = (0..inv_size)
-        .filter(|&slot| inventory.get_stack(slot).is_empty())
-        .collect();
+    let mut available_slots: Vec<usize> = Vec::with_capacity(inv_size);
+    for slot in 0..inv_size {
+        // 借用探测：空槽过滤只为读 is_empty，深克隆白付
+        let mut empty = false;
+        inventory.with_stack(slot, &mut |stack| empty = stack.is_empty());
+        if empty {
+            available_slots.push(slot);
+        }
+    }
 
     for i in (1..available_slots.len()).rev() {
         let j = rng.next_bounded_i32((i + 1) as i32) as usize;

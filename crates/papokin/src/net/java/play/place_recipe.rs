@@ -172,20 +172,23 @@ impl JavaClient {
         let recipe_matches = {
             let mut ok = true;
             for (idx, ing) in ingredient_slots.iter().enumerate() {
-                let stack = crafting_inv.get_stack(idx);
-                match ing {
+                // 借用读取：匹配判定是纯读比较，逐格深克隆白付
+                let mut slot_ok = true;
+                crafting_inv.with_stack(idx, &mut |stack| match ing {
                     None => {
                         if !stack.is_empty() {
-                            ok = false;
-                            break;
+                            slot_ok = false;
                         }
                     }
                     Some(ingredient) => {
                         if stack.is_empty() || !ingredient.match_item(stack.item) {
-                            ok = false;
-                            break;
+                            slot_ok = false;
                         }
                     }
+                });
+                if !slot_ok {
+                    ok = false;
+                    break;
                 }
             }
             ok
@@ -196,10 +199,12 @@ impl JavaClient {
             let mut min = u8::MAX;
             for (idx, ing) in ingredient_slots.iter().enumerate() {
                 if ing.is_some() {
-                    let stack = crafting_inv.get_stack(idx);
-                    if !stack.is_empty() {
-                        min = min.min(stack.item_count);
-                    }
+                    // 借用读取：只取 item_count，深克隆白付
+                    crafting_inv.with_stack(idx, &mut |stack| {
+                        if !stack.is_empty() {
+                            min = min.min(stack.item_count);
+                        }
+                    });
                 }
             }
             if min == u8::MAX { 0 } else { min }
