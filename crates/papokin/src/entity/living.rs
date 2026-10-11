@@ -622,19 +622,29 @@ impl LivingEntity {
 
     /// 拾取物品实体或经验球
     pub fn pickup(&self, item: &Entity, stack_amount: u32) -> bool {
-        let mut pickup_event =
-            crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent::new(
-                self.entity.entity_id,
-                item.entity_type.id.to_string(),
-                stack_amount as u8,
-            );
-        if let Some(server) = self.entity.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut pickup_event);
-            if pickup_event.cancelled {
-                return false;
-            }
+        // 订阅者先行：无监听时跳过构造（每次拾取一个 String
+        // 分配——怪物农场/掉落物收集高频路径）。
+        let cancelled =
+            if let Some(server) = self.entity.world.load().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent>()
+            {
+            let mut pickup_event =
+                crate::plugin::api::events::entity::entity_pickup_item::EntityPickupItemEvent::new(
+                    self.entity.entity_id,
+                    item.entity_type.id.to_string(),
+                    stack_amount as u8,
+                );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut pickup_event);
+                    pickup_event.cancelled
+                } else {
+                    false
+                };
+        if cancelled {
+            return false;
         }
 
         let chunk_pos = self.entity.chunk_pos.load();
@@ -966,19 +976,29 @@ impl LivingEntity {
         // 组件等，原版存储语义是 byte：统一钳制到 0..=127，防止
         // 属性修正量被放大到污染实体数值。
         effect.amplifier = effect.amplifier.min(127);
-        let mut effect_event =
-            crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent::new(
-                self.entity.entity_id,
-                effect.effect_type.translation_key.to_string(),
-                effect.duration,
-                effect.amplifier,
-            );
-        if let Some(server) = self.entity.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut effect_event);
-        }
-        if effect_event.cancelled {
+        // 订阅者先行：无监听时跳过构造（每次效果施加一个
+        // String 分配——药水命中/信标/食物 buff 全部经过这里）。
+        let cancelled =
+            if let Some(server) = self.entity.world.load().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent>()
+            {
+            let mut effect_event =
+                crate::plugin::api::events::entity::entity_potion_effect::EntityPotionEffectEvent::new(
+                    self.entity.entity_id,
+                    effect.effect_type.translation_key.to_string(),
+                    effect.duration,
+                    effect.amplifier,
+                );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut effect_event);
+                    effect_event.cancelled
+                } else {
+                    false
+                };
+        if cancelled {
             return;
         }
 

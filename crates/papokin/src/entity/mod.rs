@@ -3210,18 +3210,28 @@ impl Entity {
             return;
         }
 
-        let mut pose_event =
-            crate::plugin::api::events::entity::entity_pose_change::EntityPoseChangeEvent::new(
-                self.entity_id,
-                (pose as u8).to_string(),
-            );
-        if let Some(server) = self.world.load().server.upgrade() {
-            server
-                .plugin_manager
-                .fire_blocking(&server, &mut pose_event);
-            if pose_event.cancelled {
-                return;
-            }
+        // 订阅者先行：无监听时跳过构造（每次姿态切换一个
+        // String 分配——潜行/游泳/滑翔/倒地等切换高频发生）。
+        let cancelled =
+            if let Some(server) = self.world.load().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_pose_change::EntityPoseChangeEvent>()
+            {
+            let mut pose_event =
+                crate::plugin::api::events::entity::entity_pose_change::EntityPoseChangeEvent::new(
+                    self.entity_id,
+                    (pose as u8).to_string(),
+                );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut pose_event);
+                    pose_event.cancelled
+                } else {
+                    false
+                };
+        if cancelled {
+            return;
         }
 
         let dimension = Self::get_entity_dimensions(pose);
