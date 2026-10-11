@@ -3121,9 +3121,11 @@ impl World {
                     equipment_list
                 };
 
+                // 序列化只读，从中间列表借用构造（列表为跨锁发送
+                // 保留的一层克隆，第二层深克隆省去）
                 let equipment: Vec<(i8, ItemStackSerializer)> = equipment_list
                     .iter()
-                    .map(|(slot, stack)| (*slot, ItemStackSerializer::from(stack.clone())))
+                    .map(|(slot, stack)| (*slot, ItemStackSerializer::from(stack)))
                     .collect();
 
                 let je_packet = CSetEquipment::new(existing_player.entity_id().into(), equipment);
@@ -3303,9 +3305,10 @@ impl World {
         }
         drop(equipment_guard);
 
+        // 序列化只读，从中间列表借用构造（省第二层深克隆）
         let equipment: Vec<(i8, ItemStackSerializer)> = equipment_list
             .iter()
-            .map(|(slot, stack)| (*slot, ItemStackSerializer::from(stack.clone())))
+            .map(|(slot, stack)| (*slot, ItemStackSerializer::from(stack)))
             .collect();
         let je_packet = CSetEquipment::new(from.entity_id().into(), equipment);
 

@@ -396,17 +396,15 @@ impl TrackedEntity {
         if let Some(living) = self.entity.get_living_entity()
             && let Ok(equipment_guard) = living.entity_equipment.try_lock()
         {
-            let mut equipment_list = Vec::new();
+            // 锁内以借用直接构造（原时序同样在锁内 serialize；
+            // 空槽过滤随迭代进行，免去中间列表的双重深克隆）
+            let mut equipment: Vec<(i8, ItemStackSerializer)> = Vec::new();
             for (slot, item_stack) in &equipment_guard.equipment {
                 if !item_stack.is_empty() {
-                    equipment_list.push((slot.discriminant(), item_stack.clone()));
+                    equipment.push((slot.discriminant(), ItemStackSerializer::from(item_stack)));
                 }
             }
-            if !equipment_list.is_empty() {
-                let equipment: Vec<(i8, ItemStackSerializer)> = equipment_list
-                    .iter()
-                    .map(|(slot, stack)| (*slot, ItemStackSerializer::from(stack.clone())))
-                    .collect();
+            if !equipment.is_empty() {
                 let packet = CSetEquipment::new(self.entity_id.into(), equipment);
                 if let Ok(data) = client.serialize_packet(&packet) {
                     client.try_enqueue_packet(data);

@@ -1470,7 +1470,7 @@ impl Player {
     pub fn sync_hand_slot(&self, slot_index: usize, stack: ItemStack) {
         self.try_send_slot_set_packet(&CSetPlayerInventory::new(
             (slot_index as i32).into(),
-            &ItemStackSerializer::from(stack.clone()),
+            &ItemStackSerializer::from(&stack),
         ));
         self.sync_inventory_to_client();
 
@@ -1556,7 +1556,7 @@ impl Player {
             let updated_stack = self.inventory.get_slot(slot_index);
             self.try_send_slot_set_packet(&CSetPlayerInventory::new(
                 (slot_index as i32).into(),
-                &ItemStackSerializer::from(updated_stack.clone()),
+                &ItemStackSerializer::from(&updated_stack),
             ));
             self.sync_inventory_to_client();
 
@@ -5446,7 +5446,7 @@ impl Player {
 
         self.try_send_slot_set_packet(&CSetPlayerInventory::new(
             (slot_index as i32).into(),
-            &ItemStackSerializer::from(updated_stack.clone()),
+            &ItemStackSerializer::from(&updated_stack),
         ));
         self.sync_inventory_to_client();
 

@@ -389,8 +389,15 @@ impl LivingEntity {
 
         // 通知插件每个发生变化的槽位。旧物品已不再
         // 此处可用（调用方已更新装备映射表），因此
-        // `old_item` 被报告为 `None`。
-        if let Some(server) = self.entity.world.load().server.upgrade() {
+        // `old_item` 被报告为 `None`。订阅者先行检查：
+        // 无监听时跳过槽位名 `String` 与事件构造的分配
+        // （`fire_blocking` 内部虽有无处理器短路，但事件
+        // 构造发生在调用之前）。
+        if let Some(server) = self.entity.world.load().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_equipment_changed::EntityEquipmentChangedEvent>()
+        {
             for (slot, stack) in equipment {
                 let mut event = crate::plugin::api::events::entity::entity_equipment_changed::EntityEquipmentChangedEvent::new(
                     self.entity.entity_id,
@@ -424,14 +431,11 @@ impl LivingEntity {
             }
         }
 
+        // 借用构造：包生命周期绑定本函数入参切片，序列化只读，
+        // 免去每槽一次组件补丁深克隆
         let equipment_java: Vec<(i8, ItemStackSerializer)> = equipment
             .iter()
-            .map(|(slot, stack)| {
-                (
-                    slot.discriminant(),
-                    ItemStackSerializer::from(stack.clone()),
-                )
-            })
+            .map(|(slot, stack)| (slot.discriminant(), ItemStackSerializer::from(stack)))
             .collect();
         let je_packet = CSetEquipment::new(self.entity_id().into(), equipment_java);
 
