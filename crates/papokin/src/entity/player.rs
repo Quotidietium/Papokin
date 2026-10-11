@@ -3066,9 +3066,13 @@ impl Player {
     }
 
     pub fn increment_stat(&self, category: statistics::StatisticCategory, stat: i32, amount: i32) {
-        let final_amount = if let Some(player_arc) =
-            self.world().get_player_by_uuid(self.gameprofile.id)
-            && let Some(server) = self.world().server.upgrade()
+        // 订阅者先行：无监听时跳过玩家查表与事件构造（含
+        // `format!` 的 String 分配——移动路径每包递增行走统计，
+        // 会对该格式化每次付费；`fire_blocking` 内部短路救不回
+        // 调用方已付的构造分配）。
+        let final_amount = if let Some(server) = self.world().server.upgrade()
+            && server.plugin_manager.has_handlers::<crate::plugin::api::events::player::player_statistic_increment::PlayerStatisticIncrementEvent>()
+            && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
         {
             let mut event = crate::plugin::api::events::player::player_statistic_increment::PlayerStatisticIncrementEvent {
                 player: player_arc,
