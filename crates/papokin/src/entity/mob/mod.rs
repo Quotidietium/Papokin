@@ -1247,11 +1247,15 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn tame(&self, player: &Arc<Player>) {
         let mob = self.get_mob_entity();
-        let mut event = crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(
-            mob.living_entity.entity.entity_id,
-            player.clone(),
-        );
-        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade() {
+        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_tame::EntityTameEvent>()
+        {
+            let mut event = crate::plugin::api::events::entity::entity_tame::EntityTameEvent::new(
+                mob.living_entity.entity.entity_id,
+                player.clone(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
         }
     }
@@ -1272,12 +1276,16 @@ pub trait Mob: EntityBase + Send + Sync {
         player: Option<&Arc<Player>>,
     ) {
         let mob = self.get_mob_entity();
-        let mut event = crate::plugin::api::events::entity::entity_dye::EntityDyeEvent::new(
-            mob.living_entity.entity.entity_id,
-            color,
-            player.cloned(),
-        );
-        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade() {
+        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_dye::EntityDyeEvent>()
+        {
+            let mut event = crate::plugin::api::events::entity::entity_dye::EntityDyeEvent::new(
+                mob.living_entity.entity.entity_id,
+                color,
+                player.cloned(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
         }
     }
@@ -1296,13 +1304,23 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn transform(&self, new_entity_id: i32, transform_reason: String) {
         let mob = self.get_mob_entity();
-        let mut event =
-            crate::plugin::api::events::entity::entity_transform::EntityTransformEvent::new(
-                mob.living_entity.entity.entity_id,
-                new_entity_id,
-                transform_reason,
-            );
-        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade() {
+        if let Some(server) = mob
+            .living_entity
+            .entity
+            .world
+            .load()
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_transform::EntityTransformEvent>()
+        {
+            let mut event =
+                crate::plugin::api::events::entity::entity_transform::EntityTransformEvent::new(
+                    mob.living_entity.entity.entity_id,
+                    new_entity_id,
+                    transform_reason,
+                );
             server.plugin_manager.fire_blocking(&server, &mut event);
         }
     }
@@ -1345,12 +1363,22 @@ pub trait Mob: EntityBase + Send + Sync {
 
     fn place_block(&self, block_pos: BlockPos, block_name: String) {
         let mob = self.get_mob_entity();
-        let mut event = crate::plugin::api::events::entity::entity_place::EntityPlaceEvent::new(
-            mob.living_entity.entity.entity_id,
-            block_pos,
-            block_name,
-        );
-        if let Some(server) = mob.living_entity.entity.world.load().server.upgrade() {
+        if let Some(server) = mob
+            .living_entity
+            .entity
+            .world
+            .load()
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_place::EntityPlaceEvent>()
+        {
+            let mut event = crate::plugin::api::events::entity::entity_place::EntityPlaceEvent::new(
+                mob.living_entity.entity.entity_id,
+                block_pos,
+                block_name,
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
         }
     }

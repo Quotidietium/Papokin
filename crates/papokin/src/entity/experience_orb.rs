@@ -135,21 +135,30 @@ impl EntityBase for ExperienceOrbEntity {
             let can_pickup = if let Ok(mut delay) = player.experience_pick_up_delay.try_lock()
                 && *delay == 0
             {
-                let mut cooldown_event = crate::plugin::api::events::player::player_exp_cooldown_change::PlayerExpCooldownChangeEvent {
-                    player: player.clone(),
-                    new_cooldown: 2,
-                    cancelled: false,
-                };
                 let world = self.entity.world.load();
-                if let Some(server) = world.server.upgrade() {
+                let (cancelled, new_cooldown) = if let Some(server) = world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_exp_cooldown_change::PlayerExpCooldownChangeEvent>()
+                {
+                    let mut cooldown_event = crate::plugin::api::events::player::player_exp_cooldown_change::PlayerExpCooldownChangeEvent {
+                        player: player.clone(),
+                        new_cooldown: 2,
+                        cancelled: false,
+                    };
                     server
                         .plugin_manager
                         .fire_blocking(&server, &mut cooldown_event);
-                }
-                if cooldown_event.cancelled {
+                    (cooldown_event.cancelled, cooldown_event.new_cooldown)
+                } else {
+                    (false, 2)
+                };
+                if cancelled {
                     false
                 } else {
-                    *delay = cooldown_event.new_cooldown.max(0) as u32;
+                    *delay = new_cooldown.max(0) as u32;
                     true
                 }
             } else {
@@ -160,21 +169,29 @@ impl EntityBase for ExperienceOrbEntity {
                 // 数值可被处理器调整。
                 let orb_id = self.entity.entity_id;
                 let amount = self.amount.load(Ordering::Relaxed) as i32;
-                let mut pickup_event = crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent::new(
-                    player.clone(),
-                    orb_id,
-                    amount,
-                );
                 let world = self.entity.world.load();
-                if let Some(server) = world.server.upgrade() {
+                let amount = if let Some(server) = world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent>()
+                {
+                    let mut pickup_event = crate::plugin::api::events::player::player_pickup_experience::PlayerPickupExperienceEvent::new(
+                        player.clone(),
+                        orb_id,
+                        amount,
+                    );
                     server
                         .plugin_manager
                         .fire_blocking(&server, &mut pickup_event);
-                }
-                if pickup_event.cancelled {
-                    return;
-                }
-                let amount = pickup_event.amount.max(0);
+                    if pickup_event.cancelled {
+                        return;
+                    }
+                    pickup_event.amount.max(0)
+                } else {
+                    amount.max(0)
+                };
 
                 player.living_entity.pickup(&self.entity, 1);
                 self.entity.remove();

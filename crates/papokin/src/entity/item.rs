@@ -264,16 +264,22 @@ impl ItemEntity {
             return;
         }
 
-        let mut event = crate::plugin::api::events::entity::item_merge::ItemMergeEvent {
-            entity_id: target.entity.entity_id,
-            target_id: source.entity.entity_id,
-            cancelled: false,
-        };
-        let server = self.entity.world.load().server.upgrade();
-        if let Some(server) = server {
+        let cancelled = if let Some(server) = self.entity.world.load().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::item_merge::ItemMergeEvent>()
+        {
+            let mut event = crate::plugin::api::events::entity::item_merge::ItemMergeEvent {
+                entity_id: target.entity.entity_id,
+                target_id: source.entity.entity_id,
+                cancelled: false,
+            };
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled
             || self.entity.removed.load(Ordering::SeqCst)
             || other.entity.removed.load(Ordering::SeqCst)
         {

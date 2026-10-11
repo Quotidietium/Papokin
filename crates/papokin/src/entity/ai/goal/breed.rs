@@ -104,22 +104,28 @@ impl BreedGoal {
         baby.get_entity().set_age(-24000);
         let world_full = entity.world.load_full();
 
-        let mut spawn_event =
-            crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
-                entity_id: baby.get_entity().entity_id,
-                entity_type: baby.get_entity().entity_type.resource_name.to_string(),
-                position: parent_pos,
-                world: world_full.clone(),
-                spawn_reason: "BREEDING".to_string(),
-                cancelled: false,
-            };
-        if let Some(server) = world_full.server.upgrade() {
+        if let Some(server) = world_full
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent>()
+        {
+            let mut spawn_event =
+                crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                    entity_id: baby.get_entity().entity_id,
+                    entity_type: baby.get_entity().entity_type.resource_name.to_string(),
+                    position: parent_pos,
+                    world: world_full.clone(),
+                    spawn_reason: "BREEDING".to_string(),
+                    cancelled: false,
+                };
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut spawn_event);
-        }
-        if spawn_event.cancelled {
-            return;
+            if spawn_event.cancelled {
+                return;
+            }
         }
 
         world_full.spawn_entity(baby);

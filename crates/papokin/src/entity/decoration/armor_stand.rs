@@ -440,14 +440,20 @@ impl EntityBase for ArmorStandEntity {
         };
 
         // 盔甲架操作事件，取消则本次操作无效
-        let mut event = crate::plugin::api::events::player::player_armor_stand_manipulate::PlayerArmorStandManipulateEvent {
-            player: player.clone(),
-            armor_stand_id: self.get_entity().entity_id,
-            slot: slot.get_offset_entity_slot_id(0) as u8,
-            cancelled: false,
-        };
         let world = self.get_entity().world.load();
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_armor_stand_manipulate::PlayerArmorStandManipulateEvent>()
+        {
+            let mut event = crate::plugin::api::events::player::player_armor_stand_manipulate::PlayerArmorStandManipulateEvent {
+                player: player.clone(),
+                armor_stand_id: self.get_entity().entity_id,
+                slot: slot.get_offset_entity_slot_id(0) as u8,
+                cancelled: false,
+            };
             server.plugin_manager.fire_blocking(&server, &mut event);
             if event.cancelled {
                 return true;

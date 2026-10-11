@@ -170,16 +170,25 @@ impl WitchEntity {
 
         let potion_stack = create_potion_stack(&Item::SPLASH_POTION, potion);
 
-        let mut event =
-            crate::plugin::api::events::entity::witch_throw_potion::WitchThrowPotionEvent::new(
-                entity.entity_id,
-                potion_stack.clone(),
-                Some(target_entity.entity_id),
-            );
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::witch_throw_potion::WitchThrowPotionEvent>()
+        {
+            let mut event =
+                crate::plugin::api::events::entity::witch_throw_potion::WitchThrowPotionEvent::new(
+                    entity.entity_id,
+                    potion_stack.clone(),
+                    Some(target_entity.entity_id),
+                );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 
@@ -242,6 +251,7 @@ impl Mob for WitchEntity {
         amount
     }
 
+    #[allow(clippy::too_many_lines)]
     fn mob_tick(&self, caller: &dyn EntityBase) {
         let entity = &self.mob_entity.living_entity.entity;
         let living = &self.mob_entity.living_entity;
@@ -266,14 +276,23 @@ impl Mob for WitchEntity {
                     )]);
 
                     let effects = crate::item::potion::PotionContents::read_potion_effects(&stack);
-                    let mut event = crate::plugin::api::events::entity::witch_consume_potion::WitchConsumePotionEvent::new(
-                        entity.entity_id,
-                        stack.clone(),
-                    );
-                    if let Some(server) = world.server.upgrade() {
+                    let cancelled = if let Some(server) = world
+                        .server
+                        .upgrade()
+                        && server
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::entity::witch_consume_potion::WitchConsumePotionEvent>()
+                    {
+                        let mut event = crate::plugin::api::events::entity::witch_consume_potion::WitchConsumePotionEvent::new(
+                            entity.entity_id,
+                            stack.clone(),
+                        );
                         server.plugin_manager.fire_blocking(&server, &mut event);
-                    }
-                    if !event.cancelled {
+                        event.cancelled
+                    } else {
+                        false
+                    };
+                    if !cancelled {
                         crate::item::potion::PotionContents::apply_effects_to(
                             living,
                             effects,
@@ -312,15 +331,24 @@ impl Mob for WitchEntity {
 
             if let Some(potion) = potion {
                 let stack = create_potion_stack(&Item::POTION, potion);
-                let mut event =
-                    crate::plugin::api::events::entity::witch_ready_potion::WitchReadyPotionEvent::new(
-                        entity.entity_id,
-                        stack.clone(),
-                    );
-                if let Some(server) = world.server.upgrade() {
+                let cancelled = if let Some(server) = world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::entity::witch_ready_potion::WitchReadyPotionEvent>()
+                {
+                    let mut event =
+                        crate::plugin::api::events::entity::witch_ready_potion::WitchReadyPotionEvent::new(
+                            entity.entity_id,
+                            stack.clone(),
+                        );
                     server.plugin_manager.fire_blocking(&server, &mut event);
-                }
-                if event.cancelled {
+                    event.cancelled
+                } else {
+                    false
+                };
+                if cancelled {
                     return;
                 }
                 if let Some(witch) = caller.cast_any().downcast_ref::<Self>() {

@@ -124,15 +124,24 @@ impl EndermanEntity {
 
         // 末影人通过传送走脱离战斗。
         let world = entity.world.load();
-        let mut event =
-            crate::plugin::api::events::entity::enderman_escape::EndermanEscapeEvent::new(
-                entity.entity_id,
-                "teleport".to_string(),
-            );
-        if let Some(server) = world.server.upgrade() {
-            server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        let cancelled = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::enderman_escape::EndermanEscapeEvent>()
+            })
+            .is_some_and(|server| {
+                let mut event = crate::plugin::api::events::entity::enderman_escape::EndermanEscapeEvent::new(
+                    entity.entity_id,
+                    "teleport".to_string(),
+                );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                event.cancelled
+            });
+        if cancelled {
             return false;
         }
 

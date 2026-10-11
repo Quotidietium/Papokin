@@ -305,11 +305,21 @@ impl EntityBase for SplashPotionEntity {
             affected
         });
 
-        let affected_ids: Vec<i32> = affected
-            .iter()
-            .map(|(c, _)| c.get_entity().entity_id)
-            .collect();
-        if let Some(server) = world.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造与 affected_ids 收集
+        // （retain 对构造值恒全保留，语义等价于不过滤）。
+        if let Some(server) = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::potion_splash::PotionSplashEvent>()
+            })
+        {
+            let affected_ids: Vec<i32> = affected
+                .iter()
+                .map(|(c, _)| c.get_entity().entity_id)
+                .collect();
             let mut event =
                 crate::plugin::api::events::entity::potion_splash::PotionSplashEvent::new(
                     self.get_entity().entity_id,

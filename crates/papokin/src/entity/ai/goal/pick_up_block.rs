@@ -76,16 +76,25 @@ impl Goal for PickUpBlockGoal {
         }
 
         let default_state_id = block.default_state.id;
-        let mut event =
-            crate::plugin::api::events::entity::entity_change_block::EntityChangeBlockEvent::new(
-                entity.entity_id,
-                target_pos,
-                "minecraft:air".to_string(),
-            );
-        if let Some(server) = world.server.upgrade() {
-            server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        let cancelled = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_change_block::EntityChangeBlockEvent>()
+            })
+            .is_some_and(|server| {
+                let mut event = crate::plugin::api::events::entity::entity_change_block::EntityChangeBlockEvent::new(
+                    entity.entity_id,
+                    target_pos,
+                    "minecraft:air".to_string(),
+                );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                event.cancelled
+            });
+        if cancelled {
             return;
         }
 

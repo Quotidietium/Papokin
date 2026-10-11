@@ -3505,7 +3505,13 @@ impl Entity {
 
     pub fn unleash(&self) {
         let world = self.world.load();
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::entity_unleash::EntityUnleashEvent>()
+        {
             let mut event =
                 crate::plugin::api::events::entity::entity_unleash::EntityUnleashEvent::new(
                     self.entity_id,

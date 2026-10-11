@@ -128,16 +128,28 @@ impl EvokerEntity {
     /// 触发 `EntitySpellCastEvent` 并返回该法术是否可以开始。
     pub fn begin_spell(&self, spell: IllagerSpell) -> bool {
         let entity = &self.mob_entity.living_entity.entity;
-        let mut event =
-            crate::plugin::api::events::entity::entity_spell_cast::EntitySpellCastEvent {
-                entity_id: entity.entity_id,
-                spell: format!("{spell:?}"),
-                cancelled: false,
-            };
-        if let Some(server) = entity.world.load().server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（format! String）。
+        if let Some(server) = entity
+            .world
+            .load()
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_spell_cast::EntitySpellCastEvent>()
+            })
+        {
+            let mut event =
+                crate::plugin::api::events::entity::entity_spell_cast::EntitySpellCastEvent {
+                    entity_id: entity.entity_id,
+                    spell: format!("{spell:?}"),
+                    cancelled: false,
+                };
             server.plugin_manager.fire_blocking(&server, &mut event);
+            return !event.cancelled;
         }
-        !event.cancelled
+        true
     }
 
     pub fn set_is_casting_spell(&self, spell: IllagerSpell) {

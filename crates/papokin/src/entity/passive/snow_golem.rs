@@ -164,7 +164,13 @@ impl Mob for SnowGolemEntity {
                         world.clone(),
                         new_state_id,
                     );
-                if let Some(server) = world.server.upgrade() {
+                if let Some(server) = world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::block::entity_block_form::EntityBlockFormEvent>()
+                {
                     server.plugin_manager.fire_blocking(&server, &mut event);
                     if event.cancelled {
                         return;

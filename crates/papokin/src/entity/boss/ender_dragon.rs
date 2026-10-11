@@ -292,13 +292,6 @@ impl EnderDragonEntity {
             return;
         }
 
-        let mut event =
-            crate::plugin::api::events::entity::ender_dragon_change_phase::EnderDragonChangePhaseEvent {
-                entity_id: self.mob_entity.living_entity.entity.entity_id,
-                current_phase: format!("{:?}", *phase_lock),
-                new_phase: format!("{phase_type:?}"),
-                cancelled: false,
-            };
         if let Some(server) = self
             .mob_entity
             .living_entity
@@ -307,11 +300,21 @@ impl EnderDragonEntity {
             .load()
             .server
             .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::ender_dragon_change_phase::EnderDragonChangePhaseEvent>()
         {
+            let mut event =
+                crate::plugin::api::events::entity::ender_dragon_change_phase::EnderDragonChangePhaseEvent {
+                    entity_id: self.mob_entity.living_entity.entity.entity_id,
+                    current_phase: format!("{:?}", *phase_lock),
+                    new_phase: format!("{phase_type:?}"),
+                    cancelled: false,
+                };
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
-            return;
+            if event.cancelled {
+                return;
+            }
         }
 
         let old_phase = self.phase_manager.get_phase(*phase_lock);

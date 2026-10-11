@@ -128,6 +128,7 @@ impl EntityBase for LingeringPotionEntity {
         self
     }
 
+    #[allow(clippy::too_many_lines)]
     fn on_hit(&self, hit: crate::entity::projectile::ProjectileHit) {
         let world = self.get_entity().world.load();
         let hit_pos = hit.hit_pos();
@@ -209,7 +210,16 @@ impl EntityBase for LingeringPotionEntity {
         // 生成并配置一个 `AreaEffectCloud` 实体
         extinguish_fire_if_water_potion(&world, hit_pos, &stack);
 
-        if let Some(server) = world.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        if let Some(server) = world
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::lingering_potion_splash::LingeringPotionSplashEvent>()
+            })
+        {
             let mut event = crate::plugin::api::events::entity::lingering_potion_splash::LingeringPotionSplashEvent::new(
                 self.get_entity().entity_id,
                 block_pos,

@@ -465,18 +465,27 @@ impl EntityBase for AreaEffectCloudEntity {
             return;
         }
 
-        let affected_ids: Vec<i32> = to_apply.iter().map(|(id, _, _)| *id).collect();
-        let mut apply_event =
-            crate::plugin::api::events::entity::area_effect_cloud_apply::AreaEffectCloudApplyEvent::new(
-                self.entity.entity_id,
-                affected_ids,
-            );
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::area_effect_cloud_apply::AreaEffectCloudApplyEvent>()
+        {
+            let affected_ids: Vec<i32> = to_apply.iter().map(|(id, _, _)| *id).collect();
+            let mut apply_event =
+                crate::plugin::api::events::entity::area_effect_cloud_apply::AreaEffectCloudApplyEvent::new(
+                    self.entity.entity_id,
+                    affected_ids,
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut apply_event);
-        }
-        if apply_event.cancelled {
+            apply_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 

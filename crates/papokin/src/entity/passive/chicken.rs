@@ -175,18 +175,27 @@ impl Mob for ChickenEntity {
             let world = entity.world.load_full();
             let pos = entity.block_pos.load();
             let entity_id = entity.entity_id;
-            let mut drop_event =
-                crate::plugin::api::events::entity::entity_drop_item::EntityDropItemEvent::new(
-                    entity_id,
-                    "minecraft:egg".to_string(),
-                    1,
-                );
-            if let Some(server) = world.server.upgrade() {
+            let cancelled = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_drop_item::EntityDropItemEvent>()
+            {
+                let mut drop_event =
+                    crate::plugin::api::events::entity::entity_drop_item::EntityDropItemEvent::new(
+                        entity_id,
+                        "minecraft:egg".to_string(),
+                        1,
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut drop_event);
-            }
-            if !drop_event.cancelled {
+                drop_event.cancelled
+            } else {
+                false
+            };
+            if !cancelled {
                 world.drop_stack(&pos, ItemStack::new(1, &Item::EGG));
             }
             self.egg_lay_time.store(next_time, Ordering::Relaxed);

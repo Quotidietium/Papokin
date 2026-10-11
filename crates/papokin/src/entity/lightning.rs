@@ -263,16 +263,24 @@ impl EntityBase for LightningBoltEntity {
                     if hit_guard.insert(hit_id) {
                         // 通用雷击钩子；取消则跳过雷击
                         // 效果，但实体仍被记录为被命中。
-                        let mut event =
-                            crate::plugin::api::events::entity::entity_zap::EntityZapEvent::new(
-                                hit_id,
-                                entity.entity_id,
-                                "lightning".to_string(),
-                            );
-                        if let Some(server) = world.server.upgrade() {
-                            server.plugin_manager.fire_blocking(&server, &mut event);
-                        }
-                        if event.cancelled {
+                        // 订阅者先行：无监听时跳过构造（一 String）。
+                        let cancelled =
+                            if let Some(server) = world.server.upgrade()
+                                && server
+                                    .plugin_manager
+                                    .has_handlers::<crate::plugin::api::events::entity::entity_zap::EntityZapEvent>()
+                            {
+                                let mut event = crate::plugin::api::events::entity::entity_zap::EntityZapEvent::new(
+                                    hit_id,
+                                    entity.entity_id,
+                                    "lightning".to_string(),
+                                );
+                                server.plugin_manager.fire_blocking(&server, &mut event);
+                                event.cancelled
+                            } else {
+                                false
+                            };
+                        if cancelled {
                             continue;
                         }
                         hit_entity.on_lightning_strike(hit_entity.as_ref(), self);

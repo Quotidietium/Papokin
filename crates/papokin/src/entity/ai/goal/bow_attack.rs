@@ -135,7 +135,16 @@ impl BowAttackGoal {
 
         let arrow: Arc<dyn EntityBase> = Arc::new(arrow);
         let entity_id = entity.entity_id;
-        if let Some(server) = world_full.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        if let Some(server) = world_full
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_shoot_bow::EntityShootBowEvent>()
+            })
+        {
             let mut event =
                 crate::plugin::api::events::entity::entity_shoot_bow::EntityShootBowEvent::new(
                     entity_id,

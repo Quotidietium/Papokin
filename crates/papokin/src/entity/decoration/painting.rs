@@ -54,26 +54,35 @@ impl PaintingEntity {
         };
         let remover = caused_by.and_then(|c| world.get_entity_by_id(c.get_entity().entity_id));
 
-        let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
-            entity_arc.clone(),
-            remover.clone(),
-        );
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent>()
+        {
+            let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
+                entity_arc.clone(),
+                remover.clone(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
-            return false;
+            if event.cancelled {
+                return false;
+            }
         }
 
-        if let Some(remover) = remover {
+        if let Some(remover) = remover
+            && let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent>()
+        {
             let mut by_entity_event = crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent::new(
                 entity_arc, remover,
             );
-            if let Some(server) = world.server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut by_entity_event);
-            }
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut by_entity_event);
             if by_entity_event.cancelled {
                 return false;
             }

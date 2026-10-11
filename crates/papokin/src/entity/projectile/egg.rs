@@ -140,6 +140,7 @@ impl EntityBase for EggEntity {
         if let Some(owner_id) = owner_id
             && let Some(player) = world.get_player_by_id(owner_id)
             && let Some(server) = world.server.upgrade()
+            && server.plugin_manager.has_handlers::<PlayerEggThrowEvent>()
         {
             let mut event = PlayerEggThrowEvent::new(
                 player,

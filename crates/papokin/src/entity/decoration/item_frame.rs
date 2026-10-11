@@ -278,26 +278,35 @@ impl ItemFrameEntity {
         };
         let remover = caused_by.and_then(|c| world.get_entity_by_id(c.get_entity().entity_id));
 
-        let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
-            entity_arc.clone(),
-            remover.clone(),
-        );
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent>()
+        {
+            let mut event = crate::plugin::api::events::hanging::hanging_break::HangingBreakEvent::new(
+                entity_arc.clone(),
+                remover.clone(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
-            return false;
+            if event.cancelled {
+                return false;
+            }
         }
 
-        if let Some(remover) = remover {
+        if let Some(remover) = remover
+            && let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent>()
+        {
             let mut by_entity_event = crate::plugin::api::events::hanging::hanging_break_by_entity::HangingBreakByEntityEvent::new(
                 entity_arc, remover,
             );
-            if let Some(server) = world.server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut by_entity_event);
-            }
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut by_entity_event);
             if by_entity_event.cancelled {
                 return false;
             }
@@ -421,19 +430,28 @@ impl EntityBase for ItemFrameEntity {
 
         if frame_has_item {
             // 旋转钩子。
-            let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
-                player.clone(),
-                self.entity.entity_id,
-                self.get_item(),
-                crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Rotate,
-            );
             let world = self.entity.world.load();
-            if let Some(server) = world.server.upgrade() {
+            let cancelled = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent>()
+            {
+                let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                    player.clone(),
+                    self.entity.entity_id,
+                    self.get_item(),
+                    crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Rotate,
+                );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut change_event);
-            }
-            if change_event.cancelled {
+                change_event.cancelled
+            } else {
+                false
+            };
+            if cancelled {
                 return false;
             }
             let new_rot = self.get_rotation() + 1;
@@ -444,19 +462,28 @@ impl EntityBase for ItemFrameEntity {
             let mut new_stack = item_stack.clone();
             new_stack.item_count = 1;
             // 放置钩子。
-            let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
-                player.clone(),
-                self.entity.entity_id,
-                new_stack.clone(),
-                crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Place,
-            );
             let world = self.entity.world.load();
-            if let Some(server) = world.server.upgrade() {
+            let cancelled = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent>()
+            {
+                let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                    player.clone(),
+                    self.entity.entity_id,
+                    new_stack.clone(),
+                    crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Place,
+                );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut change_event);
-            }
-            if change_event.cancelled {
+                change_event.cancelled
+            } else {
+                false
+            };
+            if cancelled {
                 return false;
             }
             self.set_item(new_stack, true);
@@ -517,19 +544,28 @@ impl EntityBase for ItemFrameEntity {
                 else {
                     return false;
                 };
-                let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
-                    player_arc,
-                    self.entity.entity_id,
-                    self.get_item(),
-                    crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Remove,
-                );
                 let world = self.entity.world.load();
-                if let Some(server) = world.server.upgrade() {
+                let cancelled = if let Some(server) = world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent>()
+                {
+                    let mut change_event = crate::plugin::api::events::player::player_item_frame_change::PlayerItemFrameChangeEvent::new(
+                        player_arc,
+                        self.entity.entity_id,
+                        self.get_item(),
+                        crate::plugin::api::events::player::player_item_frame_change::ItemFrameAction::Remove,
+                    );
                     server
                         .plugin_manager
                         .fire_blocking(&server, &mut change_event);
-                }
-                if change_event.cancelled {
+                    change_event.cancelled
+                } else {
+                    false
+                };
+                if cancelled {
                     return false;
                 }
             }

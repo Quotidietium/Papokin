@@ -166,12 +166,7 @@ impl Mob for CreeperEntity {
         caller: &dyn EntityBase,
         lightning: &crate::entity::lightning::LightningBoltEntity,
     ) {
-        let mut event = crate::plugin::api::events::entity::creeper_power::CreeperPowerEvent::new(
-            self.mob_entity.living_entity.entity.entity_id,
-            Some(lightning.get_entity().entity_id),
-            "LIGHTNING".to_string(),
-        );
-        if let Some(server) = self
+        let cancelled = if let Some(server) = self
             .mob_entity
             .living_entity
             .entity
@@ -179,10 +174,21 @@ impl Mob for CreeperEntity {
             .load()
             .server
             .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::creeper_power::CreeperPowerEvent>()
         {
+            let mut event = crate::plugin::api::events::entity::creeper_power::CreeperPowerEvent::new(
+                self.mob_entity.living_entity.entity.entity_id,
+                Some(lightning.get_entity().entity_id),
+                "LIGHTNING".to_string(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if !event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if !cancelled {
             self.charged.store(true, Ordering::Relaxed);
             self.mob_entity
                 .living_entity

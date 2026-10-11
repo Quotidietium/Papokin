@@ -843,21 +843,31 @@ impl PiglinEntity {
         if self.is_adult() {
             let is_barter = PiglinAi::is_barter_currency(&item);
             if bartering_enabled && is_barter {
-                let outcomes = PiglinAi::get_barter_response_items();
                 let entity = &self.mob_entity.living_entity.entity;
-
-                let mut event =
-                    crate::plugin::api::events::entity::piglin_barter::PiglinBarterEvent::new(
-                        entity.entity_id,
-                        item,
-                        outcomes,
-                    );
-                if let Some(server) = entity.world.load().server.upgrade() {
+                let (outcome, cancelled) = if let Some(server) = entity
+                    .world
+                    .load()
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::entity::piglin_barter::PiglinBarterEvent>()
+                {
+                    let outcomes = PiglinAi::get_barter_response_items();
+                    let mut event =
+                        crate::plugin::api::events::entity::piglin_barter::PiglinBarterEvent::new(
+                            entity.entity_id,
+                            item,
+                            outcomes,
+                        );
                     server.plugin_manager.fire_blocking(&server, &mut event);
-                }
+                    (event.outcome, event.cancelled)
+                } else {
+                    (PiglinAi::get_barter_response_items(), false)
+                };
 
-                if !event.cancelled {
-                    PiglinAi::throw_items(self, event.outcome);
+                if !cancelled {
+                    PiglinAi::throw_items(self, outcome);
                 }
             } else if !is_barter
                 && mob_equipment::equip_item_if_possible(self, item.clone()).is_empty()
