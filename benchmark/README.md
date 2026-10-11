@@ -4,7 +4,7 @@
 
 每个 bin 是一个**双臂对照基准**：同一负载分别跑「优化前形态」与「优化后形态」两臂，以分配计数器（次数/净驻留字节）、耗时、canonical 输出指纹（语义等价硬闸门）量化收益；闸门预登记，未达如实记 FAIL。轮次索引与全部结果见 `note/README.md` 性能优化对照表与各 `round-*.md` 报告。
 
-## 基准清单（36 个 bin，轮次 1-36）
+## 基准清单（37 个 bin，轮次 1-37）
 
 | bin | 轮次 | 主题 | 报告 |
 |---|---|---|---|
@@ -44,6 +44,7 @@
 | `auto_path_event_gate` | 34 | 自动服务器路径事件构造订阅者先行门（通病清扫第一梯队） | round-34 |
 | `interaction_event_gate` | 35 | 交互与行为路径事件构造订阅者先行门（通病清扫第二+第三梯队收官） | round-35 |
 | `container_read_borrow` | 36 | 容器读取借用化（get_stack 深克隆 → with_stack） | round-36 |
+| `held_read_borrow` | 37 | 手持读取借用化（held_item/get_stack_in_hand 按值克隆 → with_* 锁内借用） | round-37 |
 
 ## 运行方式
 
