@@ -64,21 +64,29 @@ pub trait Inventory: Send + Sync + Clearable {
         let mut count = 0u8;
 
         for i in 0..self.size() {
-            let stack = self.get_stack(i);
-            if stack.get_item().id == item.id {
-                // saturating_add：全背包同物品总数超过 255 时 u8 裸加
-                // 会溢出（debug panic/release 回绕）
-                count = count.saturating_add(stack.item_count);
-            }
+            // 借用读取：逐槽深克隆组件补丁只为取 id 与数量，白付
+            self.with_stack(i, &mut |stack| {
+                if stack.get_item().id == item.id {
+                    // saturating_add：全背包同物品总数超过 255 时 u8 裸加
+                    // 会溢出（debug panic/release 回绕）
+                    count = count.saturating_add(stack.item_count);
+                }
+            });
         }
 
         count
     }
 
     fn contains_any_predicate(&self, predicate: &(dyn Fn(&ItemStack) -> bool + Sync)) -> bool {
+        let mut found = false;
         for i in 0..self.size() {
-            let stack = self.get_stack(i);
-            if predicate(&stack) {
+            // 谓词为纯读比较：借用读取避免逐槽深克隆
+            self.with_stack(i, &mut |stack| {
+                if !found && predicate(stack) {
+                    found = true;
+                }
+            });
+            if found {
                 return true;
             }
         }
@@ -95,14 +103,16 @@ pub trait Inventory: Send + Sync + Clearable {
         let size = self.size();
 
         for i in 0..size {
-            let stack = self.get_stack(i);
-
-            if !stack.is_empty() {
-                let mut item_compound = NbtCompound::new();
-                item_compound.put_byte("Slot", i as i8);
-                stack.write_item_stack(&mut item_compound);
-                slots.push(NbtTag::Compound(item_compound));
-            }
+            // write_item_stack 是 ItemStack 自身方法（不触物品栏），
+            // 借用读取避免未落盘前的整槽深克隆
+            self.with_stack(i, &mut |stack| {
+                if !stack.is_empty() {
+                    let mut item_compound = NbtCompound::new();
+                    item_compound.put_byte("Slot", i as i8);
+                    stack.write_item_stack(&mut item_compound);
+                    slots.push(NbtTag::Compound(item_compound));
+                }
+            });
         }
 
         if include_empty || !slots.is_empty() {
