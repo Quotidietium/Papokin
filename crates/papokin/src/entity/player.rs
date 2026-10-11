@@ -1120,8 +1120,9 @@ impl Player {
             return;
         }
 
-        let inventory = self.inventory();
-        let item_stack = inventory.held_item();
+        // 攻击全程复用同一份手持克隆（属性/附魔/耐久六处读取），
+        // 单次攻击摊销一次克隆，保持按值读取。
+        let item_stack = self.inventory().held_item();
         if !item_stack.is_empty() {
             self.increment_stat(
                 statistics::StatisticCategory::Used,
@@ -1606,11 +1607,12 @@ impl Player {
             return;
         }
 
-        let damage = self
-            .inventory()
-            .held_item()
-            .get_data_component::<ToolImpl>()
-            .map_or(0, |tool| tool.damage_per_block as i32);
+        let mut damage = 0;
+        self.inventory().with_held_item(&mut |held| {
+            damage = held
+                .get_data_component::<ToolImpl>()
+                .map_or(0, |tool| tool.damage_per_block as i32);
+        });
 
         if damage > 0 {
             self.damage_held_item(damage);
@@ -4816,17 +4818,23 @@ impl Player {
     }
 
     pub fn can_harvest(&self, state: &BlockState, block: &'static Block) -> bool {
-        !state.tool_required() || self.inventory().held_item().is_correct_for_drops(block)
+        if !state.tool_required() {
+            return true;
+        }
+        let mut correct = false;
+        self.inventory()
+            .with_held_item(&mut |held| correct = held.is_correct_for_drops(block));
+        correct
     }
 
     /// Pumpkin 存储 `mining_efficiency` 修正值所使用的 ID
     const EFFICIENCY_ATTRIBUTE_MODIFIER_ID: &'static str = "minecraft:enchantment.efficiency";
 
     fn sync_mining_efficiency(&self) {
-        let level = self
-            .inventory()
-            .held_item()
-            .get_enchantment_level(&Enchantment::EFFICIENCY);
+        let mut level = 0;
+        self.inventory().with_held_item(&mut |held| {
+            level = held.get_enchantment_level(&Enchantment::EFFICIENCY);
+        });
         if self
             .synced_mining_efficiency_level
             .swap(level, Ordering::Relaxed)
@@ -4854,8 +4862,9 @@ impl Player {
 
     pub fn get_mining_speed(&self, block: &'static Block) -> f32 {
         self.sync_mining_efficiency();
-        let held_item = self.inventory.held_item();
-        let mut speed = held_item.get_speed(block);
+        let mut speed = 0.0;
+        self.inventory
+            .with_held_item(&mut |held| speed = held.get_speed(block));
         // Effi 仅在工具对方块的破坏速度已高于 1 时才生效（意味着
         // 正确的工具）
         if speed > 1.0 {
@@ -5094,80 +5103,82 @@ impl Player {
         use papokin_data::item::Item;
 
         for hand in Hand::all() {
-            let stack = self.inventory().get_stack_in_hand(hand);
-
-            if stack.item.id == Item::FILLED_MAP.id
-                && let Some(map_id_comp) = stack.get_data_component::<MapIdImpl>()
-            {
-                let map_id = map_id_comp.id;
-                if let Some(map_data_arc) = server.map_manager.get_map(map_id)
-                    && let Ok(mut map_data) = map_data_arc.try_lock()
+            let mut map_id = None;
+            self.inventory().with_stack_in_hand(hand, &mut |stack| {
+                if stack.item.id == Item::FILLED_MAP.id
+                    && let Some(map_id_comp) = stack.get_data_component::<MapIdImpl>()
                 {
-                    map_data.update(self);
+                    map_id = Some(map_id_comp.id);
+                }
+            });
+            if let Some(map_id) = map_id
+                && let Some(map_data_arc) = server.map_manager.get_map(map_id)
+                && let Ok(mut map_data) = map_data_arc.try_lock()
+            {
+                map_data.update(self);
 
-                    let tick_count = self.tick_counter.load(Ordering::Relaxed);
-                    if map_data.dirty || tick_count % 10 == 0 {
-                        let scale = 1 << map_data.scale;
-                        let pos = self.position();
-                        let dx = pos.x - map_data.center_x as f64;
-                        let dz = pos.z - map_data.center_z as f64;
+                let tick_count = self.tick_counter.load(Ordering::Relaxed);
+                if map_data.dirty || tick_count % 10 == 0 {
+                    let scale = 1 << map_data.scale;
+                    let pos = self.position();
+                    let dx = pos.x - map_data.center_x as f64;
+                    let dz = pos.z - map_data.center_z as f64;
 
-                        let raw_x = dx / scale as f64 * 2.0;
-                        let raw_z = dz / scale as f64 * 2.0;
-                        let is_off_map = !(-127.0..=127.0).contains(&raw_x)
-                            || !(-127.0..=127.0).contains(&raw_z);
+                    let raw_x = dx / scale as f64 * 2.0;
+                    let raw_z = dz / scale as f64 * 2.0;
+                    let is_off_map =
+                        !(-127.0..=127.0).contains(&raw_x) || !(-127.0..=127.0).contains(&raw_z);
 
-                        let icon_x = raw_x.clamp(-128.0, 127.0) as i8;
-                        let icon_z = raw_z.clamp(-128.0, 127.0) as i8;
+                    let icon_x = raw_x.clamp(-128.0, 127.0) as i8;
+                    let icon_z = raw_z.clamp(-128.0, 127.0) as i8;
 
-                        let yaw = self.living_entity.entity.yaw.load();
-                        let icon_direction =
-                            ((((yaw * 16.0 / 360.0).round() as i32 + 8) % 16 + 16) % 16) as i8;
+                    let yaw = self.living_entity.entity.yaw.load();
+                    let icon_direction =
+                        ((((yaw * 16.0 / 360.0).round() as i32 + 8) % 16 + 16) % 16) as i8;
 
-                        let decoration_type = if is_off_map {
-                            &papokin_data::map_decoration::MapDecorationType::PLAYER_OFF_MAP
-                        } else {
-                            &papokin_data::map_decoration::MapDecorationType::PLAYER
-                        };
+                    let decoration_type = if is_off_map {
+                        &papokin_data::map_decoration::MapDecorationType::PLAYER_OFF_MAP
+                    } else {
+                        &papokin_data::map_decoration::MapDecorationType::PLAYER
+                    };
 
-                        let mut icons = vec![MapIcon {
-                            icon_type: VarInt(decoration_type.id as i32),
-                            x: icon_x,
-                            z: icon_z,
-                            direction: icon_direction,
-                            display_name: None,
-                        }];
-                        icons.extend(map_data.decorations.iter().map(|decoration| {
-                            MapIcon {
-                                icon_type: VarInt(decoration.icon_type),
-                                x: decoration.x,
-                                z: decoration.z,
-                                direction: decoration.direction,
-                                display_name: decoration
-                                    .display_name
-                                    .as_ref()
-                                    .map(|name| TextComponent::text(name.clone())),
-                            }
-                        }));
+                    let mut icons = vec![MapIcon {
+                        icon_type: VarInt(decoration_type.id as i32),
+                        x: icon_x,
+                        z: icon_z,
+                        direction: icon_direction,
+                        display_name: None,
+                    }];
+                    icons.extend(map_data.decorations.iter().map(|decoration| {
+                        MapIcon {
+                            icon_type: VarInt(decoration.icon_type),
+                            x: decoration.x,
+                            z: decoration.z,
+                            direction: decoration.direction,
+                            display_name: decoration
+                                .display_name
+                                .as_ref()
+                                .map(|name| TextComponent::text(name.clone())),
+                        }
+                    }));
 
-                        let data = map_data.dirty.then(|| MapPatch {
-                            columns: 128,
-                            rows: 128,
-                            x: 0,
-                            z: 0,
-                            data: &*map_data.colors,
-                        });
+                    let data = map_data.dirty.then(|| MapPatch {
+                        columns: 128,
+                        rows: 128,
+                        x: 0,
+                        z: 0,
+                        data: &*map_data.colors,
+                    });
 
-                        self.client.try_send_packet(&CMapItemData {
-                            map_id: VarInt(map_id),
-                            scale: map_data.scale,
-                            tracking_position: true,
-                            locked: map_data.locked,
-                            icons: Some(&icons),
-                            data,
-                        });
-                        map_data.dirty = false;
-                    }
+                    self.client.try_send_packet(&CMapItemData {
+                        map_id: VarInt(map_id),
+                        scale: map_data.scale,
+                        tracking_position: true,
+                        locked: map_data.locked,
+                        icons: Some(&icons),
+                        data,
+                    });
+                    map_data.dirty = false;
                 }
             }
         }
