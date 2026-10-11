@@ -106,6 +106,19 @@ impl PlayerInventory {
         inv[self.get_selected_slot() as usize].clone()
     }
 
+    /// 以借用方式访问当前选中快捷栏槽位（读锁内回调，零克隆）。
+    ///
+    /// 与 [`crate::inventory::Inventory::with_stack`] 同一约束：
+    /// 回调内不得调用本物品栏的任何方法（持锁回调，重入可能
+    /// 死锁），只做纯读比较/浅访问。
+    pub fn with_held_item(&self, f: &mut dyn FnMut(&ItemStack)) {
+        let inv = self
+            .main_inventory
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(&inv[self.get_selected_slot() as usize]);
+    }
+
     /// 设置当前选中快捷栏槽位中的物品。
     pub fn set_held_item(&self, stack: ItemStack) {
         let selected = self.get_selected_slot() as usize;
@@ -140,6 +153,16 @@ impl PlayerInventory {
         match hand {
             Hand::Left => self.off_hand_item(),
             Hand::Right => self.held_item(),
+        }
+    }
+
+    /// 以借用方式访问指定手（读锁内回调，零克隆）。
+    ///
+    /// 约束同 [`Self::with_held_item`]。
+    pub fn with_stack_in_hand(&self, hand: Hand, f: &mut dyn FnMut(&ItemStack)) {
+        match hand {
+            Hand::Left => self.with_off_hand_item(f),
+            Hand::Right => self.with_held_item(f),
         }
     }
 
@@ -302,6 +325,25 @@ impl PlayerInventory {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(slot)
+    }
+
+    /// 以借用方式访问副手槽位（锁内回调，零克隆）；未配置
+    /// 副手槽位时回调收到 `ItemStack::EMPTY`。
+    ///
+    /// 约束同 [`Self::with_held_item`]。
+    pub fn with_off_hand_item(&self, f: &mut dyn FnMut(&ItemStack)) {
+        let Some(slot) = self.equipment_slots.get(&Self::OFF_HAND_SLOT) else {
+            f(ItemStack::EMPTY);
+            return;
+        };
+        let equipment = self
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match equipment.equipment.get(slot) {
+            Some(stack) => f(stack),
+            None => f(ItemStack::EMPTY),
+        }
     }
 
     /// 交换主手与副手中的物品。
