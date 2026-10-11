@@ -418,7 +418,13 @@ macro_rules! impl_block_entity_for_cooking {
 
                         let mut burn_ticks = adjusted_fuel_ticks;
                         let mut burn_cancelled = false;
-                        if let Some(server) = world.server.upgrade() {
+                        // 订阅者先行：无监听时跳过构造（事件值与
+                        // adjusted_fuel_ticks 相同，burn_ticks 初值即等价）。
+                        if let Some(server) = world.server.upgrade()
+                            && server
+                                .plugin_manager
+                                .has_handlers::<$crate::plugin::api::events::inventory::furnace_burn::FurnaceBurnEvent>()
+                        {
                             let mut burn_event = $crate::plugin::api::events::inventory::furnace_burn::FurnaceBurnEvent::new(
                                 self.position,
                                 bottom_item.item.registry_key.to_string(),
@@ -466,18 +472,29 @@ macro_rules! impl_block_entity_for_cooking {
                                 // （spent 要等 u16 回绕后才等于 0）。
                                 let recipe_cook_time = furnace_recipe
                                     .map_or(0, |recipe| recipe.cookingtime.max(0) as u32);
-                                let mut start_event = $crate::plugin::api::events::inventory::furnace_start_smelt::FurnaceStartSmeltEvent::new(
-                                    self.position,
-                                    top_item.item.registry_key.to_string(),
-                                    recipe_cook_time,
-                                );
-                                server.plugin_manager.fire_blocking(&server, &mut start_event);
-                                if start_event.cancelled {
-                                    start_cancelled = true;
+                                // 订阅者先行：无监听时跳过构造，但按
+                                // 事件构造值路径等价回写总时长（含钳制）。
+                                if server
+                                    .plugin_manager
+                                    .has_handlers::<$crate::plugin::api::events::inventory::furnace_start_smelt::FurnaceStartSmeltEvent>()
+                                {
+                                    let mut start_event = $crate::plugin::api::events::inventory::furnace_start_smelt::FurnaceStartSmeltEvent::new(
+                                        self.position,
+                                        top_item.item.registry_key.to_string(),
+                                        recipe_cook_time,
+                                    );
+                                    server.plugin_manager.fire_blocking(&server, &mut start_event);
+                                    if start_event.cancelled {
+                                        start_cancelled = true;
+                                    } else {
+                                        // 钳制到 u16 范围，理由同燃料时长
+                                        self.set_cooking_total_time(
+                                            start_event.cooking_time.min(u32::from(u16::MAX)) as u16,
+                                        );
+                                    }
                                 } else {
-                                    // 钳制到 u16 范围，理由同燃料时长
                                     self.set_cooking_total_time(
-                                        start_event.cooking_time.min(u32::from(u16::MAX)) as u16,
+                                        recipe_cook_time.min(u32::from(u16::MAX)) as u16,
                                     );
                                 }
                             } else if let Some(recipe) = furnace_recipe {
@@ -499,7 +516,13 @@ macro_rules! impl_block_entity_for_cooking {
                                     );
 
                                     let mut smelt_cancelled = false;
-                                    if let Some(server) = world.server.upgrade() {
+                                    // 订阅者先行：无监听时跳过构造（每件
+                                    // 熔成品两个 String 分配）。
+                                    if let Some(server) = world.server.upgrade()
+                                        && server
+                                            .plugin_manager
+                                            .has_handlers::<$crate::plugin::api::events::inventory::furnace_smelt::FurnaceSmeltEvent>()
+                                    {
                                         let mut smelt_event = $crate::plugin::api::events::inventory::furnace_smelt::FurnaceSmeltEvent::new(
                                             self.position,
                                             top_item.item.registry_key.to_string(),

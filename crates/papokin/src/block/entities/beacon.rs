@@ -208,16 +208,20 @@ impl BeaconBlockEntity {
             }
 
             if let Some(effect) = primary_effect {
-                // 取消即不给该玩家施加主效果（此前取消被无视）
+                // 取消即不给该玩家施加主效果（此前取消被无视）。
+                // 订阅者先行：无监听时跳过构造（信标每 80 刻对
+                // 范围内每玩家每效果一次 String 分配）。
                 let cancelled = server.as_ref().is_some_and(|server| {
-                    let mut event = BeaconEffectEvent::new(
-                        player.clone(),
-                        effect.minecraft_name.to_string(),
-                        true,
-                        self.position,
-                    );
-                    server.plugin_manager.fire_blocking(server, &mut event);
-                    event.cancelled
+                    server.plugin_manager.has_handlers::<BeaconEffectEvent>() && {
+                        let mut event = BeaconEffectEvent::new(
+                            player.clone(),
+                            effect.minecraft_name.to_string(),
+                            true,
+                            self.position,
+                        );
+                        server.plugin_manager.fire_blocking(server, &mut event);
+                        event.cancelled
+                    }
                 });
                 if !cancelled {
                     player.add_effect(papokin_data::potion::Effect {
@@ -237,14 +241,16 @@ impl BeaconBlockEntity {
                 && let Some(effect) = secondary_effect
             {
                 let cancelled = server.as_ref().is_some_and(|server| {
-                    let mut event = BeaconEffectEvent::new(
-                        player.clone(),
-                        effect.minecraft_name.to_string(),
-                        false,
-                        self.position,
-                    );
-                    server.plugin_manager.fire_blocking(server, &mut event);
-                    event.cancelled
+                    server.plugin_manager.has_handlers::<BeaconEffectEvent>() && {
+                        let mut event = BeaconEffectEvent::new(
+                            player.clone(),
+                            effect.minecraft_name.to_string(),
+                            false,
+                            self.position,
+                        );
+                        server.plugin_manager.fire_blocking(server, &mut event);
+                        event.cancelled
+                    }
                 });
                 if !cancelled {
                     player.add_effect(papokin_data::potion::Effect {

@@ -282,26 +282,42 @@ impl HopperBlockEntity {
             let picked_up = world.with_entities_at_box(&search_box, |entities| {
                 for entity_base in entities {
                     if let Some(item_entity) = entity_base.get_item_entity() {
-                        let (is_empty, registry_key) = {
+                        let is_empty = {
                             let stack = item_entity
                                 .get_item_stack()
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            (stack.is_empty(), stack.item.registry_key.to_string())
+                            stack.is_empty()
                         };
                         if !is_empty {
-                            let mut pickup_event =
-                                crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
-                                    self.position,
-                                    item_entity.get_entity().entity_id,
-                                    registry_key,
-                                );
-                            if let Some(server) = world.server.upgrade() {
+                            // 订阅者先行：无监听时跳过构造与
+                            // registry_key 的 String 分配（漏斗每 8 刻
+                            // 对上方实体扫描一次）。
+                            let cancelled =
+                                if let Some(server) = world.server.upgrade()
+                                    && server.plugin_manager.has_handlers::<crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent>()
+                                {
+                                let registry_key = {
+                                    let stack = item_entity
+                                        .get_item_stack()
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    stack.item.registry_key.to_string()
+                                };
+                                let mut pickup_event =
+                                    crate::plugin::api::events::inventory::inventory_pickup_item::InventoryPickupItemEvent::new(
+                                        self.position,
+                                        item_entity.get_entity().entity_id,
+                                        registry_key,
+                                    );
                                 server
                                     .plugin_manager
                                     .fire_blocking(&server, &mut pickup_event);
-                            }
-                            if pickup_event.cancelled {
+                                    pickup_event.cancelled
+                                } else {
+                                    false
+                                };
+                            if cancelled {
                                 continue;
                             }
                             let (one_item, is_empty) = {
@@ -419,23 +435,31 @@ impl HopperBlockEntity {
                 return false;
             }
             let target_pos = self.position.offset(to_offset(&self.facing));
+            // 订阅者先行：无监听时整轮传输零构造（每槽一个 String
+            // 分配，漏斗每 8 刻扫描全部槽位）。
+            let gated_server = world.server.upgrade().filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent>()
+            });
             for slot in 0..Self::INVENTORY_SIZE {
                 let item = self.get_stack(slot);
                 if item.is_empty() {
                     continue;
                 }
-                let mut move_event = crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent::new(
-                    self.position,
-                    target_pos,
-                    item.item.registry_key.to_string(),
-                    1,
-                );
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut move_event);
-                }
-                if move_event.cancelled {
+                let cancelled = if let Some(server) = &gated_server {
+                    let mut move_event = crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent::new(
+                        self.position,
+                        target_pos,
+                        item.item.registry_key.to_string(),
+                        1,
+                    );
+                    server.plugin_manager.fire_blocking(server, &mut move_event);
+                    move_event.cancelled
+                } else {
+                    false
+                };
+                if cancelled {
                     continue;
                 }
                 // 原版 `HopperBlockEntity.ejectItems`：真正把物品从
