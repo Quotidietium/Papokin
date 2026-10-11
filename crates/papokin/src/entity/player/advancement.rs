@@ -460,7 +460,17 @@ impl PlayerAdvancement {
             return;
         }
 
-        if let Some(server) = player.world().server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        if let Some(server) = player
+            .world()
+            .server
+            .upgrade()
+            .filter(|server| {
+                server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_advancement_done::PlayerAdvancementDoneEvent>()
+            })
+        {
             let mut event =
                 crate::plugin::api::events::player::player_advancement_done::PlayerAdvancementDoneEvent::new(
                     player.clone(),

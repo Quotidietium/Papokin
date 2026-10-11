@@ -1523,6 +1523,9 @@ impl Player {
 
         if let Some((result, original_item)) = damaged {
             if let Some(server) = self.world().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_item_damage::PlayerItemDamageEvent>()
                 && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
             {
                 let mut event = crate::plugin::api::events::player::player_item_damage::PlayerItemDamageEvent::new(
@@ -1534,6 +1537,9 @@ impl Player {
             }
             if result == papokin_data::item_stack::DamageResult::Broken {
                 if let Some(server) = self.world().server.upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent>()
                     && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
                 {
                     let mut event = crate::plugin::api::events::player::player_item_break::PlayerItemBreakEvent::new(
@@ -4973,6 +4979,9 @@ impl Player {
         let drop_amount = if drop_stack { item_stack.item_count } else { 1 };
 
         if let Some(server) = self.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_drop_item::PlayerDropItemEvent>()
             && let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
         {
             let mut event =
@@ -5428,6 +5437,9 @@ impl Player {
 
         if let Some(player_arc) = self.world().get_player_by_uuid(self.gameprofile.id)
             && let Some(server) = self.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_item_mend::PlayerItemMendEvent>()
         {
             let mut event =
                 crate::plugin::api::events::player::player_item_mend::PlayerItemMendEvent {
@@ -5610,13 +5622,18 @@ impl Player {
             return;
         }
 
-        let mut prepare_event =
-            crate::plugin::api::events::inventory::prepare_anvil::PrepareAnvilEvent::new(
-                self.clone(),
-                packet.item_name.to_string(),
-                1,
-            );
-        if let Some(server) = self.world().server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（item_name String 分配）。
+        if let Some(server) = self.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::inventory::prepare_anvil::PrepareAnvilEvent>()
+        {
+            let mut prepare_event =
+                crate::plugin::api::events::inventory::prepare_anvil::PrepareAnvilEvent::new(
+                    self.clone(),
+                    packet.item_name.to_string(),
+                    1,
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut prepare_event);
@@ -6017,25 +6034,35 @@ impl Player {
             && let Some(ref stack) = clicked_item
             && !stack.is_empty()
         {
-            let mut craft_event =
-                crate::plugin::api::events::inventory::craft_item::CraftItemEvent::new(
-                    self.clone(),
-                    stack.item.registry_key.to_string(),
-                );
-            let mut prep_craft =
-                crate::plugin::api::events::inventory::prepare_item_craft::PrepareItemCraftEvent::new(
-                    self.clone(),
-                    stack.item.registry_key.to_string(),
-                );
-            if let Some(server) = self.world().server.upgrade() {
+            // 订阅者先行：两事件任一有监听才构造（各一 String）。
+            let blocked = if let Some(server) = self.world().server.upgrade()
+                && (server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::craft_item::CraftItemEvent>()
+                    || server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::inventory::prepare_item_craft::PrepareItemCraftEvent>())
+            {
+                let mut craft_event =
+                    crate::plugin::api::events::inventory::craft_item::CraftItemEvent::new(
+                        self.clone(),
+                        stack.item.registry_key.to_string(),
+                    );
+                let mut prep_craft = crate::plugin::api::events::inventory::prepare_item_craft::PrepareItemCraftEvent::new(
+                        self.clone(),
+                        stack.item.registry_key.to_string(),
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut craft_event);
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut prep_craft);
-            }
-            if craft_event.cancelled || prep_craft.cancelled {
+                craft_event.cancelled || prep_craft.cancelled
+            } else {
+                false
+            };
+            if blocked {
                 cancel_screen();
                 return;
             }
@@ -6046,25 +6073,35 @@ impl Player {
             && let Some(ref stack) = clicked_item
             && !stack.is_empty()
         {
-            let mut smith_event =
-                crate::plugin::api::events::inventory::smith_item::SmithItemEvent::new(
-                    self.clone(),
-                    stack.item.registry_key.to_string(),
-                );
-            let mut prep_smith =
-                crate::plugin::api::events::inventory::prepare_smithing::PrepareSmithingEvent::new(
-                    self.clone(),
-                    Some(stack.item.registry_key.to_string()),
-                );
-            if let Some(server) = self.world().server.upgrade() {
+            // 订阅者先行：两事件任一有监听才构造（各一 String）。
+            let blocked = if let Some(server) = self.world().server.upgrade()
+                && (server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::smith_item::SmithItemEvent>()
+                    || server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::inventory::prepare_smithing::PrepareSmithingEvent>())
+            {
+                let mut smith_event =
+                    crate::plugin::api::events::inventory::smith_item::SmithItemEvent::new(
+                        self.clone(),
+                        stack.item.registry_key.to_string(),
+                    );
+                let mut prep_smith = crate::plugin::api::events::inventory::prepare_smithing::PrepareSmithingEvent::new(
+                        self.clone(),
+                        Some(stack.item.registry_key.to_string()),
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut smith_event);
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut prep_smith);
-            }
-            if smith_event.cancelled {
+                smith_event.cancelled
+            } else {
+                false
+            };
+            if blocked {
                 cancel_screen();
                 return;
             }
@@ -6077,15 +6114,19 @@ impl Player {
             && let Some(ref stack) = clicked_item
             && !stack.is_empty()
         {
-            let mut extract_event =
-                crate::plugin::api::events::inventory::furnace_extract::FurnaceExtractEvent::new(
+            // 订阅者先行：无监听时跳过构造（一 String）。
+            if let Some(server) = self.world().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::furnace_extract::FurnaceExtractEvent>()
+            {
+                let mut extract_event = crate::plugin::api::events::inventory::furnace_extract::FurnaceExtractEvent::new(
                     self.clone(),
                     papokin_util::math::position::BlockPos::new(0, 0, 0),
                     stack.item.registry_key.to_string(),
                     stack.item_count as u32,
                     0.0,
                 );
-            if let Some(server) = self.world().server.upgrade() {
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut extract_event);
@@ -6095,42 +6136,57 @@ impl Player {
         if window_type == Some(WindowType::Grindstone)
             && let Some(ref stack) = clicked_item
         {
-            let mut prep_grindstone =
-                crate::plugin::api::events::inventory::prepare_grindstone::PrepareGrindstoneEvent::new(
+            // 订阅者先行：无监听时跳过构造（一 String）。
+            if let Some(server) = self.world().server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::inventory::prepare_grindstone::PrepareGrindstoneEvent>()
+            {
+                let mut prep_grindstone = crate::plugin::api::events::inventory::prepare_grindstone::PrepareGrindstoneEvent::new(
                     self.clone(),
                     if stack.is_empty() { None } else { Some(stack.item.registry_key.to_string()) },
                 );
-            if let Some(server) = self.world().server.upgrade() {
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut prep_grindstone);
             }
         }
 
-        if let Some(ref stack) = clicked_item {
-            let mut prep_result =
-                crate::plugin::api::events::inventory::prepare_inventory_result::PrepareInventoryResultEvent::new(
-                    self.clone(),
-                    if stack.is_empty() { None } else { Some(stack.item.registry_key.to_string()) },
-                );
-            if let Some(server) = self.world().server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut prep_result);
-            }
+        // 订阅者先行：无监听时跳过构造（一 String）。
+        if let Some(ref stack) = clicked_item
+            && let Some(server) = self.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::inventory::prepare_inventory_result::PrepareInventoryResultEvent>()
+        {
+            let mut prep_result = crate::plugin::api::events::inventory::prepare_inventory_result::PrepareInventoryResultEvent::new(
+                self.clone(),
+                if stack.is_empty() { None } else { Some(stack.item.registry_key.to_string()) },
+            );
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut prep_result);
         }
 
         if packet.mode == SlotActionType::QuickCraft {
-            let mut drag_event =
-                crate::plugin::api::events::inventory::inventory_drag::InventoryDragEvent::new(
-                    self.clone(),
-                );
-            if let Some(server) = self.world().server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut drag_event);
-            }
-            if drag_event.cancelled {
+            // 订阅者先行：无监听时跳过构造。
+            let drag_cancelled =
+                if let Some(server) = self.world().server.upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::inventory::inventory_drag::InventoryDragEvent>()
+                {
+                    let mut drag_event = crate::plugin::api::events::inventory::inventory_drag::InventoryDragEvent::new(
+                        self.clone(),
+                    );
+                    server
+                        .plugin_manager
+                        .fire_blocking(&server, &mut drag_event);
+                    drag_event.cancelled
+                } else {
+                    false
+                };
+            if drag_cancelled {
                 cancel_screen();
                 return;
             }
@@ -6321,14 +6377,19 @@ impl Player {
             self.permission_lvl.load(),
         );
 
-        let mut event = PlayerPermissionCheckEvent::new(self.clone(), node.to_string(), result);
-        let server_arc = self.world().server.upgrade();
-        if let Some(server_arc) = server_arc {
+        // 订阅者先行：无监听时直接返回权限检查结果（即事件构造值）。
+        if let Some(server_arc) = self.world().server.upgrade()
+            && server_arc
+                .plugin_manager
+                .has_handlers::<PlayerPermissionCheckEvent>()
+        {
+            let mut event = PlayerPermissionCheckEvent::new(self.clone(), node.to_string(), result);
             server_arc
                 .plugin_manager
                 .fire_blocking(&server_arc, &mut event);
+            return event.result;
         }
-        event.result
+        result
     }
 
     pub fn is_creative(&self) -> bool {
