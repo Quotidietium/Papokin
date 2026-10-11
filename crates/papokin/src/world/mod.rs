@@ -4517,16 +4517,26 @@ impl World {
     }
 
     pub fn spawn_entity(self: &Arc<Self>, entity: Arc<dyn EntityBase>) {
-        let mut event = crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent::new(
-            entity.get_entity().entity_id,
-            entity.get_entity().entity_type.id.to_string(),
-            entity.get_entity().pos.load(),
-            self.clone(),
-        );
-        if let Some(server) = self.server.upgrade() {
-            server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+        // 订阅者先行：无监听时跳过构造（每次实体生成一个
+        // String 分配——物品掉落/投射物/刷怪全部经过这里）。
+        let cancelled =
+            if let Some(server) = self.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent>()
+            {
+            let mut event = crate::plugin::api::events::entity::entity_spawn::EntitySpawnEvent::new(
+                entity.get_entity().entity_id,
+                entity.get_entity().entity_type.id.to_string(),
+                entity.get_entity().pos.load(),
+                self.clone(),
+            );
+                    server.plugin_manager.fire_blocking(&server, &mut event);
+                    event.cancelled
+                } else {
+                    false
+                };
+        if cancelled {
             return;
         }
 
@@ -5153,17 +5163,26 @@ impl World {
         };
 
         let entity = Entity::new(self.clone(), spawn_pos, &EntityType::ITEM);
-        let mut item_event = crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
-            entity.entity_id,
-            spawn_pos,
-            stack.item.registry_key.to_string(),
-        );
-        if let Some(server) = self.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（每次掉落一个 String 分配）。
+        let cancelled = if let Some(server) = self.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent>()
+        {
+            let mut item_event =
+                crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
+                    entity.entity_id,
+                    spawn_pos,
+                    stack.item.registry_key.to_string(),
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut item_event);
-        }
-        if item_event.cancelled {
+            item_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 
@@ -5237,17 +5256,26 @@ impl World {
         };
 
         let entity = Entity::new(self.clone(), spawn_pos, &EntityType::ITEM);
-        let mut item_event = crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
-            entity.entity_id,
-            spawn_pos,
-            stack.item.registry_key.to_string(),
-        );
-        if let Some(server) = self.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（每次掉落一个 String 分配）。
+        let cancelled = if let Some(server) = self.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent>()
+        {
+            let mut item_event =
+                crate::plugin::api::events::entity::item_spawn::ItemSpawnEvent::new(
+                    entity.entity_id,
+                    spawn_pos,
+                    stack.item.registry_key.to_string(),
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut item_event);
-        }
-        if item_event.cancelled {
+            item_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 
@@ -6655,11 +6683,17 @@ impl World {
 
     /// 战利品生成事件。返回 false 表示插件已取消本次生成，调用方应跳过战利品产出。
     pub fn generate_loot(&self, loot_table: &str) -> bool {
-        let mut loot_event =
-            crate::plugin::api::events::world::loot_generate::LootGenerateEvent::new(
-                loot_table.to_string(),
-            );
-        if let Some(server) = self.server.upgrade() {
+        // 订阅者先行：无监听时跳过构造（每次战利品生成一个
+        // String 分配——实体死亡掉落/容器战利品都会经过这里）。
+        if let Some(server) = self.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::world::loot_generate::LootGenerateEvent>()
+        {
+            let mut loot_event =
+                crate::plugin::api::events::world::loot_generate::LootGenerateEvent::new(
+                    loot_table.to_string(),
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut loot_event);
