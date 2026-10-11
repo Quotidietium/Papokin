@@ -202,16 +202,26 @@ impl BlockEntity for MobSpawnerBlockEntity {
 
             let spawn_range = self.spawn_range;
 
-            // 在任何生成尝试之前触发的早期过滤钩子
-            let mut pre_event =
-                crate::plugin::api::events::entity::pre_spawner_spawn::PreSpawnerSpawnEvent::new(
-                    self.position,
-                    format!("minecraft:{}", entity_type.resource_name),
-                );
-            if let Some(server) = world.server.upgrade() {
-                server.plugin_manager.fire_blocking(&server, &mut pre_event);
-            }
-            if pre_event.cancelled {
+            // 在任何生成尝试之前触发的早期过滤钩子。
+            // 订阅者先行：无监听时跳过构造（每轮生成一个
+            // format! String 分配）。
+            let cancelled =
+                if let Some(server) = world.server.upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::entity::pre_spawner_spawn::PreSpawnerSpawnEvent>()
+                {
+                let mut pre_event =
+                    crate::plugin::api::events::entity::pre_spawner_spawn::PreSpawnerSpawnEvent::new(
+                        self.position,
+                        format!("minecraft:{}", entity_type.resource_name),
+                    );
+                    server.plugin_manager.fire_blocking(&server, &mut pre_event);
+                    pre_event.cancelled
+                } else {
+                    false
+                };
+            if cancelled {
                 // 将被取消的生成轮次计为已完成，以便刷怪笼
                 // 进入冷却，而不是每刻重试。
                 self.update_spawns(world);

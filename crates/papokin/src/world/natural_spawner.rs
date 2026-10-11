@@ -538,6 +538,7 @@ pub fn get_random_pos_within(
     BlockPos::new(x, y, z)
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn spawn_mobs_for_chunk_generation(
     world: &Arc<World>,
     cache: &mut dyn GenerationCache,
@@ -600,17 +601,28 @@ pub fn spawn_mobs_for_chunk_generation(
                         fz,
                     )) && check_spawn_rules(entity_type, world, &check_pos, false)
                     {
-                        // 在实体创建之前触发的早期过滤钩子
-                        let mut pre_event = crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
-                            spawn_pos_f64,
-                            world.clone(),
-                            format!("minecraft:{}", entity_type.resource_name),
-                            "CHUNK_GENERATION".to_string(),
-                        );
-                        if let Some(server) = world.server.upgrade() {
-                            server.plugin_manager.fire_blocking(&server, &mut pre_event);
-                        }
-                        if pre_event.cancelled {
+                        // 在实体创建之前触发的早期过滤钩子。
+                        // 订阅者先行：无监听时跳过构造（每尝试两个
+                        // String 分配，自然刷怪每刻都在尝试）。
+                        let cancelled =
+                            if let Some(server) = world.server.upgrade()
+                                && server
+                                    .plugin_manager
+                                    .has_handlers::<crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent>()
+                            {
+                            let mut pre_event =
+                                crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
+                                    spawn_pos_f64,
+                                    world.clone(),
+                                    format!("minecraft:{}", entity_type.resource_name),
+                                    "CHUNK_GENERATION".to_string(),
+                                );
+                                server.plugin_manager.fire_blocking(&server, &mut pre_event);
+                                pre_event.cancelled
+                            } else {
+                                false
+                            };
+                        if cancelled {
                             continue;
                         }
 
@@ -618,25 +630,35 @@ pub fn spawn_mobs_for_chunk_generation(
                         entity
                             .get_entity()
                             .set_rotation(rand::random::<f32>() * 360.0, 0.0);
-                        let mut spawn_event =
-                            crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
-                                entity_id: entity.get_entity().entity_id,
-                                entity_type: entity
-                                    .get_entity()
-                                    .entity_type
-                                    .resource_name
-                                    .to_string(),
-                                position: spawn_pos_f64,
-                                world: world.clone(),
-                                spawn_reason: "CHUNK_GENERATION".to_string(),
-                                cancelled: false,
+                        // 订阅者先行：无监听时跳过构造（每成功生成
+                        // 两个 String 分配）。
+                        let cancelled =
+                            if let Some(server) = world.server.upgrade()
+                                && server
+                                    .plugin_manager
+                                    .has_handlers::<crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent>()
+                            {
+                            let mut spawn_event =
+                                crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                                    entity_id: entity.get_entity().entity_id,
+                                    entity_type: entity
+                                        .get_entity()
+                                        .entity_type
+                                        .resource_name
+                                        .to_string(),
+                                    position: spawn_pos_f64,
+                                    world: world.clone(),
+                                    spawn_reason: "CHUNK_GENERATION".to_string(),
+                                    cancelled: false,
+                                };
+                                server
+                                    .plugin_manager
+                                    .fire_blocking(&server, &mut spawn_event);
+                                spawn_event.cancelled
+                            } else {
+                                false
                             };
-                        if let Some(server) = world.server.upgrade() {
-                            server
-                                .plugin_manager
-                                .fire_blocking(&server, &mut spawn_event);
-                        }
-                        if spawn_event.cancelled {
+                        if cancelled {
                             continue;
                         }
                         world.spawn_entity_non_save(entity);
@@ -835,12 +857,22 @@ pub fn spawn_category_for_position(
                 ) && spawn_state.can_spawn(entity_type, &check_pos, world)
                 {
                     let spawn_pos_f64 = Vector3::new(xx, f64::from(y_start), zz);
-                    let mut pre_event = crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
-                        spawn_pos_f64, world.clone(), format!("minecraft:{}", entity_type.resource_name), "NATURAL".to_string());
-                    if let Some(server) = world.server.upgrade() {
-                        server.plugin_manager.fire_blocking(&server, &mut pre_event);
-                    }
-                    if pre_event.cancelled {
+                    // 订阅者先行：无监听时跳过构造（每尝试两个
+                    // String 分配，自然刷怪每刻都在尝试）。
+                    let cancelled =
+                        if let Some(server) = world.server.upgrade()
+                            && server
+                                .plugin_manager
+                                .has_handlers::<crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent>()
+                        {
+                        let mut pre_event = crate::plugin::api::events::entity::pre_creature_spawn::PreCreatureSpawnEvent::new(
+                            spawn_pos_f64, world.clone(), format!("minecraft:{}", entity_type.resource_name), "NATURAL".to_string());
+                            server.plugin_manager.fire_blocking(&server, &mut pre_event);
+                            pre_event.cancelled
+                        } else {
+                            false
+                        };
+                    if cancelled {
                         ll += 1;
                         continue;
                     }
@@ -856,18 +888,28 @@ pub fn spawn_category_for_position(
                     });
 
                     if is_valid_for_mob {
-                        let mut event = crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
-                            entity_id: entity.get_entity().entity_id,
-                            entity_type: entity_type.resource_name.to_string(),
-                            position: spawn_pos_f64,
-                            world: world.clone(),
-                            spawn_reason: "NATURAL".to_string(),
-                            cancelled: false,
-                        };
-                        if let Some(server) = world.server.upgrade() {
-                            server.plugin_manager.fire_blocking(&server, &mut event);
-                        }
-                        if event.cancelled {
+                        // 订阅者先行：无监听时跳过构造（每成功生成
+                        // 两个 String 分配）。
+                        let cancelled =
+                            if let Some(server) = world.server.upgrade()
+                                && server
+                                    .plugin_manager
+                                    .has_handlers::<crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent>()
+                            {
+                            let mut event = crate::plugin::api::events::entity::creature_spawn::CreatureSpawnEvent {
+                                entity_id: entity.get_entity().entity_id,
+                                entity_type: entity_type.resource_name.to_string(),
+                                position: spawn_pos_f64,
+                                world: world.clone(),
+                                spawn_reason: "NATURAL".to_string(),
+                                cancelled: false,
+                            };
+                                server.plugin_manager.fire_blocking(&server, &mut event);
+                                event.cancelled
+                            } else {
+                                false
+                            };
+                        if cancelled {
                             ll += 1;
                             continue;
                         }
