@@ -615,13 +615,15 @@ pub fn calculate_comparator_output(inventory: &dyn papokin_inventory::Inventory)
     let mut fill_sum = 0.0;
     let mut non_empty_count = 0;
     for i in 0..size {
-        let stack = inventory.get_stack(i);
-        if !stack.is_empty() {
-            let max_stack = stack.get_max_stack_size() as f32;
-            let count = stack.item_count as f32;
-            fill_sum += count / max_stack;
-            non_empty_count += 1;
-        }
+        // 借用读取：比较器在每次容器变化后重算，逐槽深克隆白付
+        inventory.with_stack(i, &mut |stack| {
+            if !stack.is_empty() {
+                let max_stack = stack.get_max_stack_size() as f32;
+                let count = stack.item_count as f32;
+                fill_sum += count / max_stack;
+                non_empty_count += 1;
+            }
+        });
     }
     if non_empty_count == 0 {
         return 0;

@@ -152,9 +152,15 @@ impl CrafterBlock {
             Self::dispense_item(world, pos, crafter, &mut result_stack, props.orientation);
 
             for i in 0..CrafterBlockEntity::INVENTORY_SIZE {
-                let stack = crafter.get_stack(i);
-                if !stack.is_empty()
-                    && let Some(remainder_id) = get_recipe_remainder_id(stack.item.id)
+                // 借用探测：回调内只读 item.id（不触物品栏方法），
+                // 残留物构造与发射在锁外进行
+                let mut remainder_id = None;
+                crafter.with_stack(i, &mut |stack| {
+                    if !stack.is_empty() {
+                        remainder_id = get_recipe_remainder_id(stack.item.id);
+                    }
+                });
+                if let Some(remainder_id) = remainder_id
                     && let Some(remainder_item) = Item::from_id(remainder_id)
                 {
                     let mut remainder_stack = ItemStack::new(1, remainder_item);

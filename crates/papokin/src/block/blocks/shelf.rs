@@ -40,10 +40,16 @@ impl BlockBehaviour for ShelfBlock {
         if let Some(block_entity) = args.world.get_block_entity(args.position)
             && let Some(shelf) = block_entity.as_any().downcast_ref::<ShelfBlockEntity>()
         {
-            let b0 = u8::from(!shelf.get_stack(0).is_empty());
-            let b1 = u8::from(!shelf.get_stack(1).is_empty());
-            let b2 = u8::from(!shelf.get_stack(2).is_empty());
-            Some(b0 | (b1 << 1) | (b2 << 2))
+            // 借用探测：比较器输出只需 is_empty，深克隆白付
+            let mut bits = 0u8;
+            for (i, bit) in (0..3).zip([1u8, 2, 4]) {
+                let mut occupied = false;
+                shelf.with_stack(i, &mut |stack| occupied = !stack.is_empty());
+                if occupied {
+                    bits |= bit;
+                }
+            }
+            Some(bits)
         } else {
             None
         }
