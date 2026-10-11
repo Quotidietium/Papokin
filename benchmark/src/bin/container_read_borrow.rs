@@ -28,7 +28,6 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::hint::black_box;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -95,11 +94,13 @@ const N_ROUNDS: u64 = 100_000;
 const ALLOCS_PER_ROUND: u64 = 51;
 
 /// 物品堆模型：`patch` 非空即带组件（克隆 = 1 Vec + 每组件 1 分配）。
+/// `patch` 字段仅参与克隆成本，不直接读取。
 #[derive(Clone)]
 struct ModelStack {
     item_id: u16,
     item_count: u8,
     /// None = 空槽（克隆零分配）；Some(v) 非空，v 逐元素克隆分配。
+    #[allow(dead_code)] // 分配面模型：仅经 Clone 参与成本，不直接读取
     patch: Option<Vec<String>>,
 }
 
@@ -179,8 +180,8 @@ fn player_container() -> Vec<ModelStack> {
 fn comparator_old(inv: &[ModelStack]) -> u64 {
     let mut fill_sum = 0.0f32;
     let mut non_empty_count = 0u32;
-    for i in 0..inv.len() {
-        let stack = inv[i].clone();
+    for stack in inv {
+        let stack = stack.clone();
         if !stack.is_empty() {
             let max_stack = 64.0f32;
             fill_sum += f32::from(stack.item_count) / max_stack;
@@ -194,8 +195,7 @@ fn comparator_old(inv: &[ModelStack]) -> u64 {
 fn comparator_new(inv: &[ModelStack]) -> u64 {
     let mut fill_sum = 0.0f32;
     let mut non_empty_count = 0u32;
-    for i in 0..inv.len() {
-        let stack = &inv[i];
+    for stack in inv {
         if !stack.is_empty() {
             let max_stack = 64.0f32;
             fill_sum += f32::from(stack.item_count) / max_stack;
@@ -208,16 +208,16 @@ fn comparator_new(inv: &[ModelStack]) -> u64 {
 /// 漏斗双段扫描（旧臂：逐槽深克隆；事件无监听零构造）。
 fn hopper_old(hopper: &[ModelStack], chest: &[ModelStack]) -> (u64, u64) {
     let mut eject_candidates = 0u64;
-    for slot in 0..hopper.len() {
-        let item = hopper[slot].clone();
+    for item in hopper {
+        let item = item.clone();
         if item.is_empty() {
             continue;
         }
         eject_candidates += u64::from(item.item_id);
     }
     let mut pickup_candidates = 0u64;
-    for i in 0..chest.len() {
-        let item = chest[i].clone();
+    for item in chest {
+        let item = item.clone();
         if !item.is_empty() {
             pickup_candidates += u64::from(item.item_id);
         }
@@ -228,16 +228,14 @@ fn hopper_old(hopper: &[ModelStack], chest: &[ModelStack]) -> (u64, u64) {
 /// 漏斗双段扫描（新臂：空槽借用探测，非空也仅借用读取）。
 fn hopper_new(hopper: &[ModelStack], chest: &[ModelStack]) -> (u64, u64) {
     let mut eject_candidates = 0u64;
-    for slot in 0..hopper.len() {
-        let item = &hopper[slot];
+    for item in hopper {
         if item.is_empty() {
             continue;
         }
         eject_candidates += u64::from(item.item_id);
     }
     let mut pickup_candidates = 0u64;
-    for i in 0..chest.len() {
-        let item = &chest[i];
+    for item in chest {
         if !item.is_empty() {
             pickup_candidates += u64::from(item.item_id);
         }
@@ -248,8 +246,8 @@ fn hopper_new(hopper: &[ModelStack], chest: &[ModelStack]) -> (u64, u64) {
 /// `count()` 同物品计数（旧臂：逐槽深克隆）。
 fn count_old(inv: &[ModelStack], target: u16) -> u64 {
     let mut count = 0u64;
-    for i in 0..inv.len() {
-        let stack = inv[i].clone();
+    for stack in inv {
+        let stack = stack.clone();
         if stack.item_id == target {
             count += u64::from(stack.item_count);
         }
@@ -260,8 +258,7 @@ fn count_old(inv: &[ModelStack], target: u16) -> u64 {
 /// `count()` 同物品计数（新臂：借用累加）。
 fn count_new(inv: &[ModelStack], target: u16) -> u64 {
     let mut count = 0u64;
-    for i in 0..inv.len() {
-        let stack = &inv[i];
+    for stack in inv {
         if stack.item_id == target {
             count += u64::from(stack.item_count);
         }
