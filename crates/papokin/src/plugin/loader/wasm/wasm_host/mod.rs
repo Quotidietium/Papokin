@@ -1033,7 +1033,7 @@ mod tests {
                 tokio::runtime::Handle::current(),
             ));
 
-        let mut runtime_one = PluginRuntime::new(&probe_wasm, LegacySyncReentry::new(), spawner)
+        let runtime_one = PluginRuntime::new(&probe_wasm, LegacySyncReentry::new(), spawner)
             .expect("首次构建共享底座");
         let runtime_two = {
             let spawner: std::sync::Arc<dyn papokin_plugin_runtime::RuntimeSpawner> =
