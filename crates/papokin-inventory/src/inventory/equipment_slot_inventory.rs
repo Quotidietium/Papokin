@@ -122,6 +122,23 @@ impl Inventory for EquipmentSlotInventory {
         self.notify(&current);
     }
 
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        if slot != 0 {
+            return;
+        }
+        let mut equipment = self
+            .equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut stack = equipment.get(&self.slot);
+        if f(&mut stack) {
+            equipment.put(&self.slot, stack);
+            drop(equipment);
+            let current = self.get_stack(0);
+            self.notify(&current);
+        }
+    }
+
     fn count(&self, item: &Item) -> u8 {
         let stack = self.get_stack(0);
         if stack.item == item {

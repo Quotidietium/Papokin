@@ -49,6 +49,26 @@ pub trait Inventory: Send + Sync + Clearable {
         f(&stack);
     }
 
+    /// 锁稳定读改写：在持有与 [`Inventory::set_stack`] 等同的写锁
+    /// 期间，把槽位物品堆以可变借用交给回调，消除「`get_stack` 克隆
+    /// → 改写 → `set_stack` 回写」两段锁之间的并发窗口与整栈克隆。
+    ///
+    /// 回调约定（违者丢更新或无法回滚）：
+    /// - 返回 `true` 表示已修改物品堆，实现按各自 `set_stack` 的
+    ///   副作用提交（含 `mark_dirty` 等）；返回 `false` 时**不得**
+    ///   改动物品堆——覆写实现为原位修改，无法回滚已发生的改动；
+    /// - 回调内不得调用同一物品栏的任何方法（覆写方在持锁状态下
+    ///   回调，重入可能死锁），只能读写传入的物品堆。
+    ///
+    /// 默认实现回退为 `get_stack` + 条件 `set_stack`（语义等价，
+    /// 仅失去锁稳定性与省克隆收益）。
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        let mut stack = self.get_stack(slot);
+        if f(&mut stack) {
+            self.set_stack(slot, stack);
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack;
 
     fn remove_stack(&self, slot: usize) -> ItemStack;

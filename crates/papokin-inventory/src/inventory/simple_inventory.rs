@@ -51,6 +51,15 @@ impl Inventory for SimpleInventory {
             None => f(ItemStack::EMPTY),
         }
     }
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        let mut stacks = self
+            .stacks
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(stack) = stacks.get_mut(slot) {
+            let _ = f(stack);
+        }
+    }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
         let stacks = self

@@ -742,6 +742,28 @@ impl Inventory for PlayerInventory {
             f(&stack);
         }
     }
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        if slot < Self::MAIN_SIZE {
+            let mut inv = self
+                .main_inventory
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _ = f(&mut inv[slot]);
+        } else if let Some(slot) = self.equipment_slots.get(&slot) {
+            // 装备槽存储（EntityEquipment）无借用取用：守卫内
+            // get→改写→条件 put，锁稳定（与两段式 get/set 等分配）
+            let mut equipment = self
+                .entity_equipment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut stack = equipment.get(slot);
+            if f(&mut stack) {
+                equipment.put(slot, stack);
+            }
+        } else {
+            warn!("无法获取槽位 {slot} 处的装备槽");
+        }
+    }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
         if slot < Self::MAIN_SIZE {
