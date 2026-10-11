@@ -740,6 +740,15 @@ impl From<ItemStack> for ItemStackSerializer<'_> {
     }
 }
 
+/// 借用构造：序列化只读物品堆，调用方无「构造后继续改写原堆」
+/// 的需求时，免去组件补丁的深克隆（编码输出与 Owned 形态逐位
+/// 一致）。
+impl<'a> From<&'a ItemStack> for ItemStackSerializer<'a> {
+    fn from(item: &'a ItemStack) -> Self {
+        ItemStackSerializer(Cow::Borrowed(item))
+    }
+}
+
 impl From<Option<ItemStack>> for ItemStackSerializer<'_> {
     fn from(item: Option<ItemStack>) -> Self {
         item.map_or_else(

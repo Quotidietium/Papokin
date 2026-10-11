@@ -43,17 +43,14 @@ pub fn slot_from_version(slot: i8, version: &JavaMinecraftVersion) -> i8 {
 
 #[java_packet(SET_EQUIPMENT)]
 #[derive(Clone)]
-pub struct CSetEquipment {
+pub struct CSetEquipment<'a> {
     pub entity_id: VarInt,
-    pub equipment: Vec<(i8, ItemStackSerializer<'static>)>,
+    pub equipment: Vec<(i8, ItemStackSerializer<'a>)>,
 }
 
-impl CSetEquipment {
+impl<'a> CSetEquipment<'a> {
     #[must_use]
-    pub const fn new(
-        entity_id: VarInt,
-        equipment: Vec<(i8, ItemStackSerializer<'static>)>,
-    ) -> Self {
+    pub const fn new(entity_id: VarInt, equipment: Vec<(i8, ItemStackSerializer<'a>)>) -> Self {
         Self {
             entity_id,
             equipment,
@@ -61,7 +58,7 @@ impl CSetEquipment {
     }
 }
 
-impl ClientPacket for CSetEquipment {
+impl ClientPacket for CSetEquipment<'_> {
     fn write_packet_data(
         &self,
         mut write: impl Write,
@@ -96,7 +93,7 @@ impl ClientPacket for CSetEquipment {
     }
 }
 
-impl<'a> ServerPacket<'a> for CSetEquipment {
+impl<'a> ServerPacket<'a> for CSetEquipment<'a> {
     fn read(bytebuf: &mut &'a [u8], version: &JavaMinecraftVersion) -> Result<Self, ReadingError> {
         let entity_id = if *version <= JavaMinecraftVersion::V_1_7_6 {
             VarInt(bytebuf.get_i32_be()?)
