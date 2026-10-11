@@ -234,6 +234,13 @@ impl HopperBlockEntity {
         {
             // TODO 检查 WorldlyContainer
             for i in 0..container.size() {
+                // 空槽零克隆探测：多数扫描槽位为空（上方容器常态），
+                // 深克隆只为读 is_empty 白付；非空槽再取一次供转移判定
+                let mut non_empty = false;
+                container.with_stack(i, &mut |item| non_empty = !item.is_empty());
+                if !non_empty {
+                    continue;
+                }
                 let item = container.get_stack(i);
                 if !item.is_empty() && container.can_transfer_to(self, i, &item) {
                     //TODO WorldlyContainer
@@ -425,8 +432,11 @@ impl HopperBlockEntity {
             // TODO 检查 WorldlyContainer
             let mut is_full = true;
             for i in 0..container.size() {
-                let item = container.get_stack(i);
-                if item.item_count < item.get_max_stack_size() {
+                let mut has_room = false;
+                container.with_stack(i, &mut |item| {
+                    has_room = item.item_count < item.get_max_stack_size();
+                });
+                if has_room {
                     is_full = false;
                     break;
                 }
@@ -443,22 +453,27 @@ impl HopperBlockEntity {
                     .has_handlers::<crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent>()
             });
             for slot in 0..Self::INVENTORY_SIZE {
-                let item = self.get_stack(slot);
-                if item.is_empty() {
+                // 空槽零克隆探测：无监听（常态）时整轮扫描零克隆
+                let mut non_empty = false;
+                self.with_stack(slot, &mut |item| non_empty = !item.is_empty());
+                if !non_empty {
                     continue;
                 }
-                let cancelled = if let Some(server) = &gated_server {
+                let cancelled = gated_server.as_ref().is_some_and(|server| {
+                    let registry_key = self
+                        .get_stack(slot)
+                        .item
+                        .registry_key
+                        .to_string();
                     let mut move_event = crate::plugin::api::events::inventory::inventory_move_item::InventoryMoveItemEvent::new(
                         self.position,
                         target_pos,
-                        item.item.registry_key.to_string(),
+                        registry_key,
                         1,
                     );
                     server.plugin_manager.fire_blocking(server, &mut move_event);
                     move_event.cancelled
-                } else {
-                    false
-                };
+                });
                 if cancelled {
                     continue;
                 }

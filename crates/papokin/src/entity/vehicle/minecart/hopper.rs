@@ -69,16 +69,22 @@ impl HopperMinecart {
             && let Some(source) = block_entity.get_inventory()
         {
             for slot in 0..source.size() {
-                let stack = source.get_stack(slot);
-                if stack.is_empty() || !source.can_transfer_to(inventory.as_ref(), slot, &stack) {
+                // 空槽零克隆探测：读取快照本身兼作失败回滚值，
+                // 不再额外 eager 备份克隆（成功路径原本白付一份）
+                let mut non_empty = false;
+                source.with_stack(slot, &mut |s| non_empty = !s.is_empty());
+                if !non_empty {
                     continue;
                 }
-                let backup = stack.clone();
+                let stack = source.get_stack(slot);
+                if !source.can_transfer_to(inventory.as_ref(), slot, &stack) {
+                    continue;
+                }
                 let one = source.remove_stack_specific(slot, 1);
                 if HopperBlockEntity::add_one_item(source.as_ref(), inventory.as_ref(), &one) {
                     return;
                 }
-                source.set_stack(slot, backup);
+                source.set_stack(slot, stack);
             }
             return;
         }
