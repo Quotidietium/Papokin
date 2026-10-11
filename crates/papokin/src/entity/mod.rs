@@ -1256,10 +1256,22 @@ impl Entity {
     /// 当实体切换维度时调用（例如穿过下界传送门）。
     pub fn set_world(&self, world: Arc<World>) {
         let block_pos = self.block_pos.load();
-        let biome = world.level.get_rough_biome(&block_pos);
-        self.current_biome.store(Arc::new(biome));
-        self.last_biome_update_pos.store(block_pos);
+        self.refresh_current_biome(&world, block_pos);
         self.world.store(world);
+    }
+
+    /// 跨方块/换维度时刷新当前生物群系。注册表 `&'static Biome`
+    /// 出自 `Biome::from_id` 的 const 静态表，同一群系恒同址：
+    /// 群系未变时只更新坐标，跳过 `Arc` 包装分配——移动路径每次
+    /// 跨方块都会经过这里，同群系内的连续跨界占绝对多数。
+    fn refresh_current_biome(&self, world: &World, block_pos: BlockPos) {
+        let biome = world.level.get_rough_biome(&block_pos);
+        // Guard 解引用到 Arc<&Biome>，再解一层才是 &Biome（静态引用
+        // 直接比指针身份，不触碰巨大的 Biome 常量数据）。
+        if !std::ptr::eq(**self.current_biome.load(), biome) {
+            self.current_biome.store(Arc::new(biome));
+        }
+        self.last_biome_update_pos.store(block_pos);
     }
 
     /// 以刻为单位设置实体的年龄。
@@ -1374,9 +1386,7 @@ impl Entity {
                 self.block_pos.store(new_bp);
 
                 let world = self.world.load();
-                let biome = world.level.get_rough_biome(&new_bp);
-                self.current_biome.store(Arc::new(biome));
-                self.last_biome_update_pos.store(new_bp);
+                self.refresh_current_biome(&world, new_bp);
 
                 let chunk_pos = self.chunk_pos.load();
                 let new_chunk_x = get_section_cord(new_block_pos.x);
