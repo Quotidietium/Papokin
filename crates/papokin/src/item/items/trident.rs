@@ -67,6 +67,9 @@ impl ItemBehaviour for TridentItem {
 
             if let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
                 && let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_riptide::PlayerRiptideEvent>()
             {
                 let mut event =
                     crate::plugin::api::events::player::player_riptide::PlayerRiptideEvent {

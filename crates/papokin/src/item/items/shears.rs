@@ -175,6 +175,9 @@ fn handle_beehive(
     let mut drops = vec![ItemStack::new(3, &Item::HONEYCOMB)];
     if let Some(player_arc) = player.world().get_player_by_uuid(player.gameprofile.id)
         && let Some(server) = player.world().server.upgrade()
+        && server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::player::player_harvest_block::PlayerHarvestBlockEvent>()
     {
         let mut event =
             crate::plugin::api::events::player::player_harvest_block::PlayerHarvestBlockEvent {

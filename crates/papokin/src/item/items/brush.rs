@@ -98,6 +98,9 @@ impl ItemBehaviour for BrushItem {
 
         if let Some(player_arc) = player.world().get_player_by_uuid(player.gameprofile.id)
             && let Some(server) = player.world().server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::block_brush::BlockBrushEvent>()
         {
             let mut event = crate::plugin::api::events::block::block_brush::BlockBrushEvent::new(
                 location,

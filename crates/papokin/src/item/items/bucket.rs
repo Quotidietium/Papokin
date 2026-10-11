@@ -331,7 +331,12 @@ impl ItemBehaviour for EmptyBucketItem {
             return;
         };
 
-        if let Some(server) = world.server.upgrade()
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_bucket::PlayerBucketFillEvent>()
             && let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
         {
             let mut event =
@@ -422,7 +427,12 @@ impl ItemBehaviour for FilledBucketItem {
 
         // 取消检查必须先于世界写入：事件此前在液体已放置后才发
         // 出且不读取消标志，插件取消后液体照样倒出
-        if let Some(server) = world.server.upgrade()
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_bucket::PlayerBucketEmptyEvent>()
             && let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
         {
             let mut event =

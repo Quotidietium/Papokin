@@ -62,19 +62,28 @@ impl ItemBehaviour for HangingEntityItem {
                 .data
                 .store(i32::from(face.to_index()), Ordering::Relaxed);
             let painting = Arc::new(PaintingEntity::new(entity));
-            let mut place_event =
-                crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
-                    painting.clone(),
-                    Some(player_arc),
-                    location,
-                    face,
-                );
-            if let Some(server) = world.server.upgrade() {
+            let cancelled = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent>()
+            {
+                let mut place_event =
+                    crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
+                        painting.clone(),
+                        Some(player_arc),
+                        location,
+                        face,
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut place_event);
-            }
-            if place_event.cancelled {
+                place_event.cancelled
+            } else {
+                false
+            };
+            if cancelled {
                 return BlockActionResult::Fail;
             }
             world.play_sound(Sound::EntityPaintingPlace, SoundCategory::Blocks, &pos);
@@ -91,19 +100,28 @@ impl ItemBehaviour for HangingEntityItem {
             frame.set_facing(face);
             let sound = frame.get_place_sound();
             let frame_arc = Arc::new(frame);
-            let mut place_event =
-                crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
-                    frame_arc.clone(),
-                    Some(player_arc),
-                    location,
-                    face,
-                );
-            if let Some(server) = world.server.upgrade() {
+            let cancelled = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent>()
+            {
+                let mut place_event =
+                    crate::plugin::api::events::hanging::hanging_place::HangingPlaceEvent::new(
+                        frame_arc.clone(),
+                        Some(player_arc),
+                        location,
+                        face,
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut place_event);
-            }
-            if place_event.cancelled {
+                place_event.cancelled
+            } else {
+                false
+            };
+            if cancelled {
                 return BlockActionResult::Fail;
             }
             world.play_sound(sound, SoundCategory::Blocks, &pos);

@@ -71,15 +71,25 @@ impl ItemBehaviour for CrossbowItem {
 
                 let drawn = ProjectileWeaponItem::draw(&stack, &projectile, is_creative);
                 if !drawn.is_empty() {
-                    let mut event = crate::plugin::api::events::entity::entity_load_crossbow::EntityLoadCrossbowEvent::new(
-                        player.entity_id(),
-                        stack.clone(),
-                        drawn.clone(),
-                    );
-                    if let Some(server) = player.world().server.upgrade() {
+                    let cancelled = if let Some(server) = player
+                        .world()
+                        .server
+                        .upgrade()
+                        && server
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::entity::entity_load_crossbow::EntityLoadCrossbowEvent>()
+                    {
+                        let mut event = crate::plugin::api::events::entity::entity_load_crossbow::EntityLoadCrossbowEvent::new(
+                            player.entity_id(),
+                            stack.clone(),
+                            drawn.clone(),
+                        );
                         server.plugin_manager.fire_blocking(&server, &mut event);
-                    }
-                    if event.cancelled {
+                        event.cancelled
+                    } else {
+                        false
+                    };
+                    if cancelled {
                         player.living_entity.clear_active_hand();
                         return;
                     }

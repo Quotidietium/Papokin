@@ -46,17 +46,20 @@ impl ItemBehaviour for BowItem {
                     arrow
                 },
             );
-            if let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id) {
+            if let Some(player_arc) = world.get_player_by_uuid(player.gameprofile.id)
+                && let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_ready_arrow::PlayerReadyArrowEvent>()
+            {
                 let mut ready_event = crate::plugin::api::events::player::player_ready_arrow::PlayerReadyArrowEvent::new(
                     player_arc,
                     stack.clone(),
                     arrow,
                 );
-                if let Some(server) = world.server.upgrade() {
-                    server
-                        .plugin_manager
-                        .fire_blocking(&server, &mut ready_event);
-                }
+                server
+                    .plugin_manager
+                    .fire_blocking(&server, &mut ready_event);
                 if ready_event.cancelled {
                     return;
                 }
