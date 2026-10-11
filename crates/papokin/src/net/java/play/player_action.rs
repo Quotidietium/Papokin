@@ -58,9 +58,11 @@ impl JavaClient {
                         );
                     }
 
-                    let inventory = player.inventory();
-                    let held = inventory.held_item();
-                    if !server.item_registry.can_mine(held.item, player) {
+                    let mut can_mine = true;
+                    player.inventory().with_held_item(&mut |held| {
+                        can_mine = server.item_registry.can_mine(held.item, player);
+                    });
+                    if !can_mine {
                         player.try_send_client_packet(&CBlockUpdate::new(
                             position,
                             VarInt(i32::from(state.id.as_u16())),
@@ -116,7 +118,10 @@ impl JavaClient {
                                 if can_harvest {
                                     player.add_exhaustion(MINE_BLOCK_EXHAUSTION);
                                 }
-                                let item_id = player.inventory().held_item().item.id;
+                                let mut item_id = 0;
+                                player
+                                    .inventory()
+                                    .with_held_item(&mut |held| item_id = held.item.id);
                                 player.increment_stat(StatisticCategory::Used, item_id as i32, 1);
                                 player.increment_stat(
                                     StatisticCategory::Mined,
@@ -255,7 +260,10 @@ impl JavaClient {
                         if block_drop {
                             player.add_exhaustion(MINE_BLOCK_EXHAUSTION);
                         }
-                        let item_id = player.inventory().held_item().item.id;
+                        let mut item_id = 0;
+                        player
+                            .inventory()
+                            .with_held_item(&mut |held| item_id = held.item.id);
                         player.increment_stat(StatisticCategory::Used, item_id as i32, 1);
                         player.increment_stat(
                             StatisticCategory::Mined,
@@ -314,8 +322,9 @@ impl JavaClient {
                         return;
                     }
 
-                    let stack = player.inventory().held_item();
-                    server.item_registry.on_spear_jab(&stack, player);
+                    player.inventory().with_held_item(&mut |stack| {
+                        server.item_registry.on_spear_jab(stack, player);
+                    });
                 }
                 // 被挖掘的方块没有变化，因此无需更新任何内容
                 Status::ChangeDestroyDirection => {}

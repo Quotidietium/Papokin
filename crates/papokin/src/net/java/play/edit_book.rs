@@ -3,8 +3,11 @@ use super::*;
 
 impl JavaClient {
     pub fn handle_edit_book(&self, player: &Player, packet: &SEditBook<'_>) {
-        let held_stack = player.inventory().held_item();
-        if held_stack.item.id != Item::WRITABLE_BOOK.id {
+        let mut is_writable_book = false;
+        player.inventory().with_held_item(&mut |held_stack| {
+            is_writable_book = held_stack.item.id == Item::WRITABLE_BOOK.id;
+        });
+        if !is_writable_book {
             return;
         }
 

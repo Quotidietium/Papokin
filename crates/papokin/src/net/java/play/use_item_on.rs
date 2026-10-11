@@ -67,10 +67,10 @@ impl JavaClient {
         }
 
         let inventory = player.inventory();
-        let held_item = inventory.held_item();
-        let off_hand_item = inventory.off_hand_item();
-        let held_item_empty = held_item.is_empty();
-        let off_hand_item_empty = off_hand_item.is_empty();
+        let mut held_item_empty = true;
+        inventory.with_held_item(&mut |held| held_item_empty = held.is_empty());
+        let mut off_hand_item_empty = true;
+        inventory.with_off_hand_item(&mut |off| off_hand_item_empty = off.is_empty());
 
         let mut item = inventory.get_stack_in_hand(hand);
         // 槽位读取时的原始快照：最终写回按“数量变化量”在写锁内
