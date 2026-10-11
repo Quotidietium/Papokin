@@ -505,6 +505,18 @@ impl Inventory for BeaconBlockEntity {
         }
     }
 
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        if slot == 0 {
+            let mut payment = self
+                .payment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if f(&mut payment) {
+                self.mark_dirty();
+            }
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack {
         if slot == 0 {
             self.payment

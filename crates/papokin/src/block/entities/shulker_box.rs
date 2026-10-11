@@ -209,6 +209,15 @@ impl Inventory for ShulkerBoxBlockEntity {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&items[slot]);
     }
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+        let mut items = self
+            .items
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if f(&mut items[slot]) {
+            self.mark_dirty();
+        }
+    }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
         let items = self
