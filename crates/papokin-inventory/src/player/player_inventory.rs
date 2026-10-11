@@ -687,6 +687,20 @@ impl Inventory for PlayerInventory {
         true
     }
 
+    fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        if slot < Self::MAIN_SIZE {
+            let inv = self
+                .main_inventory
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            f(&inv[slot]);
+        } else {
+            // 装备槽存储（EntityEquipment）按值取用，走默认克隆回退
+            let stack = self.get_stack(slot);
+            f(&stack);
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack {
         if slot < Self::MAIN_SIZE {
             let inv = self

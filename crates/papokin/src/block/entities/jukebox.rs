@@ -218,6 +218,14 @@ impl Inventory for JukeboxBlockEntity {
             .is_empty()
     }
 
+    fn with_stack(&self, _slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        let stack = self
+            .record_stack
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(&stack);
+    }
+
     fn get_stack(&self, _slot: usize) -> ItemStack {
         self.record_stack
             .lock()

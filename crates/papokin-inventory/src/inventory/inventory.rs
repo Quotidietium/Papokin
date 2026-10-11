@@ -33,6 +33,22 @@ pub trait Inventory: Send + Sync + Clearable {
 
     fn is_empty(&self) -> bool;
 
+    /// 以借用方式访问槽位物品堆（锁内回调，零克隆读取）。
+    ///
+    /// 高频全屏扫描（`send_content_updates` 等）的比较-先行预检
+    /// 用它避免未变化槽位的读取克隆——`ItemStack` 组件补丁的
+    /// 深克隆只在确认变化后发生。覆写实现在读锁内回调。
+    ///
+    /// 语义约束：回调内**不得**调用同一物品栏的任何方法（覆写
+    /// 方在持锁状态下回调，重入可能死锁），只做纯读比较/浅访问。
+    ///
+    /// 默认实现回退为 [`Inventory::get_stack`] 克隆后借出（功能
+    /// 等价，仅失去零克隆收益）。
+    fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        let stack = self.get_stack(slot);
+        f(&stack);
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack;
 
     fn remove_stack(&self, slot: usize) -> ItemStack;
@@ -188,6 +204,21 @@ mod tests {
         }
         // 9×64=576，远超 u8 上限
         assert_eq!(inventory.count(&Item::STONE), 255);
+    }
+
+    /// `with_stack` 借用访问：回调收到的是槽位当前内容（与
+    /// `get_stack` 一致），越界槽位回退 EMPTY（Option 型实现）。
+    #[test]
+    fn with_stack_borrows_current_content() {
+        let inventory = SimpleInventory::new(2);
+        inventory.set_stack(0, ItemStack::new(3, &Item::STONE));
+
+        let mut seen_count = 0;
+        inventory.with_stack(0, &mut |stack| seen_count = stack.item_count);
+        assert_eq!(seen_count, 3);
+
+        inventory.with_stack(1, &mut |stack| assert!(stack.is_empty()));
+        inventory.with_stack(99, &mut |stack| assert!(stack.is_empty()));
     }
 
     /// 伪造/损坏存档可能带越界 Slot 字节：读取必须忽略越界条目

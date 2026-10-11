@@ -58,6 +58,14 @@ impl Inventory for DoubleInventory {
         self.first.is_empty() && self.second.is_empty()
     }
 
+    fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        if slot >= self.first.size() {
+            self.second.with_stack(slot - self.first.size(), f);
+        } else {
+            self.first.with_stack(slot, f);
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack {
         if slot >= self.first.size() {
             self.second.get_stack(slot - self.first.size())

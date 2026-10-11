@@ -78,6 +78,17 @@ impl Inventory for CraftingInventory {
         items.iter().all(ItemStack::is_empty)
     }
 
+    fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        let stacks = self
+            .items
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match stacks.get(slot) {
+            Some(stack) => f(stack),
+            None => f(ItemStack::EMPTY),
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack {
         let items = self
             .items

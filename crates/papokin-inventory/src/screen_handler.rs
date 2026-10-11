@@ -500,8 +500,19 @@ pub trait ScreenHandler: Send + Sync {
     /// 更新被跟踪的槽位与属性。
     fn update_to_client(&mut self) {
         for i in 0..self.get_behaviour().slots.len() {
-            let stack = self.get_behaviour_mut().slots[i].get_cloned_stack();
-            self.update_tracked_slot(i, &stack);
+            // 同 send_content_updates 的比较-先行预检：未变化槽位
+            // 零克隆读取。
+            let unchanged = {
+                let behaviour = self.get_behaviour();
+                let mut ok = true;
+                behaviour.slots[i]
+                    .with_stack(&mut |stack| ok = behaviour.tracked_stacks[i].are_equal(stack));
+                ok
+            };
+            if !unchanged {
+                let stack = self.get_behaviour_mut().slots[i].get_cloned_stack();
+                self.update_tracked_slot(i, &stack);
+            }
         }
 
         let behaviour = self.get_behaviour_mut();
@@ -609,10 +620,28 @@ pub trait ScreenHandler: Send + Sync {
         let slots_len = self.get_behaviour().slots.len();
 
         for i in 0..slots_len {
-            let stack = self.get_behaviour().slots[i].get_cloned_stack();
-
-            self.update_tracked_slot(i, &stack);
-            self.check_slot_updates(i, &stack);
+            // 比较-先行预检：以借用方式与两份跟踪态比较，未变化
+            // 槽位零克隆（`with_stack` 锁内回调）。预检只覆盖
+            // `received_stack` 存在且相等的常见路径；`received_hash`
+            // 命中或初态等罕见路径预检判否，回落完整路径由
+            // `is_in_sync` 处理（语义与逐槽克隆版严格一致）。
+            let unchanged = {
+                let behaviour = self.get_behaviour();
+                let mut ok = true;
+                behaviour.slots[i].with_stack(&mut |stack| {
+                    ok = behaviour.tracked_stacks[i].are_equal(stack)
+                        && matches!(
+                            &behaviour.previous_tracked_stacks[i].received_stack,
+                            Some(prev) if prev.are_equal(stack)
+                        );
+                });
+                ok
+            };
+            if !unchanged {
+                let stack = self.get_behaviour().slots[i].get_cloned_stack();
+                self.update_tracked_slot(i, &stack);
+                self.check_slot_updates(i, &stack);
+            }
         }
 
         self.check_cursor_stack_updates();

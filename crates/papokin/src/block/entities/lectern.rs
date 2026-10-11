@@ -177,6 +177,14 @@ impl Inventory for LecternBlockEntity {
             .is_empty()
     }
 
+    fn with_stack(&self, _slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        let stack = self
+            .book
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        f(&stack);
+    }
+
     fn get_stack(&self, _slot: usize) -> ItemStack {
         self.book
             .lock()

@@ -487,6 +487,18 @@ impl Inventory for BeaconBlockEntity {
             .is_empty()
     }
 
+    fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
+        if slot == 0 {
+            let payment = self
+                .payment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            f(&payment);
+        } else {
+            f(ItemStack::EMPTY);
+        }
+    }
+
     fn get_stack(&self, slot: usize) -> ItemStack {
         if slot == 0 {
             self.payment

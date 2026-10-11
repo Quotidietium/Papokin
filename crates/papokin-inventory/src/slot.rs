@@ -86,6 +86,14 @@ pub trait Slot: Send + Sync {
         self.get_stack()
     }
 
+    /// 以借用方式访问此槽位的物品堆（透传物品栏的
+    /// [`Inventory::with_stack`]，锁内回调、零克隆）。
+    ///
+    /// 语义约束同物品栏侧：回调内不得触碰同一物品栏。
+    fn with_stack(&self, f: &mut dyn FnMut(&ItemStack)) {
+        self.get_inventory().with_stack(self.get_index(), f);
+    }
+
     /// 检查此槽位是否有非空物品堆。
     fn has_stack(&self) -> bool {
         !self.get_stack().is_empty()
