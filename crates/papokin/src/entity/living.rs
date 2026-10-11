@@ -2127,19 +2127,23 @@ impl LivingEntity {
                 self.get_pitch(),
             );
             world.send_entity_status(&self.entity, EntityStatus::Death);
-            let looting_level;
+            let mut looting_level = 0u32;
             let tool = if let Some(cause_ent) = cause {
                 if let Some(player) = cause_ent
                     .cast_any()
                     .downcast_ref::<crate::entity::player::Player>()
                 {
-                    let hand_stack = player
-                        .inventory()
-                        .get_stack_in_hand(papokin_util::Hand::Right);
-                    looting_level = hand_stack
-                        .get_enchantment_level(&Enchantment::LOOTING)
-                        .max(0) as u32;
-                    (!hand_stack.is_empty()).then(|| hand_stack.clone())
+                    let mut tool: Option<ItemStack> = None;
+                    player.inventory().with_held_item(&mut |hand_stack| {
+                        looting_level = hand_stack
+                            .get_enchantment_level(&Enchantment::LOOTING)
+                            .max(0) as u32;
+                        if !hand_stack.is_empty() {
+                            // 仅战利品上下文真正需要所有权时才克隆
+                            tool = Some(hand_stack.clone());
+                        }
+                    });
+                    tool
                 } else {
                     looting_level = 0;
                     None
@@ -2445,8 +2449,10 @@ impl LivingEntity {
                     killer_player.trigger_advancement(crate::entity::player::advancement::trigger::AdvancementTrigger::TwoBirdsOneArrow);
                 }
 
-                let held_item = killer_player.inventory().held_item();
-                let is_crossbow = held_item.item.registry_key == "crossbow";
+                let mut is_crossbow = false;
+                killer_player.inventory().with_held_item(&mut |held_item| {
+                    is_crossbow = held_item.item.registry_key == "crossbow";
+                });
                 if is_crossbow {
                     killer_player.trigger_advancement(
                         crate::entity::player::advancement::trigger::AdvancementTrigger::Arbalistic,
@@ -2722,6 +2728,39 @@ impl LivingEntity {
         }
     }
 
+    /// 以借用方式访问实体主手物品（玩家走快捷栏读锁，纯装备
+    /// 实体走装备表锁；零克隆）。约束同
+    /// [`crate::inventory::Inventory::with_stack`]：回调内不得
+    /// 调用同一物品栏/装备表的方法。
+    pub fn with_held_item(&self, caller: &dyn EntityBase, f: &mut dyn FnMut(&ItemStack)) {
+        if let Some(player) = caller.get_player() {
+            player.inventory.with_held_item(f);
+            return;
+        }
+        let equipment = self
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match equipment.equipment.get(&EquipmentSlot::MAIN_HAND) {
+            Some(stack) => f(stack),
+            None => f(ItemStack::EMPTY),
+        }
+    }
+
+    /// 以借用方式访问指定手物品（零克隆）。约束同
+    /// [`Self::with_held_item`]。
+    pub fn with_stack_in_hand(
+        &self,
+        caller: &dyn EntityBase,
+        hand: Hand,
+        f: &mut dyn FnMut(&ItemStack),
+    ) {
+        match hand {
+            Hand::Left => self.with_off_hand_item(caller, f),
+            Hand::Right => self.with_held_item(caller, f),
+        }
+    }
+
     /// 对应源码中的 getOffHandStack
     pub fn off_hand_item(&self, caller: &dyn EntityBase) -> ItemStack {
         if let Some(player) = caller.get_player() {
@@ -2739,6 +2778,27 @@ impl LivingEntity {
             .get(slot)
             .cloned()
             .unwrap_or_else(|| ItemStack::EMPTY.clone())
+    }
+
+    /// 以借用方式访问实体副手物品（零克隆）。约束同
+    /// [`Self::with_held_item`]。
+    pub fn with_off_hand_item(&self, caller: &dyn EntityBase, f: &mut dyn FnMut(&ItemStack)) {
+        if let Some(player) = caller.get_player() {
+            player.inventory.with_off_hand_item(f);
+            return;
+        }
+        let Some(slot) = self.equipment_slots.get(&PlayerInventory::OFF_HAND_SLOT) else {
+            f(ItemStack::EMPTY);
+            return;
+        };
+        let equipment = self
+            .entity_equipment
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match equipment.equipment.get(slot) {
+            Some(stack) => f(stack),
+            None => f(ItemStack::EMPTY),
+        }
     }
 
     /// 40 刻后遗忘。自定义伤害类型无法通过
@@ -3015,10 +3075,10 @@ impl LivingEntity {
         let breach_level = attacker
             .and_then(|att| {
                 let player = att.get_player()?;
-                let hand_stack = player
-                    .inventory()
-                    .get_stack_in_hand(papokin_util::Hand::Right);
-                let level = hand_stack.get_enchantment_level(&Enchantment::BREACH);
+                let mut level = 0;
+                player.inventory().with_held_item(&mut |hand_stack| {
+                    level = hand_stack.get_enchantment_level(&Enchantment::BREACH);
+                });
                 (level > 0).then_some(level as u32)
             })
             .unwrap_or(0);
@@ -3301,27 +3361,38 @@ impl LivingEntity {
 
                     let durability_damage = (amount / 1.0).floor().max(1.0) as i32;
                     if let Some(player) = caller.get_player() {
-                        let held = player.inventory.get_stack_in_hand(match &slot {
+                        let hand = match &slot {
                             EquipmentSlot::OffHand(_) => Hand::Left,
                             _ => Hand::Right,
-                        });
-                        let mut event = crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
-                            self.entity.entity_id,
-                            held,
-                            durability_damage,
-                        );
-                        if let Some(server) = world.server.upgrade() {
-                            server.plugin_manager.fire_blocking(&server, &mut event);
-                        }
-                        if !event.cancelled {
+                        };
+                        // 订阅者先行门：无插件监听时跳过事件构造与手持
+                        // 克隆，cancelled 语义保持 false（与 fire 无处理器
+                        // 短路同源）
+                        let cancelled =
+                            if let Some(server) = world.server.upgrade()
+                                && server
+                                    .plugin_manager
+                                    .has_handlers::<crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent>(
+                                    )
+                            {
+                                let held = player.inventory.get_stack_in_hand(hand);
+                                let mut event =
+                                    crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
+                                        self.entity.entity_id,
+                                        held,
+                                        durability_damage,
+                                    );
+                                server.plugin_manager.fire_blocking(&server, &mut event);
+                                event.cancelled
+                            } else {
+                                false
+                            };
+                        if !cancelled {
                             let broke = player.damage_item_in_slot(&slot, durability_damage);
-                            let empty = player
+                            let mut empty = true;
+                            player
                                 .inventory
-                                .get_stack_in_hand(match &slot {
-                                    EquipmentSlot::OffHand(_) => Hand::Left,
-                                    _ => Hand::Right,
-                                })
-                                .is_empty();
+                                .with_stack_in_hand(hand, &mut |stack| empty = stack.is_empty());
                             if broke && empty {
                                 self.clear_active_hand();
                             }
