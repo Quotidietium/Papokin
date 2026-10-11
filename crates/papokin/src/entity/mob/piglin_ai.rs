@@ -115,9 +115,18 @@ impl PiglinAi {
 
     #[must_use]
     pub fn is_player_holding_loved_item(player: &Player) -> bool {
-        let inventory = player.inventory();
-        Self::is_loved_item(&inventory.held_item())
-            || Self::is_loved_item(&inventory.off_hand_item())
+        // 借用读取：AI 每 tick 对附近玩家探测，双手深克隆白付
+        let mut loved = false;
+        player.inventory().with_held_item(&mut |stack| {
+            loved = Self::is_loved_item(stack);
+        });
+        if loved {
+            return true;
+        }
+        player.inventory().with_off_hand_item(&mut |stack| {
+            loved = Self::is_loved_item(stack);
+        });
+        loved
     }
 
     #[must_use]

@@ -31,14 +31,16 @@ impl AttackType {
         let sprinting = entity.is_sprinting();
         let on_ground = entity.on_ground.load(Ordering::Relaxed);
         let fall_distance = player.living_entity.fall_distance.load();
-        let held_item = player.inventory().held_item();
-        let is_mace = held_item.item.id == papokin_data::item::Item::MACE.id;
+        let mut is_mace = false;
+        let mut sword = false;
+        player.inventory().with_held_item(&mut |held_item| {
+            is_mace = held_item.item.id == papokin_data::item::Item::MACE.id;
+            sword = held_item.is_sword();
+        });
 
         if is_mace && !on_ground && fall_distance > 1.5 {
             return Self::MaceSmash;
         }
-
-        let sword = held_item.is_sword();
 
         let is_strong = attack_cooldown_progress > 0.9;
         if sprinting && is_strong {
@@ -311,35 +313,39 @@ impl CombatTracker {
         });
 
         // 检查攻击者主手中是否有自定义名称的物品
-        let attacker_item_name =
-            attacker.and_then(|e| {
-                if let Some(player) = e.get_player() {
-                    let hand_stack = player
-                        .inventory()
-                        .get_stack_in_hand(papokin_util::Hand::Right);
+        let attacker_item_name = attacker.and_then(|e| {
+            if let Some(player) = e.get_player() {
+                let mut name = None;
+                player.inventory().with_held_item(&mut |hand_stack| {
                     if !hand_stack.is_empty()
-                    && let Some(custom_name) = hand_stack
-                        .get_data_component::<papokin_data::data_component_impl::CustomNameImpl>()
-                {
-                    return Some(custom_name.name.clone());
+                            && let Some(custom_name) = hand_stack.get_data_component::<
+                                papokin_data::data_component_impl::CustomNameImpl,
+                            >()
+                        {
+                            name = Some(custom_name.name.clone());
+                        }
+                });
+                if let Some(name) = name {
+                    return Some(name);
                 }
-                } else if let Some(living) = e.get_living_entity() {
-                    let equip_guard = living
-                        .entity_equipment
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if let Some(stack) = equip_guard
+            } else if let Some(living) = e.get_living_entity() {
+                let equip_guard = living
+                    .entity_equipment
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(stack) = equip_guard
                     .equipment
                     .get(&papokin_data::data_component_impl::EquipmentSlot::MAIN_HAND)
                     && !stack.is_empty()
                     && let Some(custom_name) = stack
-                        .get_data_component::<papokin_data::data_component_impl::CustomNameImpl>()
+                        .get_data_component::<papokin_data::data_component_impl::CustomNameImpl>(
+                    )
                 {
                     return Some(custom_name.name.clone());
                 }
-                }
-                None
-            });
+            }
+            None
+        });
 
         let entry = CombatEntry {
             damage_type,

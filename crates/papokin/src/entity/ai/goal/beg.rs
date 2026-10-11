@@ -30,13 +30,18 @@ impl BegGoal {
     }
 
     fn player_holding_interesting(player: &Player) -> bool {
-        let main_stack = player.inventory().held_item();
-        if main_stack.item_count > 0 && Self::is_interesting_item(main_stack.item) {
+        // 借用读取：AI 每 tick 对附近玩家探测，双手深克隆白付
+        let mut interesting = false;
+        player.inventory().with_held_item(&mut |stack| {
+            interesting = stack.item_count > 0 && Self::is_interesting_item(stack.item);
+        });
+        if interesting {
             return true;
         }
-
-        let off_stack = player.inventory().off_hand_item();
-        off_stack.item_count > 0 && Self::is_interesting_item(off_stack.item)
+        player.inventory().with_off_hand_item(&mut |stack| {
+            interesting = stack.item_count > 0 && Self::is_interesting_item(stack.item);
+        });
+        interesting
     }
 
     fn distance_sq(mob: &dyn Mob, player: &Player) -> f64 {

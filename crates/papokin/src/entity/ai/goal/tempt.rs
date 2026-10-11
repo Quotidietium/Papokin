@@ -65,8 +65,18 @@ impl TemptGoal {
     }
 
     fn is_holding_tempt_item(&self, player: &Player) -> bool {
-        self.is_tempt_item(&player.inventory().held_item())
-            || self.is_tempt_item(&player.inventory().off_hand_item())
+        // 借用读取：AI 每 tick 对附近玩家探测，双手深克隆白付
+        let mut tempted = false;
+        player.inventory().with_held_item(&mut |stack| {
+            tempted = self.is_tempt_item(stack);
+        });
+        if tempted {
+            return true;
+        }
+        player.inventory().with_off_hand_item(&mut |stack| {
+            tempted = self.is_tempt_item(stack);
+        });
+        tempted
     }
 
     /// 非战斗行为，无视视线，以 `tempt_range` 为距离范围并按手持物品过滤。
