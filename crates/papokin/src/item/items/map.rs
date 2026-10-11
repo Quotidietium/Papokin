@@ -24,17 +24,21 @@ impl ItemBehaviour for MapItem {
         };
 
         let inventory = player.inventory();
-        let held_stack = inventory.held_item();
-        let (found, hand) = if !held_stack.is_empty() && held_stack.item.id == Item::MAP.id {
-            (true, papokin_util::Hand::Right)
-        } else {
-            let off_hand = inventory.off_hand_item();
-            if !off_hand.is_empty() && off_hand.item.id == Item::MAP.id {
-                (true, papokin_util::Hand::Left)
-            } else {
-                (false, papokin_util::Hand::Right)
-            }
-        };
+        // 手别探测借用化：只读判断哪只手持空地图，扣减/替换已在
+        // update_held 写锁内自带匹配校验
+        let mut found = false;
+        let mut hand = papokin_util::Hand::Right;
+        inventory.with_held_item(&mut |held| {
+            found = !held.is_empty() && held.item.id == Item::MAP.id;
+        });
+        if !found {
+            inventory.with_off_hand_item(&mut |off| {
+                if !off.is_empty() && off.item.id == Item::MAP.id {
+                    found = true;
+                    hand = papokin_util::Hand::Left;
+                }
+            });
+        }
 
         if found {
             let map_id = server.next_map_id();

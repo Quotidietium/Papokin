@@ -244,13 +244,22 @@ impl MapData {
             .collect();
 
         for player in server.get_all_players() {
-            let holds_map = Hand::all().into_iter().any(|hand| {
-                let stack = player.inventory().get_stack_in_hand(hand);
-                stack.item.id == Item::FILLED_MAP.id
-                    && stack
-                        .get_data_component::<MapIdImpl>()
-                        .is_some_and(|component| component.id == map_id)
-            });
+            // 借用探测：地图数据更新对全玩家双手扫描，深克隆白付
+            let mut holds_map = false;
+            for hand in Hand::all() {
+                player.inventory().with_stack_in_hand(hand, &mut |stack| {
+                    if stack.item.id == Item::FILLED_MAP.id
+                        && stack
+                            .get_data_component::<MapIdImpl>()
+                            .is_some_and(|component| component.id == map_id)
+                    {
+                        holds_map = true;
+                    }
+                });
+                if holds_map {
+                    break;
+                }
+            }
             if holds_map {
                 player.try_send_client_packet(&CMapItemData {
                     map_id: VarInt(map_id),

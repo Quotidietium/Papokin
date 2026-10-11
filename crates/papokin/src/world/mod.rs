@@ -4898,8 +4898,14 @@ impl World {
 
         if !flags.contains(BlockFlags::SKIP_DROPS) {
             let tool = cause.as_ref().and_then(|p| {
-                let item = p.inventory().held_item();
-                if item.is_empty() { None } else { Some(item) }
+                let mut tool = None;
+                p.inventory().with_held_item(&mut |item| {
+                    if !item.is_empty() {
+                        // 战利品上下文需要所有权，仅非空时克隆
+                        tool = Some(item.clone());
+                    }
+                });
+                tool
             });
             let params = crate::world::loot::LootContextParameters {
                 tool,

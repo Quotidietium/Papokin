@@ -76,8 +76,10 @@ impl BlockMetadata for IceBlock {
 impl BlockBehaviour for IceBlock {
     fn broken(&self, args: BrokenArgs<'_>) {
         {
-            let held_item = args.player.inventory().held_item();
-            let has_silk_touch = held_item.get_enchantment_level(&Enchantment::SILK_TOUCH) > 0;
+            let mut has_silk_touch = false;
+            args.player.inventory().with_held_item(&mut |held_item| {
+                has_silk_touch = held_item.get_enchantment_level(&Enchantment::SILK_TOUCH) > 0;
+            });
             if !has_silk_touch {
                 if args.world.dimension.water_evaporates {
                     args.world.set_block_state(

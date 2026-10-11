@@ -38,14 +38,13 @@ impl FishingBobberEntity {
         owner_pos.y += owner.living_entity.entity.get_eye_height() - 0.1;
         entity.pos.store(owner_pos);
 
-        let lure_speed = 100
-            - 15 * owner
-                .inventory()
-                .held_item()
-                .get_enchantment_level(&Enchantment::LURE)
-                // 附魔等级来自物品组件，可能被指令/客户端注入任意 i32，
-                // 先钳制再参与运算，避免溢出 panic（debug 构建下可被利用）
-                .clamp(0, 255);
+        let mut lure_level = 0;
+        owner.inventory().with_held_item(&mut |held| {
+            lure_level = held.get_enchantment_level(&Enchantment::LURE);
+        });
+        // 附魔等级来自物品组件，可能被指令/客户端注入任意 i32，
+        // 先钳制再参与运算，避免溢出 panic（debug 构建下可被利用）
+        let lure_speed = 100 - 15 * lure_level.clamp(0, 255);
         Self {
             entity,
             owner_id: owner.living_entity.entity.entity_id,
@@ -121,11 +120,12 @@ impl FishingBobberEntity {
             // 鱼 85−L、垃圾 10−2L、宝藏 5+2L（L=海之眷顾等级），
             // 宝藏仅在开放水域可钓。
             // 等级先钳制：物品组件可携带任意 i32，防后续运算溢出。
-            let luck = player
-                .inventory()
-                .held_item()
-                .get_enchantment_level(&Enchantment::LUCK_OF_THE_SEA)
-                .clamp(0, 255);
+            let mut luck = 0;
+            player.inventory().with_held_item(&mut |held| {
+                // 等级先钳制：物品组件可携带任意 i32，防后续运算溢出。
+                luck = held.get_enchantment_level(&Enchantment::LUCK_OF_THE_SEA);
+            });
+            let luck = luck.clamp(0, 255);
             let open_water = self.is_open_water();
             let fish_weight = (85 - luck).max(1);
             let junk_weight = (10 - 2 * luck).max(0);
@@ -149,6 +149,7 @@ impl FishingBobberEntity {
                 .map(|table| {
                     let params = LootContextParameters {
                         position: Some(self.entity.pos.load()),
+                        // 战利品上下文恒需要工具所有权（空栈 clone 零分配）
                         tool: Some(player.inventory().held_item()),
                         ..Default::default()
                     };

@@ -72,7 +72,10 @@ impl BlockBehaviour for TripwireBlock {
     }
 
     fn broken(&self, args: BrokenArgs<'_>) {
-        let has_shears = args.player.inventory().held_item().get_item() == &Item::SHEARS;
+        let mut has_shears = false;
+        args.player.inventory().with_held_item(&mut |held| {
+            has_shears = held.get_item() == &Item::SHEARS;
+        });
         if has_shears {
             let mut props = TripwireProperties::from_state_id(args.state.id);
             props.disarmed = true;

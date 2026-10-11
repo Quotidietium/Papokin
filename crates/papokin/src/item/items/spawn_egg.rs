@@ -91,13 +91,20 @@ impl ItemBehaviour for SpawnEggItem {
             let mob = from_type(entity_type, pos, &world, Uuid::new_v4());
             mob.get_entity().set_rotation(yaw, 0.0);
 
-            let held = player.inventory.held_item();
-            let stack = if !held.is_empty() && held.item.id == item.id {
-                held
-            } else {
-                player.inventory.off_hand_item()
-            };
-            apply_entity_variant(&stack, mob.as_ref());
+            // 变体来源选择借用化：主手匹配即按借用传入，否则回退
+            // 副手（与原选择语义一致），全程零克隆
+            let mut applied = false;
+            player.inventory.with_held_item(&mut |held| {
+                if !held.is_empty() && held.item.id == item.id {
+                    apply_entity_variant(held, mob.as_ref());
+                    applied = true;
+                }
+            });
+            if !applied {
+                player
+                    .inventory
+                    .with_off_hand_item(&mut |stack| apply_entity_variant(stack, mob.as_ref()));
+            }
             world.spawn_entity(mob);
 
             let gamemode = player.gamemode.load();

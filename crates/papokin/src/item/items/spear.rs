@@ -47,7 +47,11 @@ impl ItemBehaviour for SpearItem {
         }
 
         let inventory = player.inventory();
-        let hand = if inventory.held_item().item.id == item.id {
+        // 手别选择只读探测借用化：仅比对物品 id，栈本体随
+        // set_active_hand 另取所有权
+        let mut held_is_spear = false;
+        inventory.with_held_item(&mut |held| held_is_spear = held.item.id == item.id);
+        let hand = if held_is_spear {
             Hand::Right
         } else {
             Hand::Left
@@ -123,6 +127,9 @@ impl ItemBehaviour for SpearItem {
         let Some(hand) = active_hand else {
             return;
         };
+        // 豁免借用化：held 需跨过判定传入 kinetic_attack（借用无法
+        // 逃逸回调），且攻击路径内部触及物品栏，回调内调用有重入
+        // 死锁风险，保持前置克隆
         let held = player.inventory().get_stack_in_hand(hand);
         if held.item.id != stack.item.id {
             player.living_entity.clear_active_hand();

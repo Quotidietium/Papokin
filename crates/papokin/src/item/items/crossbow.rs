@@ -22,16 +22,17 @@ impl ItemMetadata for CrossbowItem {
 
 impl ItemBehaviour for CrossbowItem {
     fn normal_use(&self, _item: &Item, player: &Player) {
-        let inventory = player.inventory();
-        let stack = inventory.held_item();
-
-        // 每把弩默认都携带 ChargedProjectiles 组件，因此仅
-        // 存在并不意味着弩已装填。原版还会检查列表是否
-        // 非空（CrossbowItem.java:68）。
-        if stack
-            .get_data_component::<ChargedProjectilesImpl>()
-            .is_some_and(|charged| !charged.projectiles.is_empty())
-        {
+        // 借用读取：装填判定为纯读组件
+        let mut charged = false;
+        player.inventory().with_held_item(&mut |stack| {
+            // 每把弩默认都携带 ChargedProjectiles 组件，因此仅
+            // 存在并不意味着弩已装填。原版还会检查列表是否
+            // 非空（CrossbowItem.java:68）。
+            charged = stack
+                .get_data_component::<ChargedProjectilesImpl>()
+                .is_some_and(|c| !c.projectiles.is_empty());
+        });
+        if charged {
             Self::fire_projectiles(player);
             return;
         }
@@ -41,6 +42,7 @@ impl ItemBehaviour for CrossbowItem {
             return;
         }
 
+        let stack = player.inventory().held_item();
         player
             .living_entity
             .set_active_hand(papokin_util::Hand::Right, stack, 72000);
