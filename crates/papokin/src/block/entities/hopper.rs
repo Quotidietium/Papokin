@@ -517,23 +517,28 @@ impl HopperBlockEntity {
     }
 
     pub fn add_one_item(from: &dyn Inventory, to: &dyn Inventory, item: &ItemStack) -> bool {
-        let mut success = false;
         let to_empty = to.is_empty();
         for j in 0..to.size() {
             if to.is_valid_slot_for(j, item) {
-                let mut dst = to.get_stack(j);
-                if dst.is_empty() {
-                    dst = item.clone();
-                    to.set_stack(j, dst);
-                    success = true;
-                } else if dst.item_count < dst.get_max_stack_size()
-                    && dst.are_items_and_components_equal(item)
-                {
-                    dst.item_count += 1;
-                    to.set_stack(j, dst);
-                    success = true;
-                }
-                if success {
+                // 锁稳定读改写：合并路径原位加一（零克隆），空槽
+                // 填入仅付一次 item 克隆；满载扫描不再逐槽整栈克隆
+                let mut transferred = false;
+                to.with_stack_mut(j, &mut |dst| {
+                    if dst.is_empty() {
+                        *dst = item.clone();
+                        transferred = true;
+                        true
+                    } else if dst.item_count < dst.get_max_stack_size()
+                        && dst.are_items_and_components_equal(item)
+                    {
+                        dst.item_count += 1;
+                        transferred = true;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                if transferred {
                     if to_empty
                         && let Some(hopper) = to.as_any().downcast_ref::<Self>()
                         && hopper.cooldown_time.load(Ordering::Relaxed) <= 8
