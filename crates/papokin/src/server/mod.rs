@@ -566,10 +566,15 @@ impl Server {
         // 通知插件服务器资源已重新加载。每个
         // 当前调用方通过命令或内部
         // 数据包操作，因此原因报告为 `command`。
-        let mut event = crate::plugin::api::events::server::server_resources_reloaded::ServerResourcesReloadedEvent::new(
-            "command".to_string(),
-        );
-        self.plugin_manager.fire_blocking(server, &mut event);
+        if self
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::server::server_resources_reloaded::ServerResourcesReloadedEvent>()
+        {
+            let mut event = crate::plugin::api::events::server::server_resources_reloaded::ServerResourcesReloadedEvent::new(
+                "command".to_string(),
+            );
+            self.plugin_manager.fire_blocking(server, &mut event);
+        }
     }
 
     #[must_use]
@@ -773,7 +778,11 @@ impl Server {
             .remove_player(player);
 
         // 纯通知：在每个玩家拆除（登录后）时触发。
-        if let Some(server_arc) = crate::net::server_arc(self) {
+        if let Some(server_arc) = crate::net::server_arc(self)
+            && server_arc
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_connection_close::PlayerConnectionCloseEvent>()
+        {
             let mut event = crate::plugin::api::events::player::player_connection_close::PlayerConnectionCloseEvent::new(
                 player.gameprofile.id,
                 player.gameprofile.name.clone(),
@@ -934,7 +943,11 @@ impl Server {
             // 通知：新难度已经生效。
             // `set_difficulty` 只有 `&self`，因此需要恢复出一个 `Arc<Server>`
             // 通过各世界的弱反向引用。
-            if let Some(server) = crate::net::server_arc(self) {
+            if let Some(server) = crate::net::server_arc(self)
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::world::world_difficulty_change::WorldDifficultyChangeEvent>()
+            {
                 let mut event = crate::plugin::api::events::world::world_difficulty_change::WorldDifficultyChangeEvent::new(
                     world.clone(),
                     old_difficulty.name().to_string(),

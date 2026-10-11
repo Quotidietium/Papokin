@@ -58,11 +58,16 @@ impl CommandExecutor for OnExecutor {
         if previous {
             Err(ERROR_ALREADY_ON.create_without_context())
         } else {
-            let mut event =
-                crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
-                    true,
-                );
-            server.plugin_manager.fire_blocking(server, &mut event);
+            if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
+                        true,
+                    );
+                server.plugin_manager.fire_blocking(server, &mut event);
+            }
             context.source.send_feedback(
                 papokin_macros::translate!(translation::java::COMMANDS_WHITELIST_ENABLED),
                 true,
@@ -80,11 +85,16 @@ impl CommandExecutor for OffExecutor {
         let server = context.source.server();
         let previous = server.white_list.swap(false, Ordering::Relaxed);
         if previous {
-            let mut event =
-                crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
-                    false,
-                );
-            server.plugin_manager.fire_blocking(server, &mut event);
+            if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::server::whitelist_toggle::WhitelistToggleEvent::new(
+                        false,
+                    );
+                server.plugin_manager.fire_blocking(server, &mut event);
+            }
             context.source.send_feedback(
                 papokin_macros::translate!(translation::java::COMMANDS_WHITELIST_DISABLED),
                 true,
@@ -210,14 +220,19 @@ impl CommandExecutor for AddExecutor {
         }
         drop(whitelist);
 
-        for (name, uuid) in added {
-            let mut event =
-                crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
-                    name,
-                    uuid,
-                    crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Added,
-                );
-            server.plugin_manager.fire_blocking(server, &mut event);
+        if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent>()
+        {
+            for (name, uuid) in added {
+                let mut event =
+                    crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
+                        name,
+                        uuid,
+                        crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Added,
+                    );
+                server.plugin_manager.fire_blocking(server, &mut event);
+            }
         }
 
         if successes == 0 {
@@ -279,14 +294,19 @@ impl CommandExecutor for RemoveExecutor {
             whitelist.save();
             drop(whitelist);
 
-            for (name, uuid) in removed {
-                let mut event =
-                    crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
-                        name,
-                        uuid,
-                        crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Removed,
-                    );
-                server.plugin_manager.fire_blocking(server, &mut event);
+            if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent>()
+            {
+                for (name, uuid) in removed {
+                    let mut event =
+                        crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateEvent::new(
+                            name,
+                            uuid,
+                            crate::plugin::api::events::server::whitelist_state_update::WhitelistStateUpdateStatus::Removed,
+                        );
+                    server.plugin_manager.fire_blocking(server, &mut event);
+                }
             }
 
             kick_non_whitelisted_players(server);

@@ -20,6 +20,12 @@ const PERMISSION: &str = "minecraft:command.gamerule";
 /// 调用方不得写入。
 fn fire_game_rule_change(context: &CommandContext, rule: &GameRule, value: String) -> bool {
     let server = context.source.server().clone();
+    if !server
+        .plugin_manager
+        .has_handlers::<WorldGameRuleChangeEvent>()
+    {
+        return false;
+    }
     let world = context.source.world().clone();
     let mut event = WorldGameRuleChangeEvent::new(world, rule.to_string(), value);
     server.plugin_manager.fire_blocking(&server, &mut event);

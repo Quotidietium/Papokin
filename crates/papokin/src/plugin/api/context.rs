@@ -238,14 +238,20 @@ impl Context {
 
         // 通知插件有命令已被注册。标签反映了
         // 上方应用的任何回退前缀。
-        let mut event =
-            crate::plugin::api::events::server::command_registered::CommandRegisteredEvent::new(
-                node.meta.literal.to_string(),
-                self.metadata.name.clone(),
-            );
-        self.server
+        if self
+            .server
             .plugin_manager
-            .fire_blocking(&self.server, &mut event);
+            .has_handlers::<crate::plugin::api::events::server::command_registered::CommandRegisteredEvent>()
+        {
+            let mut event =
+                crate::plugin::api::events::server::command_registered::CommandRegisteredEvent::new(
+                    node.meta.literal.to_string(),
+                    self.metadata.name.clone(),
+                );
+            self.server
+                .plugin_manager
+                .fire_blocking(&self.server, &mut event);
+        }
 
         self.reload_commands_for_everyone();
     }

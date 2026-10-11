@@ -200,22 +200,29 @@ impl CommandExecutor for LocateStructureExecutor {
         };
 
         // 通知插件，并让它们重写定位到的位置。
-        let structure_id = match &searched {
-            ResourceOrTag::Resource(id) => id.to_string(),
-            ResourceOrTag::Tag(_) => searched.printable(),
-        };
-        let mut event =
-            crate::plugin::api::events::world::structures_locate::StructuresLocateEvent::new(
-                world.clone(),
-                origin,
-                structure_id,
-                STRUCTURE_SEARCH_RADIUS,
-                vec![target],
-            );
         let server = context.source.server();
-        server.plugin_manager.fire_blocking(server, &mut event);
-
-        let Some(&target) = event.results.first() else {
+        let target = if server
+            .plugin_manager
+            .has_handlers::<crate::plugin::api::events::world::structures_locate::StructuresLocateEvent>()
+        {
+            let structure_id = match &searched {
+                ResourceOrTag::Resource(id) => id.to_string(),
+                ResourceOrTag::Tag(_) => searched.printable(),
+            };
+            let mut event =
+                crate::plugin::api::events::world::structures_locate::StructuresLocateEvent::new(
+                    world.clone(),
+                    origin,
+                    structure_id,
+                    STRUCTURE_SEARCH_RADIUS,
+                    vec![target],
+                );
+            server.plugin_manager.fire_blocking(server, &mut event);
+            event.results.into_iter().next()
+        } else {
+            Some(target)
+        };
+        let Some(target) = target else {
             return Err(STRUCTURE_NOT_FOUND_ERROR_TYPE
                 .create_without_context(TextComponent::text(searched.printable())));
         };
