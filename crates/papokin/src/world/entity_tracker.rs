@@ -203,17 +203,24 @@ impl TrackedEntity {
     /// Pair 决定的行动阶段：show 事件放行后在 `pair_lock` 内补发
     /// spawn；事件被否决或实体在事件期间被移除则回滚 `seen_by`。
     fn apply_new_pairing(&self, player: &Arc<Player>, world: &World) {
-        let mut show_event = PlayerShowEntityEvent {
-            player: player.clone(),
-            entity_id: self.entity_id,
-            cancelled: false,
-        };
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<PlayerShowEntityEvent>()
+        {
+            let mut show_event = PlayerShowEntityEvent {
+                player: player.clone(),
+                entity_id: self.entity_id,
+                cancelled: false,
+            };
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut show_event);
-        }
-        if show_event.cancelled {
+            show_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             // 保持实体未配对状态，以便在下一次追踪更新时重新评估
             // 可见性。（实体若已被并发移除，finalize_removal 的清空
             // 会覆盖这次回滚，无影响。）
@@ -228,12 +235,18 @@ impl TrackedEntity {
             return;
         }
         // 追踪通知，在配对添加完成后触发。
-        let mut track_event =
-            crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent::new(
-                player.clone(),
-                self.entity_id,
-            );
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent>()
+        {
+            let mut track_event =
+                crate::plugin::api::events::player::player_track_entity::PlayerTrackEntityEvent::new(
+                    player.clone(),
+                    self.entity_id,
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut track_event);
@@ -258,17 +271,24 @@ impl TrackedEntity {
     /// Unpair 决定的行动阶段：hide 事件放行后发送 destroy 并触发
     /// untrack 通知；事件被否决则在锁内复活 `seen_by` 保持配对。
     fn apply_removed_pairing(&self, player: &Arc<Player>, world: &World) {
-        let mut hide_event = PlayerHideEntityEvent {
-            player: player.clone(),
-            entity_id: self.entity_id,
-            cancelled: false,
-        };
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<PlayerHideEntityEvent>()
+        {
+            let mut hide_event = PlayerHideEntityEvent {
+                player: player.clone(),
+                entity_id: self.entity_id,
+                cancelled: false,
+            };
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut hide_event);
-        }
-        if hide_event.cancelled {
+            hide_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             // 已否决：该实体对此玩家保持配对（可见）。
             // 实体若已被并发移除则不复活 seen_by（finalize
             // 即将清空它）。
@@ -282,12 +302,18 @@ impl TrackedEntity {
         } else {
             self.remove_pairing(player);
             // 取消跟踪通知，在配对被移除后触发。
-            let mut untrack_event =
-                crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent::new(
-                    player.clone(),
-                    self.entity_id,
-                );
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent>()
+            {
+                let mut untrack_event =
+                    crate::plugin::api::events::player::player_untrack_entity::PlayerUntrackEntityEvent::new(
+                        player.clone(),
+                        self.entity_id,
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut untrack_event);
