@@ -114,8 +114,13 @@ impl DispenserBlockEntity {
         }
         if non_empty.is_empty() {
             // 发射器没有可发射的物品；将此失败通知插件。
-            let mut event = BlockFailedDispenseEvent::new(self.position, ItemStack::EMPTY.clone());
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<BlockFailedDispenseEvent>()
+            {
+                let mut event =
+                    BlockFailedDispenseEvent::new(self.position, ItemStack::EMPTY.clone());
                 server.plugin_manager.fire_blocking(&server, &mut event);
             }
             None

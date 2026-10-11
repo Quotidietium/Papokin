@@ -157,16 +157,22 @@ impl PistonBlock {
 
         // 伸出活塞
         if r#type == 0 {
-            let mut event =
-                crate::plugin::api::events::block::block_piston::BlockPistonExtendEvent::new(
-                    *pos,
-                    format!("{dir:?}"),
-                );
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::block_piston::BlockPistonExtendEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::block::block_piston::BlockPistonExtendEvent::new(
+                        *pos,
+                        format!("{dir:?}"),
+                    );
                 server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if event.cancelled {
-                return false;
+                if event.cancelled {
+                    return false;
+                }
             }
 
             if !move_piston(world, dir, pos, true, sticky) {
@@ -191,16 +197,22 @@ impl PistonBlock {
         }
         // 化简活塞
 
-        let mut event =
-            crate::plugin::api::events::block::block_piston::BlockPistonRetractEvent::new(
-                *pos,
-                format!("{dir:?}"),
-            );
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::block_piston::BlockPistonRetractEvent>()
+        {
+            let mut event =
+                crate::plugin::api::events::block::block_piston::BlockPistonRetractEvent::new(
+                    *pos,
+                    format!("{dir:?}"),
+                );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
-            return false;
+            if event.cancelled {
+                return false;
+            }
         }
 
         let extended_pos = pos.offset(dir.to_offset());

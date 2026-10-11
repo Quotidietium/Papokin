@@ -283,6 +283,13 @@ impl BlockBehaviour for LecternBlock {
 
         // 插入书钩子：取消会消耗点击但保留书
         // 位于玩家手中。
+        let cancelled = if let Some(server) = args
+            .world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_insert_lectern_book::PlayerInsertLecternBookEvent>()
         {
             let mut insert_event =
                 crate::plugin::api::events::player::player_insert_lectern_book::PlayerInsertLecternBookEvent::new(
@@ -290,14 +297,15 @@ impl BlockBehaviour for LecternBlock {
                     *args.position,
                     item_stack.clone(),
                 );
-            if let Some(server) = args.world.server.upgrade() {
-                server
-                    .plugin_manager
-                    .fire_blocking(&server, &mut insert_event);
-            }
-            if insert_event.cancelled {
-                return BlockActionResult::Success;
-            }
+            server
+                .plugin_manager
+                .fire_blocking(&server, &mut insert_event);
+            insert_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
+            return BlockActionResult::Success;
         }
 
         let book = item_stack.split_unless_creative(args.player.gamemode.load(), 1);

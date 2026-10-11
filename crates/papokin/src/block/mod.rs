@@ -495,19 +495,26 @@ pub fn drop_loot(
         let seed: i64 = rand::random();
         let items = crate::world::loot::generate_loot_with_context(loot_table, seed, params);
         if !items.is_empty() {
-            let mut event = crate::plugin::block::block_drop_item::BlockDropItemEvent {
-                block_pos: *pos,
-                world: world.clone(),
-                player: None,
-                items,
-                cancelled: false,
-            };
-            if let Some(server) = world.server.upgrade() {
+            let (items, cancelled) = if let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::block::block_drop_item::BlockDropItemEvent>()
+            {
+                let mut event = crate::plugin::block::block_drop_item::BlockDropItemEvent {
+                    block_pos: *pos,
+                    world: world.clone(),
+                    player: None,
+                    items,
+                    cancelled: false,
+                };
                 server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if !event.cancelled {
+                (event.items, event.cancelled)
+            } else {
+                (items, false)
+            };
+            if !cancelled {
                 let block_entity = world.get_block_entity(pos);
-                for mut stack in event.items {
+                for mut stack in items {
                     if let Some(block_entity) = &block_entity
                         && Block::from_item_id(stack.item.id) == Some(block)
                     {
@@ -531,16 +538,23 @@ pub fn drop_loot(
         let mut random = RandomGenerator::Xoroshiro(Xoroshiro::from_seed(get_seed()));
         let amount = experience.experience.get(&mut random);
         if amount > 0 {
-            let mut event = crate::plugin::block::block_exp::BlockExpEvent {
-                block_pos: *pos,
-                world: world.clone(),
-                exp: amount,
-            };
-            if let Some(server) = world.server.upgrade() {
+            let exp = if let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::block::block_exp::BlockExpEvent>()
+            {
+                let mut event = crate::plugin::block::block_exp::BlockExpEvent {
+                    block_pos: *pos,
+                    world: world.clone(),
+                    exp: amount,
+                };
                 server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if event.exp > 0 {
-                ExperienceOrbEntity::spawn(world, pos.to_f64(), event.exp as u32);
+                event.exp
+            } else {
+                amount
+            };
+            if exp > 0 {
+                ExperienceOrbEntity::spawn(world, pos.to_f64(), exp as u32);
             }
         }
     }

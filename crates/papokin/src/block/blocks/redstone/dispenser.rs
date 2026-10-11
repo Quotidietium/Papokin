@@ -308,14 +308,24 @@ impl DispenserBlock {
     const FIREWORK_PROJECTILE_UNCERTAINTY: f64 = 1.0;
 
     fn dispense(ctx: &DispenseContext<'_>, dispenser: &DispenserBlockEntity, item: &mut ItemStack) {
-        let mut event = crate::plugin::api::events::block::block_dispense::BlockDispenseEvent::new(
-            *ctx.position,
-            item.item.registry_key.to_string(),
-        );
-        if let Some(server) = ctx.world.server.upgrade() {
+        let cancelled = if let Some(server) = ctx
+            .world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::block_dispense::BlockDispenseEvent>()
+        {
+            let mut event = crate::plugin::api::events::block::block_dispense::BlockDispenseEvent::new(
+                *ctx.position,
+                item.item.registry_key.to_string(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             ctx.world
                 .sync_world_event(WorldEvent::SoundDispenserFail, *ctx.position, 0);
             return;

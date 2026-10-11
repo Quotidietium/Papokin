@@ -90,12 +90,16 @@ impl SculkCatalystBlock {
             return false;
         }
 
-        let mut event = crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent::new(
-            target,
-            world.clone(),
-            charge,
-        );
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent>()
+        {
+            let mut event = crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent::new(
+                target,
+                world.clone(),
+                charge,
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
             if event.cancelled {
                 return false;
@@ -133,12 +137,19 @@ impl SculkCatalystBlock {
             if !(above_state.is_air() || above_state.is_liquid()) {
                 continue;
             }
-            let mut event = crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent::new(
-                target,
-                world.clone(),
-                charge,
-            );
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::block::sculk_bloom::SculkBloomEvent::new(
+                        target,
+                        world.clone(),
+                        charge,
+                    );
                 server.plugin_manager.fire_blocking(&server, &mut event);
                 if event.cancelled {
                     continue;

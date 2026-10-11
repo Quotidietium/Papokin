@@ -69,6 +69,7 @@ impl BlockEntity for CampfireBlockEntity {
         self.write_cooking_nbt(nbt);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn tick(&self, world: &Arc<World>) {
         let block = world.get_block(&self.position);
         if block != &Block::CAMPFIRE && block != &Block::SOUL_CAMPFIRE {
@@ -109,7 +110,13 @@ impl BlockEntity for CampfireBlockEntity {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if *total <= 0 {
                     let mut cooking_time = recipe.cookingtime;
-                    if let Some(server) = world.server.upgrade() {
+                    if let Some(server) = world
+                        .server
+                        .upgrade()
+                        && server
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::block::campfire_start::CampfireStartEvent>()
+                    {
                         let mut event = crate::plugin::api::events::block::campfire_start::CampfireStartEvent::new(
                             self.position,
                             world.clone(),
@@ -146,7 +153,11 @@ impl BlockEntity for CampfireBlockEntity {
             };
 
             let mut result = ItemStack::new(recipe.result.count, result_item);
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world.server.upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::block_cook::BlockCookEvent>()
+            {
                 let mut event = crate::plugin::api::events::block::block_cook::BlockCookEvent::new(
                     self.position,
                     world.clone(),

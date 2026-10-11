@@ -1086,15 +1086,24 @@ impl TrialSpawner {
             living.send_equipment_changes(&equipment_changes);
         }
 
-        let mut event =
-            crate::plugin::api::events::entity::trial_spawner_spawn::TrialSpawnerSpawnEvent::new(
-                entity.get_entity().entity_id,
-                spawner_pos,
-            );
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::entity::trial_spawner_spawn::TrialSpawnerSpawnEvent>()
+        {
+            let mut event =
+                crate::plugin::api::events::entity::trial_spawner_spawn::TrialSpawnerSpawnEvent::new(
+                    entity.get_entity().entity_id,
+                    spawner_pos,
+                );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return None;
         }
 

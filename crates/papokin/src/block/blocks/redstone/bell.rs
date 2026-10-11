@@ -25,17 +25,24 @@ fn ring_bell(
     hit_direction: Option<HorizontalFacing>,
     entity: Option<Arc<dyn crate::entity::EntityBase>>,
 ) -> bool {
-    let mut event = crate::plugin::block::bell_ring::BellRingEvent {
-        block_pos: position,
-        world: world.clone(),
-        direction: hit_direction.map(|d| d.to_block_direction()),
-        entity,
-        cancelled: false,
-    };
-    if let Some(server) = world.server.upgrade() {
+    let cancelled = if let Some(server) = world.server.upgrade()
+        && server
+            .plugin_manager
+            .has_handlers::<crate::plugin::block::bell_ring::BellRingEvent>()
+    {
+        let mut event = crate::plugin::block::bell_ring::BellRingEvent {
+            block_pos: position,
+            world: world.clone(),
+            direction: hit_direction.map(|d| d.to_block_direction()),
+            entity,
+            cancelled: false,
+        };
         server.plugin_manager.fire_blocking(&server, &mut event);
-    }
-    if event.cancelled {
+        event.cancelled
+    } else {
+        false
+    };
+    if cancelled {
         return false;
     }
 

@@ -310,7 +310,13 @@ impl StrawBedBlock {
             return BlockActionResult::SuccessServer;
         }
 
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_bed::PlayerBedEnterEvent>()
+        {
             let mut event =
                 crate::plugin::api::events::player::player_bed::PlayerBedEnterEvent::new(
                     player.clone(),

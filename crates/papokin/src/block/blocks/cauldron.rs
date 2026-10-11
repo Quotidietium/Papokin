@@ -34,19 +34,26 @@ fn fire_cauldron_change(
     reason: crate::plugin::block::cauldron_level_change::CauldronChangeReason,
     entity: Option<std::sync::Arc<dyn crate::entity::EntityBase>>,
 ) -> bool {
-    let mut event = crate::plugin::block::cauldron_level_change::CauldronLevelChangeEvent {
-        block_pos: pos,
-        world: world.clone(),
-        old_level,
-        new_level,
-        reason,
-        entity,
-        cancelled: false,
-    };
-    if let Some(server) = world.server.upgrade() {
+    let cancelled = if let Some(server) = world.server.upgrade()
+        && server
+            .plugin_manager
+            .has_handlers::<crate::plugin::block::cauldron_level_change::CauldronLevelChangeEvent>()
+    {
+        let mut event = crate::plugin::block::cauldron_level_change::CauldronLevelChangeEvent {
+            block_pos: pos,
+            world: world.clone(),
+            old_level,
+            new_level,
+            reason,
+            entity,
+            cancelled: false,
+        };
         server.plugin_manager.fire_blocking(&server, &mut event);
-    }
-    !event.cancelled
+        event.cancelled
+    } else {
+        false
+    };
+    !cancelled
 }
 
 fn give_item_or_drop(

@@ -41,6 +41,9 @@ impl BlockBehaviour for SweetBerryBushBlock {
                 let mut drops = vec![ItemStack::new(count, &Item::SWEET_BERRIES)];
                 if let Some(player_arc) = args.world.get_player_by_uuid(args.player.gameprofile.id)
                     && let Some(server) = args.world.server.upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_harvest_block::PlayerHarvestBlockEvent>()
                 {
                     let mut event = crate::plugin::api::events::player::player_harvest_block::PlayerHarvestBlockEvent {
                         player: player_arc,

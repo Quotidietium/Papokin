@@ -130,7 +130,13 @@ impl CrafterBlock {
             world.set_block_state(pos, props.to_state_id(block), BlockFlags::NOTIFY_LISTENERS);
 
             let mut result_stack = ItemStack::new(recipe_result.count, item);
-            if let Some(server) = world.server.upgrade() {
+            if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::crafter_craft::CrafterCraftEvent>()
+            {
                 let mut event =
                     crate::plugin::api::events::block::crafter_craft::CrafterCraftEvent::new(
                         *pos,

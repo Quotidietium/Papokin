@@ -705,13 +705,21 @@ fn execute_click_commands_if_present(
         {
             // 让插件预处理（并可选择取消/重写）该
             // 告示牌的点击命令，然后才运行。
-            let mut event = crate::plugin::api::events::player::player_sign_command_preprocess::PlayerSignCommandPreprocessEvent::new(
-                player.clone(),
-                *position,
-                command.clone(),
-            );
-            server.plugin_manager.fire_blocking(&server, &mut event);
-            if event.cancelled {
+            let (cancelled, command) = if server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_sign_command_preprocess::PlayerSignCommandPreprocessEvent>()
+            {
+                let mut event = crate::plugin::api::events::player::player_sign_command_preprocess::PlayerSignCommandPreprocessEvent::new(
+                    player.clone(),
+                    *position,
+                    command.clone(),
+                );
+                server.plugin_manager.fire_blocking(&server, &mut event);
+                (event.cancelled, event.command)
+            } else {
+                (false, command.clone().into_owned())
+            };
+            if cancelled {
                 continue;
             }
 
@@ -729,7 +737,7 @@ fn execute_click_commands_if_present(
                 player.get_display_name(),
                 server.clone(),
             );
-            let command_str = event.command.strip_prefix('/').unwrap_or(&event.command);
+            let command_str = command.strip_prefix('/').unwrap_or(&command);
             let dispatcher = server.command_dispatcher.load();
             dispatcher.handle_command(&source, command_str);
             has_run_command = true;

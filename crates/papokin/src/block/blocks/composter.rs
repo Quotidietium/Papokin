@@ -59,16 +59,27 @@ impl BlockBehaviour for ComposterBlock {
             let will_raise_level =
                 level < 7 && (level == 0 || rand::rng().random_bool(f64::from(chance)));
 
-            let mut event = crate::plugin::api::events::block::compost_item::CompostItemEvent::new(
-                Some(args.player.clone()),
-                *args.position,
-                item_stack.clone(),
-                will_raise_level,
-            );
-            if let Some(server) = args.world.server.upgrade() {
+            let (cancelled, will_raise_level) = if let Some(server) = args
+                .world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::compost_item::CompostItemEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::block::compost_item::CompostItemEvent::new(
+                        Some(args.player.clone()),
+                        *args.position,
+                        item_stack.clone(),
+                        will_raise_level,
+                    );
                 server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if event.cancelled {
+                (event.cancelled, event.will_raise_level)
+            } else {
+                (false, will_raise_level)
+            };
+            if cancelled {
                 return BlockActionResult::Pass;
             }
 
@@ -77,7 +88,7 @@ impl BlockBehaviour for ComposterBlock {
                 item_stack.decrement(1);
             }
 
-            if event.will_raise_level {
+            if will_raise_level {
                 self.update_level_composter(
                     args.world,
                     args.position,

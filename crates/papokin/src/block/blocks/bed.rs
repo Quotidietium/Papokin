@@ -212,11 +212,17 @@ impl BedBlock {
         fail_reason: &str,
     ) -> bool {
         use crate::plugin::api::events::player::player_bed_fail_enter::PlayerBedFailEnterEvent;
-        let mut event = PlayerBedFailEnterEvent::new(player.clone(), bed_pos, fail_reason);
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<PlayerBedFailEnterEvent>()
+        {
+            let mut event = PlayerBedFailEnterEvent::new(player.clone(), bed_pos, fail_reason);
             server.plugin_manager.fire_blocking(&server, &mut event);
+            !event.cancelled
+        } else {
+            true
         }
-        !event.cancelled
     }
 
     #[expect(clippy::too_many_lines)]
@@ -369,7 +375,13 @@ impl BedBlock {
             }
         }
 
-        if let Some(server) = world.server.upgrade() {
+        if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::player::player_bed::PlayerBedEnterEvent>()
+        {
             let mut event =
                 crate::plugin::api::events::player::player_bed::PlayerBedEnterEvent::new(
                     player.clone(),

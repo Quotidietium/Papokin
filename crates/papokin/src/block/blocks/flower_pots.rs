@@ -17,15 +17,25 @@ impl BlockBehaviour for FlowerPotBlock {
             if args.block.eq(&Block::FLOWER_POT) {
                 if potted_block_id != BlockId::AIR {
                     // 种植钩子：取消即否决此次种植。
-                    let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
-                        args.player.clone(),
-                        *args.position,
-                        args.item_stack.clone(),
-                    );
-                    if let Some(server) = args.world.server.upgrade() {
+                    let cancelled = if let Some(server) = args
+                        .world
+                        .server
+                        .upgrade()
+                        && server
+                            .plugin_manager
+                            .has_handlers::<crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent>()
+                    {
+                        let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
+                            args.player.clone(),
+                            *args.position,
+                            args.item_stack.clone(),
+                        );
                         server.plugin_manager.fire_blocking(&server, &mut pot_event);
-                    }
-                    if pot_event.cancelled {
+                        pot_event.cancelled
+                    } else {
+                        false
+                    };
+                    if cancelled {
                         return BlockActionResult::Consume;
                     }
                     args.world.set_block_state(
@@ -51,15 +61,25 @@ impl BlockBehaviour for FlowerPotBlock {
             let potted_item = papokin_data::item::Item::from_id(args.block.item_id)
                 .map(|item| papokin_data::item_stack::ItemStack::new(1, item));
             if let Some(flower) = potted_item {
-                let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
-                    args.player.clone(),
-                    *args.position,
-                    flower,
-                );
-                if let Some(server) = args.world.server.upgrade() {
+                let cancelled = if let Some(server) = args
+                    .world
+                    .server
+                    .upgrade()
+                    && server
+                        .plugin_manager
+                        .has_handlers::<crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent>()
+                {
+                    let mut pot_event = crate::plugin::api::events::player::player_flower_pot_manipulate::PlayerFlowerPotManipulateEvent::new(
+                        args.player.clone(),
+                        *args.position,
+                        flower,
+                    );
                     server.plugin_manager.fire_blocking(&server, &mut pot_event);
-                }
-                if pot_event.cancelled {
+                    pot_event.cancelled
+                } else {
+                    false
+                };
+                if cancelled {
                     return BlockActionResult::Consume;
                 }
             }

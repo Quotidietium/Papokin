@@ -352,18 +352,27 @@ pub trait FlowingFluid: Send + Sync {
             return;
         }
 
-        let mut level_event =
-            crate::plugin::api::events::block::fluid_level_change::FluidLevelChangeEvent::new(
-                *pos,
-                world.clone(),
-                state_id,
-            );
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::fluid_level_change::FluidLevelChangeEvent>()
+        {
+            let mut level_event =
+                crate::plugin::api::events::block::fluid_level_change::FluidLevelChangeEvent::new(
+                    *pos,
+                    world.clone(),
+                    state_id,
+                );
             server
                 .plugin_manager
                 .fire_blocking(&server, &mut level_event);
-        }
-        if level_event.cancelled {
+            level_event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 

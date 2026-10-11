@@ -36,14 +36,21 @@ impl TNTBlock {
             return false;
         }
 
-        let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
-            *location,
-            reason.to_string(),
-        );
-        if let Some(server) = world.server.upgrade() {
+        let cancelled = if let Some(server) = world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent>()
+        {
+            let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
+                *location,
+                reason.to_string(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return false;
         }
 
@@ -141,14 +148,21 @@ impl BlockBehaviour for TNTBlock {
             return;
         }
 
-        let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
-            *args.position,
-            "EXPLOSION".to_string(),
-        );
-        if let Some(server) = args.world.server.upgrade() {
+        let cancelled = if let Some(server) = args.world.server.upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent>()
+        {
+            let mut event = crate::plugin::api::events::block::tnt_prime::TNTPrimeEvent::new(
+                *args.position,
+                "EXPLOSION".to_string(),
+            );
             server.plugin_manager.fire_blocking(&server, &mut event);
-        }
-        if event.cancelled {
+            event.cancelled
+        } else {
+            false
+        };
+        if cancelled {
             return;
         }
 

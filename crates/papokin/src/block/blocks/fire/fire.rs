@@ -429,7 +429,13 @@ impl BlockBehaviour for FireBlock {
                                 new_fire_props.age = spread_age;
                                 let new_state_id = new_fire_props.to_state_id(&Block::FIRE);
 
-                                if let Some(server) = world.server.upgrade() {
+                                if let Some(server) = world
+                                    .server
+                                    .upgrade()
+                                    && server
+                                        .plugin_manager
+                                        .has_handlers::<crate::plugin::api::events::block::block_spread::BlockSpreadEvent>()
+                                {
                                     let mut event = crate::plugin::api::events::block::block_spread::BlockSpreadEvent::new(
                                         *pos,
                                         offset_pos,

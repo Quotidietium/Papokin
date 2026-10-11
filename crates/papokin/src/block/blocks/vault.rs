@@ -113,33 +113,53 @@ impl BlockBehaviour for VaultBlock {
                 ItemStack::new(2, &Item::IRON_INGOT),
             ];
 
-            let mut event =
-                crate::plugin::api::events::block::block_dispense_loot::BlockDispenseLootEvent::new(
-                    *args.position,
-                    args.world.clone(),
-                    loot_stacks,
-                );
-            if let Some(server) = args.world.server.upgrade() {
+            let (items, cancelled) = if let Some(server) = args
+                .world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::block_dispense_loot::BlockDispenseLootEvent>()
+            {
+                let mut event =
+                    crate::plugin::api::events::block::block_dispense_loot::BlockDispenseLootEvent::new(
+                        *args.position,
+                        args.world.clone(),
+                        loot_stacks,
+                    );
                 server.plugin_manager.fire_blocking(&server, &mut event);
-            }
-            if !event.cancelled {
-                for stack in event.items {
+                (event.items, event.cancelled)
+            } else {
+                (loot_stacks, false)
+            };
+            if !cancelled {
+                for stack in items {
                     args.world.drop_stack(args.position, stack);
                 }
             }
 
-            let mut state_event =
-                crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent::new(
-                    *args.position,
-                    props.vault_state,
-                    VaultState::Active,
-                );
-            if let Some(server) = args.world.server.upgrade() {
+            let cancelled = if let Some(server) = args
+                .world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent>()
+            {
+                let mut state_event =
+                    crate::plugin::api::events::block::vault_change_state::VaultChangeStateEvent::new(
+                        *args.position,
+                        props.vault_state,
+                        VaultState::Active,
+                    );
                 server
                     .plugin_manager
                     .fire_blocking(&server, &mut state_event);
-            }
-            if !state_event.cancelled {
+                state_event.cancelled
+            } else {
+                false
+            };
+            if !cancelled {
                 props.vault_state = VaultState::Active;
                 args.world.set_block_state(
                     args.position,

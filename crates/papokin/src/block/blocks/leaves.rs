@@ -101,7 +101,14 @@ impl BlockBehaviour for LeavesBlock {
         let state_id = args.world.get_block_state_id(args.position);
         let props = OakLeavesLikeProperties::from_state_id(state_id);
         if !props.persistent && props.distance == DECAY_DISTANCE {
-            if let Some(server) = args.world.server.upgrade() {
+            if let Some(server) = args
+                .world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::leaves_decay::LeavesDecayEvent>()
+            {
                 let mut event =
                     crate::plugin::api::events::block::leaves_decay::LeavesDecayEvent::new(
                         *args.position,

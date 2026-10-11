@@ -311,7 +311,13 @@ impl BrewingStandBlockEntity {
             return false;
         };
 
-        let fuel_power = if let Some(server) = world.server.upgrade() {
+        let fuel_power = if let Some(server) = world
+            .server
+            .upgrade()
+            && server
+                .plugin_manager
+                .has_handlers::<crate::plugin::api::events::inventory::brewing_stand_fuel::BrewingStandFuelEvent>()
+        {
             let mut fuel_event = crate::plugin::api::events::inventory::brewing_stand_fuel::BrewingStandFuelEvent::new(
                 self.position,
                 20,
@@ -603,7 +609,13 @@ impl crate::block::entities::BlockEntity for BrewingStandBlockEntity {
                 self.mark_timer_dirty();
             }
         } else if brewable && self.fuel.load(Ordering::Relaxed) > 0 {
-            let brew_time = if let Some(server) = world.server.upgrade() {
+            let brew_time = if let Some(server) = world
+                .server
+                .upgrade()
+                && server
+                    .plugin_manager
+                    .has_handlers::<crate::plugin::api::events::block::brewing_start::BrewingStartEvent>()
+            {
                 let mut start_event =
                     crate::plugin::api::events::block::brewing_start::BrewingStartEvent::new(
                         self.position,
