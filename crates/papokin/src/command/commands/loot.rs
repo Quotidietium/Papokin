@@ -87,22 +87,36 @@ fn distribute_to_container(inventory: &dyn Inventory, mut stack: ItemStack) -> b
         if stack.is_empty() {
             break;
         }
-        let mut slot_stack = inventory.get_stack(i);
-        if slot_stack.is_empty() {
-            inventory.set_stack(i, stack);
+        // 锁稳定读改写：空槽整栈移入（零克隆），合并路径原位加
+        let mut filled_empty = false;
+        let mut merged = false;
+        inventory.with_stack_mut(i, &mut |slot_stack| {
+            if slot_stack.is_empty() {
+                *slot_stack = std::mem::replace(&mut stack, ItemStack::EMPTY.clone());
+                filled_empty = true;
+                true
+            } else if slot_stack.get_item().id == stack.get_item().id {
+                let max_stack_size = stack.get_max_stack_size();
+                let space = max_stack_size.saturating_sub(slot_stack.item_count);
+                if space > 0 {
+                    let to_add = stack.item_count.min(space);
+                    slot_stack.item_count += to_add;
+                    stack.item_count -= to_add;
+                    merged = true;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        });
+        if filled_empty {
             changed = true;
             break;
         }
-        if slot_stack.get_item().id == stack.get_item().id {
-            let max_stack_size = stack.get_max_stack_size();
-            let space = max_stack_size.saturating_sub(slot_stack.item_count);
-            if space > 0 {
-                let to_add = stack.item_count.min(space);
-                slot_stack.item_count += to_add;
-                stack.item_count -= to_add;
-                inventory.set_stack(i, slot_stack);
-                changed = true;
-            }
+        if merged {
+            changed = true;
         }
     }
     changed

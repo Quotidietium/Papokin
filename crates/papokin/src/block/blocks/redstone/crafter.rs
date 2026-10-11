@@ -175,11 +175,15 @@ impl CrafterBlock {
             }
 
             for i in 0..CrafterBlockEntity::INVENTORY_SIZE {
-                let mut stack = crafter.get_stack(i);
-                if !stack.is_empty() {
-                    stack.decrement(1);
-                    crafter.set_stack(i, stack);
-                }
+                // 锁稳定原位扣减：空槽零克隆、非空槽免整栈克隆
+                crafter.with_stack_mut(i, &mut |stack| {
+                    if stack.is_empty() {
+                        false
+                    } else {
+                        stack.decrement(1);
+                        true
+                    }
+                });
             }
             crafter.mark_dirty();
         } else {
