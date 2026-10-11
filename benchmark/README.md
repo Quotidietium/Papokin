@@ -4,7 +4,7 @@
 
 每个 bin 是一个**双臂对照基准**：同一负载分别跑「优化前形态」与「优化后形态」两臂，以分配计数器（次数/净驻留字节）、耗时、canonical 输出指纹（语义等价硬闸门）量化收益；闸门预登记，未达如实记 FAIL。轮次索引与全部结果见 `note/README.md` 性能优化对照表与各 `round-*.md` 报告。
 
-## 基准清单（30 个 bin，轮次 1-30）
+## 基准清单（31 个 bin，轮次 1-31）
 
 | bin | 轮次 | 主题 | 报告 |
 |---|---|---|---|
@@ -38,6 +38,7 @@
 | `shared_wasm_runtime` | 28 | Wasmtime 运行时底座共享化（Engine/Linker/线程/ticker） | round-28 |
 | `entity_query_collect` | 29 | 实体/玩家空间查询族（Vec 收集 + 单遍归约去 HashMap） | round-29 |
 | `screen_sync_clone` | 30 | 容器内容同步全屏扫描克隆消除（引用比较 + 条件克隆） | round-30 |
+| `screen_sync_borrow` | 31 | 容器同步比较-先行借用预检（未变化槽位零克隆） | round-31 |
 
 ## 运行方式
 
