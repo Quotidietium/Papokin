@@ -39,6 +39,8 @@ fn enchant_target(
         return Err(ERROR_FAILED.create_without_context());
     };
 
+    // 并发守卫需要前置快照：update_held 写锁内以本克隆做同物比对，
+    // 检测校验与写入之间物品被并发替换（豁免借用化）。
     let item = player.inventory().held_item();
 
     if item.is_empty() {
