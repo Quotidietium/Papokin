@@ -4,7 +4,7 @@
 
 每个 bin 是一个**双臂对照基准**：同一负载分别跑「优化前形态」与「优化后形态」两臂，以分配计数器（次数/净驻留字节）、耗时、canonical 输出指纹（语义等价硬闸门）量化收益；闸门预登记，未达如实记 FAIL。轮次索引与全部结果见 `note/README.md` 性能优化对照表与各 `round-*.md` 报告。
 
-## 基准清单（38 个 bin，轮次 1-38）
+## 基准清单（39 个 bin，轮次 1-39）
 
 | bin | 轮次 | 主题 | 报告 |
 |---|---|---|---|
@@ -46,6 +46,7 @@
 | `container_read_borrow` | 36 | 容器读取借用化（get_stack 深克隆 → with_stack） | round-36 |
 | `held_read_borrow` | 37 | 手持读取借用化（held_item/get_stack_in_hand 按值克隆 → with_* 锁内借用） | round-37 |
 | `hopper_transfer_rmw` | 38 | 漏斗传输锁稳定读改写（add_one_item 两段锁克隆 → with_stack_mut 原位 RMW） | round-38 |
+| `shift_click_insert_rmw` | 39 | 屏幕处理器插入引擎锁稳定读改写（insert_item 两趟/预检/重试环 → Slot::with_stack_mut） | round-39 |
 
 ## 运行方式
 
