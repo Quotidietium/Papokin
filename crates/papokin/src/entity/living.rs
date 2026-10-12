@@ -138,8 +138,8 @@ pub struct LivingEntity {
     /// 实体最后所在的方块位置，用于触发位置变更效果。
     pub last_block_pos: AtomicCell<Option<BlockPos>>,
 
-    /// 实体的属性
-    pub attributes: RwLock<FxHashMap<u8, AttributeInstance>>,
+    /// 实体的属性（写时物化覆盖层，见 [`crate::entity::attribute_map`]）
+    pub attributes: RwLock<crate::entity::attribute_map::AttributeMap>,
     /// 从每个装备栏位的当前物品应用的修改器 ID。
     /// 用于在卸下装备时（没有先前物品堆的情况下）移除它们。
     equipment_attribute_modifier_ids: std::sync::Mutex<FxHashMap<EquipmentSlot, Vec<(u8, String)>>>,
@@ -261,20 +261,17 @@ impl LivingEntity {
         } else {
             0.8
         };
-        let mut max_health: f32 = 20.0; // 会被下方属性的基础值覆盖
+        // 初始生命值取自类型静态表（属性覆盖层写时物化，不再全量抄写）
+        let max_health = entity
+            .entity_type
+            .attributes
+            .iter()
+            .find(|(attr, _)| attr.id == Attributes::MAX_HEALTH.id)
+            .map_or(20.0f32, |(_, base)| *base as f32);
         Self {
-            // 从默认注册表填充本地属性实例并获取初始变量
-            attributes: {
-                let mut m = FxHashMap::default();
-
-                for (attr, base) in entity.entity_type.attributes {
-                    if attr.id == Attributes::MAX_HEALTH.id {
-                        max_health = *base as f32;
-                    }
-                    m.insert(attr.id, AttributeInstance::new(*base));
-                }
-                std::sync::RwLock::new(m)
-            },
+            attributes: std::sync::RwLock::new(crate::entity::attribute_map::AttributeMap::new(
+                entity.entity_type,
+            )),
             health: AtomicCell::new(max_health), // 来自属性的初始生命值
             entity,
             hurt_cooldown: AtomicI32::new(0),
@@ -494,15 +491,16 @@ impl LivingEntity {
                 (Attributes::ATTACK_DAMAGE, damage_modifiers),
             ] {
                 // 未声明该属性的实体（如僵尸没有 attack_speed）不受
-                // 武器修饰符影响，也不应把捏造出的属性同步给客户端
-                if crate::entity::attributes::declared_base(self.entity.entity_type, &attribute)
-                    .is_none()
-                {
+                // 武器修饰符影响，也不应把捏造出的属性同步给客户端。
+                // 物化初值取类型表声明基础值——与旧「构造即建实例」
+                // 的读取面等价（旧 map 时代闭包从不运行，属死代码）。
+                let Some(base) =
+                    crate::entity::attributes::declared_base(self.entity.entity_type, &attribute)
+                else {
                     continue;
-                }
-                let instance = attributes
-                    .entry(attribute.id)
-                    .or_insert_with(|| AttributeInstance::new(attribute.default_value));
+                };
+                let instance =
+                    attributes.get_or_insert_with(attribute.id, || AttributeInstance::new(base));
                 if instance.modifiers == modifiers {
                     continue;
                 }
@@ -832,7 +830,7 @@ impl LivingEntity {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        let inst = map.entry(attribute.id).or_insert_with(|| {
+        let inst = map.get_or_insert_with(attribute.id, || {
             let base = self
                 .entity
                 .entity_type
@@ -876,9 +874,7 @@ impl LivingEntity {
         else {
             return false;
         };
-        let inst = map
-            .entry(attribute.id)
-            .or_insert_with(|| AttributeInstance::new(base));
+        let inst = map.get_or_insert_with(attribute.id, || AttributeInstance::new(base));
         f(inst);
         inst.dirty.store(true, Ordering::Relaxed);
         true
@@ -895,7 +891,7 @@ impl LivingEntity {
             .attributes
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(inst) = map.get_mut(&attribute.id) else {
+        let Some(inst) = map.get_mut(attribute.id) else {
             return false;
         };
         f(inst);
@@ -910,19 +906,21 @@ impl LivingEntity {
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        map.get(&attribute.id)
-            .map_or(attribute.default_value, AttributeInstance::value)
+        map.view(attribute.id)
+            .value()
+            .unwrap_or(attribute.default_value)
     }
 
     ///返回该实体类型在 `attribute` 上的基础属性值。
     pub fn get_attribute_base(&self, attribute: &Attributes) -> f64 {
-        // 先检查本地基础值（可能已被修改）
+        // 先检查本地基础值（可能已被修改；覆盖层三态视图内含
+        // 声明未分叉=类型表基础值，与旧「构造即建实例」读取等价）
         let map = self
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(instance) = map.get(&attribute.id) {
-            return instance.base_value;
+        if let Some(base) = map.view(attribute.id).base_value() {
+            return base;
         }
 
         // 若不存在本地实例，则回退到注册表基准值
@@ -941,10 +939,11 @@ impl LivingEntity {
             .attributes
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(inst) = map.get_mut(&attribute.id) {
+        if let Some(inst) = map.get_mut(attribute.id) {
             inst.base_value = new_base;
             inst.dirty.store(true, Ordering::Relaxed);
         } else {
+            // 未声明属性也允许显式建实例（旧 insert 后者胜语义）
             let ai = AttributeInstance::new(new_base);
             ai.dirty.store(true, Ordering::Relaxed);
             map.insert(attribute.id, ai);

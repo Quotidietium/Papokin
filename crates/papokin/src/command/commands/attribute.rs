@@ -68,7 +68,7 @@ impl CommandExecutor for GetExecutor {
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&attribute.id);
+            .is_present(attribute.id);
         if !has_attr {
             return Err(NO_ATTRIBUTE_ERROR.create_without_context(
                 target.get_name(),
@@ -130,7 +130,7 @@ impl CommandExecutor for BaseSetExecutor {
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&attribute.id);
+            .is_present(attribute.id);
         if !has_attr {
             return Err(NO_ATTRIBUTE_ERROR.create_without_context(
                 target.get_name(),
@@ -175,7 +175,7 @@ impl CommandExecutor for BaseResetExecutor {
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains_key(&attribute.id);
+            .is_present(attribute.id);
         if !has_attr {
             return Err(NO_ATTRIBUTE_ERROR.create_without_context(
                 target.get_name(),
@@ -229,7 +229,7 @@ impl CommandExecutor for ModifierAddExecutor {
                 .attributes
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let inst = map.get_mut(&attribute.id).ok_or_else(|| {
+            let inst = map.get_mut(attribute.id).ok_or_else(|| {
                 NO_ATTRIBUTE_ERROR.create_without_context(
                     target.get_name(),
                     TextComponent::translate(attribute_translation_key(&attribute), []),
@@ -294,7 +294,7 @@ impl CommandExecutor for ModifierRemoveExecutor {
                 .attributes
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let inst = map.get_mut(&attribute.id).ok_or_else(|| {
+            let inst = map.get_mut(attribute.id).ok_or_else(|| {
                 NO_ATTRIBUTE_ERROR.create_without_context(
                     target.get_name(),
                     TextComponent::translate(attribute_translation_key(&attribute), []),
@@ -359,15 +359,16 @@ impl CommandExecutor for ModifierGetExecutor {
                 .attributes
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let inst = map.get(&attribute.id).ok_or_else(|| {
-                NO_ATTRIBUTE_ERROR.create_without_context(
+            let view = map.view(attribute.id);
+            if !view.is_present() {
+                return Err(NO_ATTRIBUTE_ERROR.create_without_context(
                     target.get_name(),
                     TextComponent::translate(attribute_translation_key(&attribute), []),
-                )
-            })?;
+                ));
+            }
 
-            let modifier = inst
-                .modifiers
+            let modifier = view
+                .modifiers()
                 .iter()
                 .find(|m| m.id == modifier_id)
                 .ok_or_else(|| {

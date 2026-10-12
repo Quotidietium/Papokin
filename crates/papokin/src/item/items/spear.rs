@@ -381,13 +381,10 @@ impl SpearItem {
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&attribute.id)
-            .is_some_and(|instance| {
-                instance
-                    .modifiers
-                    .iter()
-                    .any(|modifier| modifier.id == modifier_id)
-            });
+            .view(attribute.id)
+            .modifiers()
+            .iter()
+            .any(|modifier| modifier.id == modifier_id);
         if already_applied {
             return value;
         }

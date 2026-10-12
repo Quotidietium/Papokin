@@ -38,23 +38,23 @@ impl HoglinEntity {
                 .attributes
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(health) = attributes.get_mut(&Attributes::MAX_HEALTH.id) {
+            if let Some(health) = attributes.get_mut(Attributes::MAX_HEALTH.id) {
                 health.base_value = 40.0;
                 health.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(speed) = attributes.get_mut(&Attributes::MOVEMENT_SPEED.id) {
+            if let Some(speed) = attributes.get_mut(Attributes::MOVEMENT_SPEED.id) {
                 speed.base_value = 0.3;
                 speed.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(knockback_res) = attributes.get_mut(&Attributes::KNOCKBACK_RESISTANCE.id) {
+            if let Some(knockback_res) = attributes.get_mut(Attributes::KNOCKBACK_RESISTANCE.id) {
                 knockback_res.base_value = 0.6;
                 knockback_res.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(attack_kb) = attributes.get_mut(&Attributes::ATTACK_KNOCKBACK.id) {
+            if let Some(attack_kb) = attributes.get_mut(Attributes::ATTACK_KNOCKBACK.id) {
                 attack_kb.base_value = 1.0;
                 attack_kb.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(damage) = attributes.get_mut(&Attributes::ATTACK_DAMAGE.id) {
+            if let Some(damage) = attributes.get_mut(Attributes::ATTACK_DAMAGE.id) {
                 damage.base_value = 6.0;
                 damage.dirty.store(true, Ordering::Relaxed);
             }

@@ -103,21 +103,20 @@ pub fn send_attribute_updates_for_living(
     for attribute in attributes {
         let base_value = living.get_attribute_base(&attribute);
 
-        // 拉取该属性的修饰符
+        // 拉取该属性的修饰符（覆盖层三态视图：声明未分叉=空修饰符）
         let mut modifiers = Vec::new();
-        if let Some(inst) = living
+        for mod_inst in living
             .attributes
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&attribute.id)
+            .view(attribute.id)
+            .modifiers()
         {
-            for mod_inst in &inst.modifiers {
-                modifiers.push(JeAttrMod::new(
-                    mod_inst.id.clone(),
-                    mod_inst.amount,
-                    mod_inst.operation as i8,
-                ));
-            }
+            modifiers.push(JeAttrMod::new(
+                mod_inst.id.clone(),
+                mod_inst.amount,
+                mod_inst.operation as i8,
+            ));
         }
 
         // 将修饰符移入属性
@@ -150,10 +149,10 @@ pub fn full_sync_packet_for_living(
         .attributes
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut je_properties: Vec<JeProperty> = Vec::with_capacity(map.len());
-    for (&attr_id, inst) in map.iter() {
-        let modifiers = inst
-            .modifiers
+    let mut je_properties: Vec<JeProperty> = Vec::with_capacity(map.present_count());
+    map.for_each_present(|attr_id, view| {
+        let modifiers = view
+            .modifiers()
             .iter()
             .map(|mod_inst| {
                 JeAttrMod::new(
@@ -163,12 +162,11 @@ pub fn full_sync_packet_for_living(
                 )
             })
             .collect();
-        je_properties.push(JeProperty::new(
-            VarInt(i32::from(attr_id)),
-            inst.base_value,
-            modifiers,
-        ));
-    }
+        // 合并视图只 yield 在场属性，base_value 必为 Some
+        if let Some(base) = view.base_value() {
+            je_properties.push(JeProperty::new(VarInt(i32::from(attr_id)), base, modifiers));
+        }
+    });
     je_properties.sort_by_key(|prop| prop.id.0);
     JePacket::new(living.entity.entity_id.into(), je_properties)
 }

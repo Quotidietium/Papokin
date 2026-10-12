@@ -25,7 +25,7 @@ impl GiantEntity {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(health) =
-                attributes.get_mut(&papokin_data::attributes::Attributes::MAX_HEALTH.id)
+                attributes.get_mut(papokin_data::attributes::Attributes::MAX_HEALTH.id)
             {
                 health.base_value = 100.0;
                 health
@@ -33,7 +33,7 @@ impl GiantEntity {
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(speed) =
-                attributes.get_mut(&papokin_data::attributes::Attributes::MOVEMENT_SPEED.id)
+                attributes.get_mut(papokin_data::attributes::Attributes::MOVEMENT_SPEED.id)
             {
                 speed.base_value = 0.5;
                 speed
@@ -41,7 +41,7 @@ impl GiantEntity {
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             if let Some(damage) =
-                attributes.get_mut(&papokin_data::attributes::Attributes::ATTACK_DAMAGE.id)
+                attributes.get_mut(papokin_data::attributes::Attributes::ATTACK_DAMAGE.id)
             {
                 damage.base_value = 50.0;
                 damage

@@ -472,17 +472,16 @@ impl HostLivingEntity for PluginHostState {
                 .attributes
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if let Some(inst) = map.get(&attribute.id) {
-                return Ok(inst
-                    .modifiers
-                    .iter()
-                    .map(|m| WitAttributeModifier {
-                        id: m.id.clone(),
-                        amount: m.amount,
-                        operation: to_wit_modifier_op(m.operation),
-                    })
-                    .collect());
-            }
+            return Ok(map
+                .view(attribute.id)
+                .modifiers()
+                .iter()
+                .map(|m| WitAttributeModifier {
+                    id: m.id.clone(),
+                    amount: m.amount,
+                    operation: to_wit_modifier_op(m.operation),
+                })
+                .collect());
         }
         Ok(Vec::new())
     }
@@ -500,7 +499,7 @@ impl HostLivingEntity for PluginHostState {
                     .attributes
                     .write()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                map.remove(&attribute.id);
+                map.remove(attribute.id);
             };
             crate::entity::attributes::send_attribute_updates_for_living(
                 living,

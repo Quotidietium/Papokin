@@ -82,23 +82,23 @@ impl CreakingEntity {
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            if let Some(health) = attributes.get_mut(&Attributes::MAX_HEALTH.id) {
+            if let Some(health) = attributes.get_mut(Attributes::MAX_HEALTH.id) {
                 health.base_value = f64::from(MAX_HEALTH);
                 health.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(speed) = attributes.get_mut(&Attributes::MOVEMENT_SPEED.id) {
+            if let Some(speed) = attributes.get_mut(Attributes::MOVEMENT_SPEED.id) {
                 speed.base_value = f64::from(MOVEMENT_SPEED_WHEN_FIGHTING);
                 speed.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(damage) = attributes.get_mut(&Attributes::ATTACK_DAMAGE.id) {
+            if let Some(damage) = attributes.get_mut(Attributes::ATTACK_DAMAGE.id) {
                 damage.base_value = f64::from(ATTACK_DAMAGE);
                 damage.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(follow) = attributes.get_mut(&Attributes::FOLLOW_RANGE.id) {
+            if let Some(follow) = attributes.get_mut(Attributes::FOLLOW_RANGE.id) {
                 follow.base_value = f64::from(FOLLOW_RANGE);
                 follow.dirty.store(true, Ordering::Relaxed);
             }
-            if let Some(step) = attributes.get_mut(&Attributes::STEP_HEIGHT.id) {
+            if let Some(step) = attributes.get_mut(Attributes::STEP_HEIGHT.id) {
                 step.base_value = 1.0625;
                 step.dirty.store(true, Ordering::Relaxed);
             }
