@@ -2358,6 +2358,7 @@ dependencies = [
  "papokin-protocol",
  "papokin-util",
  "papokin-world",
+ "rustc-hash",
  "serde_json",
  "sysinfo",
  "tempfile",

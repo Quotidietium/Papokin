@@ -1,0 +1,68 @@
+{
+  "corpus": {
+    "entities": 20000,
+    "read_rounds": 20,
+    "sync_rounds": 5,
+    "type_mix": [
+      "zombie:5000",
+      "skeleton:4000",
+      "cow:4000",
+      "sheep:3000",
+      "creeper:2000",
+      "player:2000"
+    ]
+  },
+  "gates": [
+    {
+      "detail": "旧 0xcbff7415358508cc vs 新 0xcbff7415358508cc",
+      "name": "操作脚本全量指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "52409731 → 5032163 B（×10.415）",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "87001 → 15",
+      "name": "构造分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "×4.373",
+      "name": "热读耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "churn_allocs": 43994,
+    "churn_ms": 2.9745000000000004,
+    "content_fingerprint": "0xcbff7415358508cc",
+    "read_allocs": 0,
+    "read_ms": 1.186,
+    "resident_bytes": 5032163,
+    "spawn_allocs": 15,
+    "spawn_ms": 0.4036,
+    "sync_allocs": 100000,
+    "sync_ms": 14.8026
+  },
+  "old": {
+    "churn_allocs": 35430,
+    "churn_ms": 3.4072,
+    "content_fingerprint": "0xcbff7415358508cc",
+    "read_allocs": 0,
+    "read_ms": 5.186299999999999,
+    "resident_bytes": 52409731,
+    "spawn_allocs": 87001,
+    "spawn_ms": 31.9454,
+    "sync_allocs": 100000,
+    "sync_ms": 46.8876
+  },
+  "outcome": "positive",
+  "round": 42,
+  "sizes": {
+    "instance_bytes": 48,
+    "old_map_inline_bytes": 32
+  },
+  "topic": "attribute_overlay"
+}
