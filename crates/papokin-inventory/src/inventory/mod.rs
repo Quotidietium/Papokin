@@ -3,10 +3,12 @@ use papokin_data::item_stack::ItemStack;
 mod equipment_slot_inventory;
 #[expect(clippy::module_inception)]
 mod inventory;
+mod lazy_item_slots;
 mod simple_inventory;
 
 pub use equipment_slot_inventory::*;
 pub use inventory::*;
+pub use lazy_item_slots::*;
 pub use simple_inventory::*;
 
 // split_stack 的工具函数

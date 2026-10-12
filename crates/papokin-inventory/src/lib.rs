@@ -70,7 +70,7 @@ use rustc_hash::FxHashMap;
 
 pub use error::InventoryError;
 pub use inventory::{
-    Clearable, ComparableInventory, Inventory, SimpleInventory, split_stack_slice,
+    Clearable, ComparableInventory, Inventory, LazyItemSlots, SimpleInventory, split_stack_slice,
     sync_read_items_from_nbt, sync_write_items_to_nbt,
 };
 use papokin_data::data_component_impl::EquipmentSlot;
