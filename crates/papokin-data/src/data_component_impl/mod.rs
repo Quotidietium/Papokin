@@ -489,6 +489,25 @@ impl EquipmentSlot {
             Self::Saddle(_) => 7,
         }
     }
+
+    /// 判别值反查规范槽位实例（与 [`Self::discriminant`] 互逆）。
+    ///
+    /// 装备类存储以判别值直索引后，序列化/掉落等需要槽位
+    /// 实例（名称等）的路径经此还原。
+    #[must_use]
+    pub const fn from_discriminant(discriminant: i8) -> Option<&'static Self> {
+        match discriminant {
+            0 => Some(&Self::MAIN_HAND),
+            1 => Some(&Self::OFF_HAND),
+            2 => Some(&Self::FEET),
+            3 => Some(&Self::LEGS),
+            4 => Some(&Self::CHEST),
+            5 => Some(&Self::HEAD),
+            6 => Some(&Self::BODY),
+            7 => Some(&Self::SADDLE),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
