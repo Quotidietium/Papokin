@@ -1,0 +1,66 @@
+{
+  "corpus": {
+    "block_entities": 5000,
+    "custom_data": 5000,
+    "entities": 5000,
+    "inline_keys": 1228,
+    "total_keys_sampled": 1323
+  },
+  "gates": [
+    {
+      "detail": "旧 0x6a2c51aeca019863 vs 新 0x6a2c51aeca019863（经序列化→生产解析器回读）",
+      "name": "构建内容 canonical 指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "指纹 0x3f8632d588b5d2c8 vs 0x3f8632d588b5d2c8，命中 1666 vs 1666",
+      "name": "查找电池命中与值指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "35615310 → 37916289 B（×0.939，条目 +8B/键 vs 逐键分配消除）",
+      "name": "驻留字节下降（预期不通过，负结果依据）",
+      "passed": false
+    },
+    {
+      "detail": "775337 → 403294 次（−372043）",
+      "name": "构建分配次数下降",
+      "passed": true
+    }
+  ],
+  "new": {
+    "build_allocs": 403294,
+    "build_time_ms": 32.906600000000005,
+    "clone_allocs": 33361,
+    "clone_time_ms": 4.6265,
+    "content_fingerprint": "0x6a2c51aeca019863",
+    "lookup_allocs": 574,
+    "lookup_fingerprint": "0x3f8632d588b5d2c8",
+    "lookup_time_us": 880.0,
+    "resident_bytes": 37916289,
+    "serialize_allocs": 1350256,
+    "serialize_time_ms": 75.1519
+  },
+  "old": {
+    "build_allocs": 775337,
+    "build_time_ms": 39.8195,
+    "clone_allocs": 86890,
+    "clone_time_ms": 7.829600000000001,
+    "content_fingerprint": "0x6a2c51aeca019863",
+    "lookup_allocs": 574,
+    "lookup_fingerprint": "0x3f8632d588b5d2c8",
+    "lookup_time_us": 971.1999999999999,
+    "resident_bytes": 35615310,
+    "serialize_allocs": 1722299,
+    "serialize_time_ms": 89.7013
+  },
+  "outcome": "negative",
+  "round": 41,
+  "sizes": {
+    "entry_new_bytes": 56,
+    "entry_old_bytes": 48,
+    "key_new_bytes": 24,
+    "key_old_bytes": 16
+  },
+  "topic": "nbt_key_inline"
+}
