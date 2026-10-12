@@ -706,17 +706,21 @@ pub trait ScreenHandler: Send + Sync {
             if !slot.can_insert(stack) {
                 continue;
             }
-            let existing = slot.get_cloned_stack();
-            let capacity = if existing.is_empty() {
-                slot.get_max_item_count_for_stack(stack)
-            } else if existing.are_items_and_components_equal(stack)
-                && stack.are_items_and_components_equal(&existing)
-            {
-                slot.get_max_item_count_for_stack(&existing)
-                    .saturating_sub(existing.item_count)
-            } else {
-                0
-            };
+            // 借用探测：容量判读零克隆（get_max_item_count_for_stack
+            // 是槽位配置纯函数，不触物品栏，锁内调用安全）
+            let mut capacity = 0u8;
+            slot.with_stack(&mut |existing| {
+                capacity = if existing.is_empty() {
+                    slot.get_max_item_count_for_stack(stack)
+                } else if existing.are_items_and_components_equal(stack)
+                    && stack.are_items_and_components_equal(existing)
+                {
+                    slot.get_max_item_count_for_stack(existing)
+                        .saturating_sub(existing.item_count)
+                } else {
+                    0
+                };
+            });
             remaining = remaining.saturating_sub(capacity);
             if remaining == 0 {
                 return true;
@@ -751,25 +755,35 @@ pub trait ScreenHandler: Send + Sync {
                 })
             {
                 let slot = self.get_behaviour().slots[current_index as usize].clone();
-                let mut slot_stack = slot.get_stack();
-
-                if !slot_stack.is_empty() && slot_stack.are_items_and_components_equal(stack) {
-                    // 饱和加防超堆叠槽（外部编辑的存档可带 count>64）：
-                    // 裸加回绕后 combined_count 反而 <= 上限，会把
-                    // 槽位改写成回绕小值吞掉数量
-                    let combined_count = slot_stack.item_count.saturating_add(stack.item_count);
-                    let max_slot_count = slot.get_max_item_count_for_stack(&slot_stack);
-                    if combined_count <= max_slot_count {
-                        stack.set_count(0);
-                        slot_stack.set_count(combined_count);
-                        slot.set_stack(slot_stack);
-                        success = true;
-                    } else if slot_stack.item_count < max_slot_count {
-                        stack.decrement(max_slot_count - slot_stack.item_count);
-                        slot_stack.set_count(max_slot_count);
-                        slot.set_stack(slot_stack);
-                        success = true;
+                // 上限只依赖物品与组件（合并分支已确保与槽内同物同
+                // 组件），回调外以传入堆前置求值
+                let max_slot_count = slot.get_max_item_count_for_stack(stack);
+                let mut merged = false;
+                slot.with_stack_mut(&mut |slot_stack| {
+                    if !slot_stack.is_empty() && slot_stack.are_items_and_components_equal(stack) {
+                        // 饱和加防超堆叠槽（外部编辑的存档可带 count>64）：
+                        // 裸加回绕后 combined_count 反而 <= 上限，会把
+                        // 槽位改写成回绕小值吞掉数量
+                        let combined_count = slot_stack.item_count.saturating_add(stack.item_count);
+                        if combined_count <= max_slot_count {
+                            stack.set_count(0);
+                            slot_stack.set_count(combined_count);
+                            merged = true;
+                            true
+                        } else if slot_stack.item_count < max_slot_count {
+                            stack.decrement(max_slot_count - slot_stack.item_count);
+                            slot_stack.set_count(max_slot_count);
+                            merged = true;
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
                     }
+                });
+                if merged {
+                    success = true;
                 }
 
                 if from_last {
@@ -793,14 +807,29 @@ pub trait ScreenHandler: Send + Sync {
                 current_index < end_index
             } {
                 let slot = self.get_behaviour().slots[current_index as usize].clone();
-                let slot_stack = slot.get_stack();
-
-                if slot_stack.is_empty() && slot.can_insert(stack) {
+                // 空槽探测借用化；can_insert/上限是槽位配置，回调外
+                let mut empty = false;
+                slot.with_stack(&mut |slot_stack| empty = slot_stack.is_empty());
+                if empty && slot.can_insert(stack) {
                     let max_count = slot.get_max_item_count_for_stack(stack);
-                    slot.set_stack(stack.split(max_count.min(stack.item_count)));
-                    slot.mark_dirty();
-                    success = true;
-                    break;
+                    let mut placed = false;
+                    slot.with_stack_mut(&mut |slot_stack| {
+                        // 回调内复查空槽：探测与写入之间槽位可能被并发
+                        // 占用，原「克隆-判空-盲写回」会整栈覆盖他方
+                        // 插入，此处保持不动更安全（语义等价于原序）
+                        if slot_stack.is_empty() {
+                            *slot_stack = stack.split(max_count.min(stack.item_count));
+                            placed = true;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if placed {
+                        slot.mark_dirty();
+                        success = true;
+                        break;
+                    }
                 }
 
                 if from_last {
@@ -1117,14 +1146,18 @@ pub trait ScreenHandler: Send + Sync {
                 }
 
                 let mut moved_stack = self.quick_move(player, slot_index);
-
-                while !moved_stack.is_empty()
-                    && ItemStack::are_items_and_components_equal(
-                        &slot.get_cloned_stack(),
-                        &moved_stack,
-                    )
-                {
+                // 续搬判读借用化：整栈克隆只为与源槽等值比较，白付
+                let mut keep_moving = false;
+                slot.with_stack(&mut |source| {
+                    keep_moving = !moved_stack.is_empty()
+                        && ItemStack::are_items_and_components_equal(source, &moved_stack);
+                });
+                while keep_moving {
                     moved_stack = self.quick_move(player, slot_index);
+                    slot.with_stack(&mut |source| {
+                        keep_moving = !moved_stack.is_empty()
+                            && ItemStack::are_items_and_components_equal(source, &moved_stack);
+                    });
                 }
             } else {
                 // 拾取
