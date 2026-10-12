@@ -16,7 +16,7 @@ use papokin_inventory::{Clearable, Inventory};
 
 pub struct LecternBlockEntity {
     pub position: BlockPos,
-    pub book: Arc<Mutex<ItemStack>>,
+    pub book: Mutex<ItemStack>,
     pub page: AtomicUsize,
     pub dirty: AtomicBool,
     pub comparator_dirty: AtomicBool,
@@ -45,11 +45,9 @@ impl BlockEntity for LecternBlockEntity {
             .get_int("Page")
             .unwrap_or(0)
             .clamp(0, page_count.saturating_sub(1).max(0)) as usize;
-        let book = Arc::new(Mutex::new(book_stack));
-
         Self {
             position,
-            book,
+            book: Mutex::new(book_stack),
             page: AtomicUsize::new(page),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
@@ -114,7 +112,7 @@ impl LecternBlockEntity {
     pub fn new(position: BlockPos) -> Self {
         Self {
             position,
-            book: Arc::new(Mutex::new(ItemStack::EMPTY.clone())),
+            book: Mutex::new(ItemStack::EMPTY.clone()),
             page: AtomicUsize::new(0),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),

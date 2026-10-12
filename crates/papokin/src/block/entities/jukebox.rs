@@ -15,7 +15,7 @@ use papokin_inventory::{Clearable, Inventory};
 pub struct JukeboxBlockEntity {
     position: BlockPos,
     /// 存储在唱片机中的唱片物品（NBT 中的 `RecordItem`）
-    record_stack: Arc<Mutex<ItemStack>>,
+    record_stack: Mutex<ItemStack>,
     /// 自当前歌曲开始播放以来经过的刻数
     ticks_since_song_started: AtomicU64,
     /// 当前歌曲的时长（以刻为单位，未播放时为 0）
@@ -50,7 +50,7 @@ impl BlockEntity for JukeboxBlockEntity {
 
         Self {
             position,
-            record_stack: Arc::new(Mutex::new(record_stack)),
+            record_stack: Mutex::new(record_stack),
             ticks_since_song_started: AtomicU64::new(ticks_since_song_started),
             song_length_ticks: AtomicU64::new(0), // 将在开始游玩时被设置
             dirty: AtomicBool::new(false),
@@ -135,7 +135,7 @@ impl JukeboxBlockEntity {
     pub fn new(position: BlockPos) -> Self {
         Self {
             position,
-            record_stack: Arc::new(Mutex::new(ItemStack::EMPTY.clone())),
+            record_stack: Mutex::new(ItemStack::EMPTY.clone()),
             ticks_since_song_started: AtomicU64::new(0),
             song_length_ticks: AtomicU64::new(0),
             dirty: AtomicBool::new(false),

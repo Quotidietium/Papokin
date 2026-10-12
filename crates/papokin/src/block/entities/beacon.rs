@@ -24,7 +24,7 @@ pub struct BeaconBlockEntity {
     pub secondary_effect: AtomicI32,
     pub levels: AtomicI32,
     pub dirty: AtomicBool,
-    pub payment: Arc<Mutex<ItemStack>>,
+    pub payment: Mutex<ItemStack>,
 
     // 原版对齐字段
     pub custom_name: Mutex<Option<String>>,
@@ -49,7 +49,7 @@ impl BeaconBlockEntity {
             secondary_effect: AtomicI32::new(-1),
             levels: AtomicI32::new(0),
             dirty: AtomicBool::new(false),
-            payment: Arc::new(Mutex::new(ItemStack::EMPTY.clone())),
+            payment: Mutex::new(ItemStack::EMPTY.clone()),
             custom_name: Mutex::new(None),
             lock_key: Mutex::new(None),
             last_check_y: AtomicI32::new(position.0.y - 1),
@@ -351,7 +351,7 @@ impl BlockEntity for BeaconBlockEntity {
             secondary_effect: AtomicI32::new(secondary),
             levels: AtomicI32::new(levels),
             dirty: AtomicBool::new(false),
-            payment: Arc::new(Mutex::new(payment)),
+            payment: Mutex::new(payment),
             custom_name: Mutex::new(custom_name),
             lock_key: Mutex::new(lock_key),
             last_check_y: AtomicI32::new(position.0.y - 1),
