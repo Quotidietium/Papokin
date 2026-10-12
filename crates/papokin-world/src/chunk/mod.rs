@@ -101,10 +101,12 @@ pub struct ChunkData {
 #[derive(Clone)]
 pub struct PreservedChunkData {
     /// 不由 Pumpkin 管理的根键，以其 NBT 序列化字节驻留（轮次 24）：
-    /// 驻留期间只有落盘路径会读取这些字段，解析态（HashMap +
-    /// Box<str> 键 + 逐标签枚举堆开销）的内存实测为序列化字节的
-    /// 2.4×，故仅在落盘时物化解析。字节精确贴合（boxed slice，
-    /// 无 Vec 增长摊余），由本进程自有序列化产生，落盘回读不会失败。
+    /// 驻留期间只有落盘路径会读取这些字段，解析态（轮次 40 前
+    /// HashMap、现插入序 Vec + Box<str> 键 + 逐标签枚举堆开销）
+    /// 的内存实测为序列化字节的 2.4×（HashMap 口径，紧凑映射
+    /// 后比值收窄但 blob 仍占优），故仅在落盘时物化解析。字节
+    /// 精确贴合（boxed slice，无 Vec 增长摊余），由本进程自有序
+    /// 列化产生，落盘回读不会失败。
     pub fields_blob: Box<[u8]>,
     /// 自定义数据化合物所读取的标签名，且必须写回到
     /// 写回（`PumpkinCustomData`，或在 Paper/Papo 世界上的 `BukkitValues`）。

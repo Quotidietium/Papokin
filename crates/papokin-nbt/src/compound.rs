@@ -1,14 +1,13 @@
 //! NBT 复合标签的存储与便捷方法。
 
-use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use uuid::Uuid;
 
 use crate::deserializer::NbtReadHelper;
+use crate::map::NbtMap;
 use crate::serializer::NbtWriteHelper;
 use crate::tag::NbtTag;
 use crate::{END_ID, Error, Nbt};
-use std::collections::hash_map::IntoIter;
 use std::io::ErrorKind;
 
 #[macro_export]
@@ -29,23 +28,23 @@ macro_rules! nbt_compound_tag {
     };
 }
 
-/// 表示 NBT 复合标签，实质上是一个哈希映射。
+/// 表示 NBT 复合标签，实质上是一个有序映射。
 ///
-/// 内部使用 `HashMap<String, NbtTag>`，它不保留插入顺序，
-/// 与 Minecraft: Java Edition 一样，但这确实意味着查找复杂度为 O(1)。
-///
+/// 内部使用 [`NbtMap`]（插入序 `Vec` 承载，轮次 40 紧凑化），
+/// 迭代按插入顺序进行；查找为线性扫描，条目数由解析层约束。
+/// 相等性是键序无关的，与线上 NBT 格式不定义键序的事实一致。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NbtCompound {
     /// 化合物中的标签，按其名称索引。
-    pub child_tags: HashMap<Box<str>, NbtTag>,
+    pub child_tags: NbtMap,
 }
 
 impl NbtCompound {
     /// 创建一个空的复合标签。
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            child_tags: HashMap::new(),
+            child_tags: NbtMap::new(),
         }
     }
 
@@ -148,13 +147,13 @@ impl NbtCompound {
 
     ///当复合标签不包含任何子标签时，返回 `true`。
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.child_tags.is_empty()
     }
 
     /// 为 `name` 插入或替换标签。
     pub fn put(&mut self, name: &str, value: impl Into<NbtTag>) {
-        self.child_tags.insert(name.into(), value.into());
+        self.child_tags.insert_str(name, value.into());
     }
 
     /// 当 `name` 尚不存在时，插入字符串标签。
@@ -357,7 +356,7 @@ impl FromIterator<(Box<str>, NbtTag)> for NbtCompound {
 
 impl IntoIterator for NbtCompound {
     type Item = (Box<str>, NbtTag);
-    type IntoIter = IntoIter<Box<str>, NbtTag>;
+    type IntoIter = <NbtMap as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         self.child_tags.into_iter()

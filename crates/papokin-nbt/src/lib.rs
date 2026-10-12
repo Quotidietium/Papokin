@@ -22,6 +22,8 @@ use thiserror::Error;
 pub mod compound;
 /// 底层 NBT 反序列化支持。
 pub mod deserializer;
+/// 复合标签的紧凑有序映射容器。
+pub mod map;
 /// 读写 gzip 压缩的 NBT。
 pub mod nbt_compress;
 /// 与 Pumpkin 动态编解码操作的集成。

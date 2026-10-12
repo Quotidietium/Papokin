@@ -88,7 +88,7 @@ pub fn from_wit_nbt_tree(tree: &WitNbtTree) -> Result<NbtTag, String> {
                     .iter()
                     .map(|entry| {
                         read_tag(entry.value, tags, visiting)
-                            .map(|value| (entry.key.clone().into(), value))
+                            .map(|value| (Box::<str>::from(entry.key.clone()), value))
                     })
                     .collect::<Result<_, _>>()?,
             }),

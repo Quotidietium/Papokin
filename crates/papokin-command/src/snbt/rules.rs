@@ -706,7 +706,10 @@ impl SnbtParser<'_, '_> {
         })?;
 
         Some(NbtTag::Compound(NbtCompound {
-            child_tags: entries.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+            child_tags: entries
+                .into_iter()
+                .map(|(k, v)| (Box::from(k), v))
+                .collect(),
         }))
     }
 
