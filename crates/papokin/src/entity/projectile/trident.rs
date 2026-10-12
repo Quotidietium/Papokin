@@ -21,7 +21,7 @@ use super::{ProjectileHit, calculate_ray_intersection};
 pub struct TridentEntity {
     pub entity: Entity,
     pub owner_id: Option<i32>,
-    pub item_stack: Arc<Mutex<ItemStack>>,
+    pub item_stack: Mutex<ItemStack>,
     pub pickup: ArrowPickup,
     pub in_ground: AtomicBool,
     pub in_ground_time: AtomicU32,
@@ -42,7 +42,7 @@ impl TridentEntity {
         Self {
             entity,
             owner_id,
-            item_stack: Arc::new(Mutex::new(ItemStack::new(1, &Item::TRIDENT))),
+            item_stack: Mutex::new(ItemStack::new(1, &Item::TRIDENT)),
             pickup: ArrowPickup::Disallowed,
             in_ground: AtomicBool::new(false),
             in_ground_time: AtomicU32::new(0),
@@ -67,7 +67,7 @@ impl TridentEntity {
         Self {
             entity,
             owner_id: Some(shooter.entity_id),
-            item_stack: Arc::new(Mutex::new(item_stack)),
+            item_stack: Mutex::new(item_stack),
             pickup,
             in_ground: AtomicBool::new(false),
             in_ground_time: AtomicU32::new(0),
