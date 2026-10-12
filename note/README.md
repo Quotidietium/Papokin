@@ -2,7 +2,7 @@
 
 > 基线：2026-09-19 由 codebase-analyzer 技能生成（采样深度分析模式），此后随代码演进持续修订。
 > 范围：`F:\Github\repo\Papokin` 全仓库，**排除 `REF/` 参考资料目录**（用户指定）
-> 规模：20 个 workspace 成员（17 生产 crate + benchmark + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2844 个 Rust 文件 · 约 145.1 万行 · 测试基线 1276 通过（2026-10-12，头部数字经 git 跟踪文件实测勘误）
+> 规模：20 个 workspace 成员（17 生产 crate + benchmark + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2848 个 Rust 文件 · 约 145.4 万行 · 测试基线 1276 通过（2026-10-12，头部数字经 git 跟踪文件实测勘误）
 >
 > **快照说明**：01–06 为架构分析文档，已随 Bedrock 移除与 Papokin 改名同步修订；其中 `文件:行号` 形式的证据标注可能随代码演进漂移，论断以就近代码为准。历史记录类文档（07–11、13–15）按成文时点保留，记录中的旧状态是其历史事实的一部分。
 
@@ -78,6 +78,7 @@
 | [轮次 41](report/perf/round-41-复合标签键内联侦察.md) | NBT 复合标签键内联（`Box<str>` → ≤22B 内联枚举 + 超长回退）可行性侦察：消除轮次 40 终态的逐键堆分配 | 内存 | **结论性负结果**：语义双指纹全等、构建分配 −37 万次、CPU 全线 1.10-1.69×，但条目 48→56B（+8B 无差别作用于全部约 40 万条目）压过短键本体节省（请求字节口径 `Box<str>` 恰为 len 字节，均值远低于 8B 平衡线），驻留 35.62→37.92 MB（×0.939）；16B 键枚举在 Rust 布局下结构不可达（`Box<str>` 无 niche）；生产零改动、不递增版本，基准与报告归档 |
 | [轮次 42](report/perf/round-42-属性表写时物化覆盖层.md) | 实体属性表写时物化覆盖层：`LivingEntity.attributes` 由构造时全量抄写类型表（93 个生物类型声明 26-36 条属性，hashbrown 56 桶 ≈3.2KB/实体 + 5 次增长分配）改 `AttributeMap`（条目 Vec 按 id 二分 + 移除墓碑 + 每类型 `Box<[f64]>` 直索引基础值表懒构建共享，NaN=未声明哨兵）；三态视图 `AttributeView`（Live/Declared/Absent）逐点对齐旧六方法语义与三条回落链；full_sync 合并视图仍按 id 排序；约 20 处调用面迁移（living/attributes/命令/wasm/六生物文件/三叉戟）；顺带修正旧武器物化死代码怪癖（复活取通用默认值→类型表值） | 内存+CPU | 2 万实体六类型真实表（30% 装备增删/10% 改基础值/5% 移除探针）：驻留 52.41→5.03 MB（**×10.42**，每实体 2620.5→251.6 B）、构造分配 87 001→15 次（×79 耗时）、热读 5.19→1.19 ms（**×4.37**，直索引快于哈希）、同步 ×3.17、增删改写 ×1.15（分配 +8.5k 为物化换构造）；操作脚本全量指纹 `0xcbff7415358508cc` 双臂全等；workspace clippy 0 错、全测试 0 败（lib 439 含覆盖层 10 新测） |
 | [轮次 43](report/perf/round-43-装备槽映射去重.md) | 实体装备槽映射去重：`LivingEntity::new` 对每实体执行 `Arc::new(build_equipment_slots())`——无入参纯函数输出恒定的 5 键 `usize→EquipmentSlot` 映射逐实体重建（`EquipmentSlot` 携数据达 48B/桶条目 56B，容量梯 3→7 约 520B/实体 + 3 次分配）；改 `papokin-inventory` 新增 `EQUIPMENT_SLOTS: LazyLock<Arc<..>>` 共享单实例，构造仅 `Arc::clone`，字段类型与全部只读使用点零改动；同主题全实体族扫描确认其余结构（drop_chances/entity_equipment/Brain/CombatTracker/Entity 基座/ItemEntity）无同类问题 | 内存+CPU | 2 万实体构造 + 10 轮读取电池：驻留 10.56→0.16 MB（**×65.3**，每实体 528.08→8.08 B）、构造分配 60 001→4 次、构造耗时 ×90.4、读取 ×1.17（单实例热缓存）；读取指纹 `0xde777f49610678a5` 双臂全等；papokin+inventory clippy 0 错、lib 439 测试绿 |
+| [轮次 44](report/perf/round-44-spawn路径堆包装消除.md) | 实体 spawn 路径堆包装消除：三个逐实体纯包装堆分配——群系 `Arc<&'static Biome>` 盒（ArcSwap 硬性要求，同一静态地址反复 `Arc::new`）、`Box<dyn MoveControlTrait>`（地面版仅 ~100B）、导航 `Box<dyn PathNavigationTrait>`（地面版 ~928B）；群系盒改 `shared_biome_arc` 静态地址键共享缓存（全服每群系至多一盒），控制/导航改混合枚举（热门 `Ground`/`Slime` 变体内联 + `Other`/`Custom` 盒装兜底零回归），导航经 Deref/DerefMut 以 dyn trait 为目标**单点 match 分发**（~34 方法适配压成一处）；枚举分发要求 trait 显式导入（dyn 主方法免导入），3 处 goal 文件补 `use` | 内存+CPU | 2 万实体双臂结构复刻 + 20 轮使用 + 2 轮群系切换（10%）：驻留每实体 1112.1→1064.1 B（−48B，堆块+分配器开销换内联）、构造分配 60 001→**9** 次（每实体 3→~0）、群系切换分配 4 000→**0**、构造 ×2.37、使用 ×1.27（内联免指针追逐）；使用指纹 `0x3c00547975915877` 双臂全等；workspace clippy 0 错、lib 439 测试绿 |
 
 ## 核心发现（十件事）
 
