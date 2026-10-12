@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::BlockEntity;
 use crate::block::entities::sign::Text;
@@ -14,7 +11,7 @@ pub struct HangingSignBlockEntity {
     pub back_text: Text,
     pub is_waxed: AtomicBool,
     position: BlockPos,
-    pub currently_editing_player: Arc<Mutex<Option<uuid::Uuid>>>,
+    pub currently_editing_player: Mutex<Option<uuid::Uuid>>,
 }
 
 impl BlockEntity for HangingSignBlockEntity {
@@ -46,7 +43,7 @@ impl BlockEntity for HangingSignBlockEntity {
             front_text,
             back_text,
             is_waxed: AtomicBool::new(is_waxed),
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
 
@@ -86,7 +83,7 @@ impl HangingSignBlockEntity {
             } else {
                 Text::from_messages(messages)
             },
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
     #[must_use]
@@ -96,7 +93,7 @@ impl HangingSignBlockEntity {
             is_waxed: AtomicBool::new(false),
             front_text: Text::default(),
             back_text: Text::default(),
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
 }

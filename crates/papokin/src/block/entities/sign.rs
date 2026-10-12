@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Mutex,
+    Mutex,
     atomic::{AtomicBool, AtomicI8, Ordering},
 };
 
@@ -16,7 +16,7 @@ pub struct SignBlockEntity {
     pub back_text: SignText,
     pub is_waxed: AtomicBool,
     position: BlockPos,
-    pub currently_editing_player: Arc<Mutex<Option<uuid::Uuid>>>,
+    pub currently_editing_player: Mutex<Option<uuid::Uuid>>,
 }
 
 pub type Text = SignText;
@@ -24,8 +24,8 @@ pub type Text = SignText;
 pub struct SignText {
     pub has_glowing_text: AtomicBool,
     color: AtomicI8,
-    pub messages: Arc<Mutex<[Box<str>; 4]>>,
-    pub filtered_messages: Arc<Mutex<[Box<str>; 4]>>,
+    pub messages: Mutex<[Box<str>; 4]>,
+    pub filtered_messages: Mutex<[Box<str>; 4]>,
 }
 
 impl Clone for SignText {
@@ -33,8 +33,18 @@ impl Clone for SignText {
         Self {
             has_glowing_text: AtomicBool::new(self.has_glowing_text.load(Ordering::Relaxed)),
             color: AtomicI8::new(self.color.load(Ordering::Relaxed)),
-            messages: self.messages.clone(),
-            filtered_messages: self.filtered_messages.clone(),
+            messages: Mutex::new(
+                self.messages
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
+            filtered_messages: Mutex::new(
+                self.filtered_messages
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
         }
     }
 }
@@ -44,8 +54,8 @@ impl Default for SignText {
         Self {
             has_glowing_text: AtomicBool::new(false),
             color: AtomicI8::new(DyeColor::Black as i8),
-            messages: Arc::new(Mutex::new(Self::empty_messages())),
-            filtered_messages: Arc::new(Mutex::new(Self::empty_messages())),
+            messages: Mutex::new(Self::empty_messages()),
+            filtered_messages: Mutex::new(Self::empty_messages()),
         }
     }
 }
@@ -134,8 +144,8 @@ impl From<NbtTag> for SignText {
         Self {
             has_glowing_text: AtomicBool::new(has_glowing_text),
             color: AtomicI8::new(DyeColor::by_name(color).unwrap_or(DyeColor::Black).id() as i8),
-            messages: Arc::new(Mutex::new(parsed_messages)),
-            filtered_messages: Arc::new(Mutex::new(parsed_filtered)),
+            messages: Mutex::new(parsed_messages),
+            filtered_messages: Mutex::new(parsed_filtered),
         }
     }
 }
@@ -159,8 +169,8 @@ impl SignText {
         Self {
             has_glowing_text: AtomicBool::new(has_glowing_text),
             color: AtomicI8::new(color.id() as i8),
-            messages: Arc::new(Mutex::new(messages)),
-            filtered_messages: Arc::new(Mutex::new(filtered)),
+            messages: Mutex::new(messages),
+            filtered_messages: Mutex::new(filtered),
         }
     }
 
@@ -282,7 +292,7 @@ impl BlockEntity for SignBlockEntity {
             front_text,
             back_text,
             is_waxed: AtomicBool::new(is_waxed),
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
 
@@ -323,7 +333,7 @@ impl SignBlockEntity {
             } else {
                 SignText::from_messages(messages)
             },
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
 
@@ -334,7 +344,7 @@ impl SignBlockEntity {
             is_waxed: AtomicBool::new(false),
             front_text: SignText::default(),
             back_text: SignText::default(),
-            currently_editing_player: Arc::new(Mutex::new(None)),
+            currently_editing_player: Mutex::new(None),
         }
     }
 }
@@ -399,7 +409,7 @@ impl<'a> SignEntityRef<'a> {
     }
 
     #[must_use]
-    pub const fn currently_editing_player(&self) -> &'a Arc<Mutex<Option<uuid::Uuid>>> {
+    pub const fn currently_editing_player(&self) -> &'a Mutex<Option<uuid::Uuid>> {
         match self {
             Self::Sign(s) => &s.currently_editing_player,
             Self::Hanging(s) => &s.currently_editing_player,

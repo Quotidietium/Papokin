@@ -619,7 +619,7 @@ impl BlockBehaviour for SignBlock {
 /// 为玩家打开告示牌文本编辑界面，并将其注册为允许的编辑者。
 fn open_text_edit(
     player: &Player,
-    currently_editing_player: &Arc<Mutex<Option<Uuid>>>,
+    currently_editing_player: &Mutex<Option<Uuid>>,
     position: &BlockPos,
     is_front_text: bool,
 ) {
@@ -632,7 +632,7 @@ fn open_text_edit(
 /// 检查是否有其他玩家正在可触及范围内编辑此告示牌。
 fn other_player_is_editing_sign(
     player: &Player,
-    currently_editing_player: &Arc<Mutex<Option<Uuid>>>,
+    currently_editing_player: &Mutex<Option<Uuid>>,
     world: &World,
     position: &BlockPos,
 ) -> bool {
