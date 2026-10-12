@@ -27,6 +27,15 @@
    再引用；仅当 checkout 回旧提交重建时才会需要，代价也只是重编。按
    单元种类+签名分组保证并发的不同单元（如 bin 与 test-bin、check 与
    build）互不误伤。
+5. 被取代的 build script 簇：``build/`` 里同一 crate 的 ``<crate>-<hash>``
+   目录按 mtime 分组仅保留最新 ``KEEP_PER_UNIT`` 簇，更旧的删除。带
+   build.rs 的 crate 每次版本号递增（哈希输入之一）都产生新簇——
+   papokin/papokin-world 自项目起每版一簇累计逾百（2026-10-12 实测
+   debug 198/192、release 104/104 簇，约 1.4 GB）。新簇产出即旧簇被
+   取代，删除代价仅为回退重建时重跑 build script。**只删 build 目录
+   本身，不动 .fingerprint 账本**（指纹是在册性判定依据，误删会连锁
+   误判孤儿；指纹目录总量很小，不值得冒险）。同批 mtime 防护同
+   规则 3/4。
 
 2026-09-30 首次实跑：释放 24.08 GB（孤儿 16.97 GB ∪ pumpkin 旧命名，
 含 examples/e2e-plugin 三个 profile）。教训：不带 mtime 防护的孤儿规则
@@ -185,16 +194,31 @@ def scan_profile(profile_dir: str, keep: int = KEEP_PER_UNIT) -> list[str]:
 
     build = os.path.join(profile_dir, "build")
     if os.path.isdir(build):
+        # 孤儿（规则 3）与被取代（规则 5）并行走查
+        by_crate: dict[str, list[tuple[float, str]]] = {}
         for name in os.listdir(build):
             path = os.path.join(build, name)
             if not os.path.isdir(path):
                 continue
             m = HASH_RE.match(name)
-            if not m or norm_key(name) in fp_keys:
+            if not m:
                 continue
-            if fp_newest - os.path.getmtime(path) < FRESH_MARGIN_SECONDS:
+            if norm_key(name) not in fp_keys:
+                # 规则 3：指纹缺失的孤儿 build 簇
+                if fp_newest - os.path.getmtime(path) >= FRESH_MARGIN_SECONDS:
+                    stale.append(path)
                 continue
-            stale.append(path)
+            by_crate.setdefault(norm_key(m.group(1)), []).append(
+                (os.path.getmtime(path), path)
+            )
+        # 规则 5：同 crate 保留最新 keep 簇，更旧的删除（不动指纹）
+        for members in by_crate.values():
+            members.sort(reverse=True)
+            newest_mtime = members[0][0]
+            for mtime, path in members[keep:]:
+                if newest_mtime - mtime < FRESH_MARGIN_SECONDS:
+                    continue  # 同批产出，可能仍被并发构建引用
+                stale.append(path)
     return stale
 
 
