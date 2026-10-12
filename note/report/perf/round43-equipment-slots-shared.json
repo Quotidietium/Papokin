@@ -1,0 +1,50 @@
+{
+  "corpus": {
+    "entities": 20000,
+    "map_keys": 5,
+    "read_rounds": 10
+  },
+  "fresh": {
+    "content_fingerprint": "0xde777f49610678a5",
+    "read_ms": 21.0767,
+    "resident_bytes": 10561544,
+    "spawn_allocs": 60001,
+    "spawn_ms": 6.6708
+  },
+  "gates": [
+    {
+      "detail": "0xde777f49610678a5 vs 0xde777f49610678a5",
+      "name": "读取电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "10561544 → 161544 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "60001 → 4",
+      "name": "构造分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "×1.173",
+      "name": "读取耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "outcome": "positive",
+  "round": 43,
+  "shared": {
+    "content_fingerprint": "0xde777f49610678a5",
+    "read_ms": 17.9698,
+    "resident_bytes": 161544,
+    "spawn_allocs": 4,
+    "spawn_ms": 0.0738
+  },
+  "sizes": {
+    "arc_inline_bytes": 8,
+    "map_inline_bytes": 32
+  },
+  "topic": "equipment_slots_shared"
+}

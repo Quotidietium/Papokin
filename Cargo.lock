@@ -2354,6 +2354,7 @@ dependencies = [
  "flate2",
  "papokin-config",
  "papokin-data",
+ "papokin-inventory",
  "papokin-nbt",
  "papokin-protocol",
  "papokin-util",
