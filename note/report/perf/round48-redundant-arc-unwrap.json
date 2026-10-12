@@ -1,0 +1,68 @@
+{
+  "corpus": {
+    "de_arced_fields": [
+      "sign_messages",
+      "sign_filtered_messages",
+      "sign_editing_player",
+      "beacon_payment",
+      "jukebox_record",
+      "lectern_book",
+      "trident_item_stack"
+    ],
+    "holders": 8000,
+    "read_rounds": 20,
+    "signs": 20000
+  },
+  "gates": [
+    {
+      "detail": "0x21f5526dd864b1ed vs 0x21f5526dd864b1ed",
+      "name": "读写电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "10058802 → 7466802 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "108002 → 2",
+      "name": "构造分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "6000 → 6000",
+      "name": "写路径不回归（等分配）",
+      "passed": true
+    },
+    {
+      "detail": "×1.225",
+      "name": "读耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "construct_allocs": 2,
+    "construct_ms": 0.9592999999999999,
+    "content_fingerprint": "0x21f5526dd864b1ed",
+    "read_ms": 6.7318999999999996,
+    "resident_bytes": 7466802,
+    "write_allocs": 6000
+  },
+  "old": {
+    "construct_allocs": 108002,
+    "construct_ms": 5.519900000000001,
+    "content_fingerprint": "0x21f5526dd864b1ed",
+    "read_ms": 8.248800000000001,
+    "resident_bytes": 10058802,
+    "write_allocs": 6000
+  },
+  "outcome": "positive",
+  "round": 48,
+  "sizes": {
+    "arc_mutex_itemstack_bytes": 8,
+    "arc_mutex_str4_bytes": 8,
+    "mutex_itemstack_bytes": 48,
+    "mutex_str4_bytes": 72
+  },
+  "topic": "redundant_arc_unwrap"
+}
