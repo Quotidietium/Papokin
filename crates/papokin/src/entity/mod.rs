@@ -1109,6 +1109,16 @@ pub(crate) fn read_leash_target(nbt: &NbtCompound) -> Option<LeashTarget> {
 /// 群系切换路径零分配（旧实现每实体一盒、每切换一盒）。
 // `Arc<&'static Biome>` 的堆盒由 ArcSwap 硬性要求（裸引用无
 // RefCnt，轮次 33 结论），clippy 的 redundant_allocation 建议不适用。
+/// `Arc<Option<TextComponent>>` 的空态共享单例（轮次 44 群系盒
+/// 同法）：绝大多数实体从未命名，构造期 `Arc::new(None)` 会为
+/// 每个实体分配一个仅装 `None` 的堆盒；共享单例把这笔成本收
+/// 敛为全进程一个盒，真实命名时才走独立分配。
+fn shared_none_name_arc() -> Arc<Option<TextComponent>> {
+    static NONE_NAME: std::sync::LazyLock<Arc<Option<TextComponent>>> =
+        std::sync::LazyLock::new(|| Arc::new(None));
+    NONE_NAME.clone()
+}
+
 #[allow(clippy::redundant_allocation)]
 fn shared_biome_arc(biome: &'static Biome) -> Arc<&'static Biome> {
     static BIOME_ARCS: std::sync::OnceLock<
@@ -1237,7 +1247,7 @@ impl Entity {
             last_biome_update_pos: AtomicCell::new(BlockPos::new(floor_x, floor_y, floor_z)),
             portal_cooldown: AtomicU32::new(0),
             portal_manager: std::sync::Mutex::new(None),
-            custom_name: ArcSwap::new(Arc::new(None)),
+            custom_name: ArcSwap::new(shared_none_name_arc()),
             custom_name_visible: AtomicBool::new(false),
             silent: AtomicBool::new(false),
             has_no_gravity: AtomicBool::new(false),
