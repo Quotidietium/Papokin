@@ -1,0 +1,59 @@
+{
+  "corpus": {
+    "chests": 20000,
+    "clears": 4000,
+    "empty_ratio": "55%",
+    "family": [
+      "chest",
+      "trapped_chest",
+      "barrel",
+      "shulker_box",
+      "shelf"
+    ],
+    "read_rounds": 20,
+    "slot_count": 27
+  },
+  "gates": [
+    {
+      "detail": "0x00605f3c6f78e01c vs 0x00605f3c6f78e01c",
+      "name": "电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "22561024 → 8995304 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "12408000 → 616000 B",
+      "name": "空箱构造字节下降",
+      "passed": true
+    },
+    {
+      "detail": "×1.732",
+      "name": "电池耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "battery_ms": 11.373299999999999,
+    "content_fingerprint": "0x00605f3c6f78e01c",
+    "resident_bytes": 8995304,
+    "spawn_allocs": 29001,
+    "spawn_ms": 4.230300000000001
+  },
+  "old": {
+    "battery_ms": 19.7008,
+    "content_fingerprint": "0x00605f3c6f78e01c",
+    "resident_bytes": 22561024,
+    "spawn_allocs": 20001,
+    "spawn_ms": 7.7305
+  },
+  "outcome": "positive",
+  "round": 46,
+  "sizes": {
+    "new_lazy_inline_bytes": 24,
+    "old_array_inline_bytes": 1080
+  },
+  "topic": "chest_lazy_item_slots"
+}
