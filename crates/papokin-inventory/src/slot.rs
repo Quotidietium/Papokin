@@ -94,6 +94,25 @@ pub trait Slot: Send + Sync {
         self.get_inventory().with_stack(self.get_index(), f);
     }
 
+    /// 以可变借用方式读改写此槽位物品堆（透传物品栏的
+    /// [`Inventory::with_stack_mut`]，锁内回调、零克隆）。
+    ///
+    /// 语义约束同物品栏侧：回调返回 `false` 时不得改动物品堆
+    /// （原位实现无法回滚）；回调内不得调用此槽位或其物品栏的
+    /// 任何方法（`can_insert`/`get_stack` 等在覆写方持锁状态下
+    /// 回调会重入死锁），只能读写传入的物品堆。返回回调是否
+    /// 提交了修改。
+    ///
+    /// 提交即等价于 [`Slot::set_stack`]（含 `mark_dirty`；物品栏
+    /// 侧覆写另含其 `set_stack` 的副作用）。
+    fn with_stack_mut(&self, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
+        let changed = self.get_inventory().with_stack_mut(self.get_index(), f);
+        if changed {
+            self.mark_dirty();
+        }
+        changed
+    }
+
     /// 检查此槽位是否有非空物品堆。
     fn has_stack(&self) -> bool {
         !self.get_stack().is_empty()
@@ -219,23 +238,29 @@ pub trait Slot: Send + Sync {
     ///返回剩余的物品。
     fn insert_stack_count(&self, mut stack: ItemStack, count: u8) -> ItemStack {
         if !stack.is_empty() && self.can_insert(&stack) {
-            let mut stack_self = self.get_stack();
-            // saturating_sub：槽位因存档损坏出现超堆叠时 u8 裸减会
-            // 下溢（debug panic/release 回绕为巨值继续塞入）
-            let min_count = count.min(stack.item_count).min(
-                self.get_max_item_count_for_stack(&stack)
-                    .saturating_sub(stack_self.item_count),
-            );
-
-            if min_count != 0 {
-                if stack_self.is_empty() {
-                    self.set_stack(stack.split(min_count));
-                } else if stack.are_items_and_components_equal(&stack_self) {
-                    stack.decrement(min_count);
-                    stack_self.increment(min_count);
-                    self.set_stack(stack_self);
+            // 上限为槽位配置与传入堆的纯函数，回调外前置求值
+            let max_cap = self.get_max_item_count_for_stack(&stack);
+            self.with_stack_mut(&mut |dst| {
+                // saturating_sub：槽位因存档损坏出现超堆叠时 u8 裸减会
+                // 下溢（debug panic/release 回绕为巨值继续塞入）
+                let min_count = count
+                    .min(stack.item_count)
+                    .min(max_cap.saturating_sub(dst.item_count));
+                if min_count == 0 {
+                    return false;
                 }
-            }
+                if dst.is_empty() {
+                    *dst = stack.split(min_count);
+                    true
+                } else if stack.are_items_and_components_equal(dst) {
+                    stack.decrement(min_count);
+                    dst.increment(min_count);
+                    true
+                } else {
+                    // 非空且不同物：与原条件序一致，不写入
+                    false
+                }
+            });
         }
         if stack.is_empty() {
             ItemStack::EMPTY.clone()
