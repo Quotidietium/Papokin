@@ -1,0 +1,62 @@
+{
+  "corpus": {
+    "entities": 20000,
+    "named_ratio": "10%",
+    "named_rounds": 5,
+    "read_rounds": 20,
+    "wrapper_points": [
+      "custom_name_none_arc"
+    ]
+  },
+  "gates": [
+    {
+      "detail": "0x27bf6a32d37d6da9 vs 0x27bf6a32d37d6da9",
+      "name": "读写电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "1781152 → 773208 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "20001 → 2",
+      "name": "构造分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "8000 → 8000",
+      "name": "命名写路径不回归（等分配）",
+      "passed": true
+    },
+    {
+      "detail": "×1.149",
+      "name": "读耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "construct_allocs": 2,
+    "construct_ms": 0.0428,
+    "content_fingerprint": "0x27bf6a32d37d6da9",
+    "naming_allocs": 8000,
+    "read_ms": 3.8712,
+    "resident_bytes": 773208
+  },
+  "old": {
+    "construct_allocs": 20001,
+    "construct_ms": 0.8019999999999999,
+    "content_fingerprint": "0x27bf6a32d37d6da9",
+    "naming_allocs": 8000,
+    "read_ms": 4.4498999999999995,
+    "resident_bytes": 1781152
+  },
+  "outcome": "positive",
+  "round": 47,
+  "sizes": {
+    "arc_option_textcomponent_bytes": 8,
+    "arcswap_field_bytes": 8,
+    "option_textcomponent_bytes": 40
+  },
+  "topic": "custom_name_shared_none"
+}
