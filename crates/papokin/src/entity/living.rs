@@ -3,7 +3,7 @@ use papokin_data::particle::Particle;
 use papokin_data::potion::Effect;
 use papokin_data::tag::{self, Taggable};
 use papokin_data::tracked_data;
-use papokin_inventory::build_equipment_slots;
+use papokin_inventory::EQUIPMENT_SLOTS;
 use papokin_inventory::player::player_inventory::PlayerInventory;
 use papokin_inventory::screen_handler::InventoryPlayer;
 use papokin_util::Difficulty;
@@ -288,7 +288,7 @@ impl LivingEntity {
             active_effects: std::sync::Mutex::new(FxHashMap::default()),
             entity_equipment: Arc::new(std::sync::Mutex::new(EntityEquipment::new())),
             equipment_drop_chances: Arc::new(std::sync::Mutex::new(FxHashMap::default())),
-            equipment_slots: Arc::new(build_equipment_slots()),
+            equipment_slots: EQUIPMENT_SLOTS.clone(),
             jumping: AtomicBool::new(false),
             jumping_cooldown: AtomicU8::new(0),
             climbing: AtomicBool::new(false),

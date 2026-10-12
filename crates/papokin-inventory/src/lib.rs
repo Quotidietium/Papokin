@@ -63,6 +63,9 @@ pub mod sync_handler;
 pub mod viewer;
 pub mod window_property;
 
+use std::sync::Arc;
+use std::sync::LazyLock;
+
 use rustc_hash::FxHashMap;
 
 pub use error::InventoryError;
@@ -106,3 +109,12 @@ pub fn build_equipment_slots() -> FxHashMap<usize, EquipmentSlot> {
     equipment_slots.insert(PlayerInventory::OFF_HAND_SLOT, EquipmentSlot::OFF_HAND);
     equipment_slots
 }
+
+/// 全体实体共享的「槽位索引 → 装备槽位」映射。
+///
+/// [`build_equipment_slots`] 是无入参的纯函数，输出恒定；旧调用方
+/// （`LivingEntity::new`）逐实体重建同一张表（每实体约 520B 驻留
+/// 与 3 次增长分配，轮次 43 基准实测），共享单实例后构造仅一次
+/// `Arc::clone`。
+pub static EQUIPMENT_SLOTS: LazyLock<Arc<FxHashMap<usize, EquipmentSlot>>> =
+    LazyLock::new(|| Arc::new(build_equipment_slots()));
