@@ -154,8 +154,6 @@ fn run_fresh_arm() -> (u64, ArmStats) {
 }
 
 fn main() {
-    use std::io::Write as _;
-
     println!("轮次 43 基准：实体装备槽映射去重（逐实体重建 → 全局共享）");
     println!("语料：{ENTITY_COUNT} 个实体构造 · 读 {READ_ROUNDS} 轮 · 映射恒 5 键（纯函数输出）");
     println!();
@@ -166,19 +164,42 @@ fn main() {
     // 避免两代语料叠加计入驻留（轮次 40 坑）
     let (fresh_fp, fresh) = run_fresh_arm();
 
+    let v = evaluate(&fresh, &shared, fresh_fp, shared_fp);
+    print_gates(&v, &fresh, &shared, fresh_fp, shared_fp);
+    write_report(&v, &fresh, &shared, fresh_fp, shared_fp);
+}
+
+struct Verdict {
+    semantics_ok: bool,
+    resident_ok: bool,
+    spawn_allocs_ok: bool,
+    read_ratio: f64,
+    all_passed: bool,
+}
+
+fn evaluate(fresh: &ArmStats, shared: &ArmStats, fresh_fp: u64, shared_fp: u64) -> Verdict {
     let semantics_ok = shared_fp == fresh_fp;
     let resident_ok = shared.resident < fresh.resident;
     let spawn_allocs_ok = shared.spawn_allocs < fresh.spawn_allocs;
     let read_ratio = fresh.read_ms / shared.read_ms;
+    Verdict {
+        semantics_ok,
+        resident_ok,
+        spawn_allocs_ok,
+        read_ratio,
+        all_passed: semantics_ok && resident_ok && spawn_allocs_ok && read_ratio >= 0.91,
+    }
+}
 
+fn print_gates(v: &Verdict, fresh: &ArmStats, shared: &ArmStats, fresh_fp: u64, shared_fp: u64) {
     println!("=== 闸门 ===");
     println!(
         "{} 读取电池指纹全等：逐建 0x{fresh_fp:016x} vs 共享 0x{shared_fp:016x}",
-        mark(semantics_ok)
+        mark(v.semantics_ok)
     );
     println!(
         "{} 驻留字节下降（主判据）：{} → {} B（每实体 {:.2} → {:.2} B，共享臂含单实例构建）",
-        mark(resident_ok),
+        mark(v.resident_ok),
         fresh.resident,
         shared.resident,
         fresh.resident as f64 / ENTITY_COUNT as f64,
@@ -186,7 +207,7 @@ fn main() {
     );
     println!(
         "{} 构造分配次数下降：{} → {} 次（每实体 {:.4} → {:.4}）",
-        mark(spawn_allocs_ok),
+        mark(v.spawn_allocs_ok),
         fresh.spawn_allocs,
         shared.spawn_allocs,
         fresh.spawn_allocs as f64 / ENTITY_COUNT as f64,
@@ -194,10 +215,10 @@ fn main() {
     );
     println!(
         "{} 读取耗时不劣化（≥0.91×）：{:.2} → {:.2} ms（×{:.3}）",
-        mark(read_ratio >= 0.91),
+        mark(v.read_ratio >= 0.91),
         fresh.read_ms,
         shared.read_ms,
-        read_ratio
+        v.read_ratio
     );
     println!();
     println!("=== 数值 ===");
@@ -207,30 +228,32 @@ fn main() {
         shared.spawn_ms,
         fresh.spawn_ms / shared.spawn_ms
     );
-
-    let all_passed = semantics_ok && resident_ok && spawn_allocs_ok && read_ratio >= 0.91;
     println!(
         "闸门判定：{}",
-        if all_passed {
+        if v.all_passed {
             "全部通过，准予收编"
         } else {
             "存在未过闸门项，不予收编"
         }
     );
+}
+
+fn write_report(v: &Verdict, fresh: &ArmStats, shared: &ArmStats, fresh_fp: u64, shared_fp: u64) {
+    use std::io::Write as _;
 
     let report = serde_json::json!({
         "round": 43,
         "topic": "equipment_slots_shared",
         "corpus": {"entities": ENTITY_COUNT, "read_rounds": READ_ROUNDS, "map_keys": 5},
         "gates": [
-            {"name": "读取电池指纹全等", "passed": semantics_ok,
+            {"name": "读取电池指纹全等", "passed": v.semantics_ok,
              "detail": format!("0x{fresh_fp:016x} vs 0x{shared_fp:016x}")},
-            {"name": "驻留字节下降（主判据）", "passed": resident_ok,
+            {"name": "驻留字节下降（主判据）", "passed": v.resident_ok,
              "detail": format!("{} → {} B", fresh.resident, shared.resident)},
-            {"name": "构造分配次数下降", "passed": spawn_allocs_ok,
+            {"name": "构造分配次数下降", "passed": v.spawn_allocs_ok,
              "detail": format!("{} → {}", fresh.spawn_allocs, shared.spawn_allocs)},
-            {"name": "读取耗时不劣化（≥0.91×）", "passed": read_ratio >= 0.91,
-             "detail": format!("×{:.3}", read_ratio)},
+            {"name": "读取耗时不劣化（≥0.91×）", "passed": v.read_ratio >= 0.91,
+             "detail": format!("×{:.3}", v.read_ratio)},
         ],
         "fresh": {
             "resident_bytes": fresh.resident,
@@ -250,7 +273,7 @@ fn main() {
             "map_inline_bytes": std::mem::size_of::<FxHashMap<usize, EquipmentSlot>>(),
             "arc_inline_bytes": std::mem::size_of::<Arc<FxHashMap<usize, EquipmentSlot>>>(),
         },
-        "outcome": if all_passed { "positive" } else { "negative" },
+        "outcome": if v.all_passed { "positive" } else { "negative" },
     });
 
     let path = std::path::Path::new("note/report/perf/round43-equipment-slots-shared.json");
