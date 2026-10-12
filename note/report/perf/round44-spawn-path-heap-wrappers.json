@@ -1,0 +1,57 @@
+{
+  "corpus": {
+    "entities": 20000,
+    "switch_rounds": 2,
+    "tick_rounds": 20,
+    "wrapper_points": [
+      "biome_arc",
+      "move_control_box",
+      "navigator_box"
+    ]
+  },
+  "gates": [
+    {
+      "detail": "0x3c00547975915877 vs 0x3c00547975915877",
+      "name": "使用电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "22241024 → 21281320 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "60001 → 9",
+      "name": "构造分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "×1.269",
+      "name": "使用耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "content_fingerprint": "0x3c00547975915877",
+    "resident_bytes": 21281320,
+    "spawn_allocs": 9,
+    "spawn_ms": 3.2072,
+    "switch_allocs": 0,
+    "tick_ms": 6.1808000000000005
+  },
+  "old": {
+    "content_fingerprint": "0x3c00547975915877",
+    "resident_bytes": 22241024,
+    "spawn_allocs": 60001,
+    "spawn_ms": 7.5988,
+    "switch_allocs": 4000,
+    "tick_ms": 7.844500000000001
+  },
+  "outcome": "positive",
+  "round": 44,
+  "sizes": {
+    "any_control_inline_bytes": 112,
+    "ground_nav_inline_bytes": 928
+  },
+  "topic": "spawn_path_heap_wrappers"
+}
