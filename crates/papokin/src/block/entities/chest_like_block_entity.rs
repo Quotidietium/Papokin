@@ -22,11 +22,9 @@ macro_rules! impl_block_entity_for_chest {
                 let loot_table_key = nbt.get_string("LootTable").map(|s| s.to_string());
                 let loot_table_seed = nbt.get_long("LootTableSeed").unwrap_or(0);
 
-                let mut chest = Self {
+                let chest = Self {
                     position,
-                    items: std::sync::RwLock::new(std::array::from_fn(|_| {
-                        ItemStack::EMPTY.clone()
-                    })),
+                    items: papokin_inventory::LazyItemSlots::new(),
                     dirty: std::sync::atomic::AtomicBool::new(false),
                     comparator_dirty: std::sync::atomic::AtomicBool::new(false),
                     viewers: $crate::block::viewer::ViewerCountTracker::new(),
@@ -34,20 +32,10 @@ macro_rules! impl_block_entity_for_chest {
                     loot_table_seed,
                 };
 
-                // 仅在没有待处理的战利品表时才读取已保存的物品。
-                let has_loot_table = chest
-                    .loot_table
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .is_some();
-                if !has_loot_table {
-                    papokin_inventory::sync_read_items_from_nbt(
-                        nbt,
-                        chest
-                            .items
-                            .get_mut()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner),
-                    );
+                // 仅在没有待处理的战利品表时才读取已保存的物品
+                // （fill 仅在确有物品时物化槽数组——空箱保持零驻留）。
+                if nbt.get_string("LootTable").is_none() {
+                    chest.items.fill_from_nbt(nbt);
                 }
 
                 chest
@@ -115,10 +103,13 @@ macro_rules! impl_block_entity_for_chest {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .is_some();
-                if !has_loot_table {
-                    if let Ok(items) = self.items.try_read() {
-                        papokin_inventory::sync_write_items_to_nbt(&*items, &mut nbt);
-                    }
+                if !self
+                    .loot_table
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some()
+                {
+                    self.items.try_write_to_nbt(&mut nbt);
                 }
                 Some(nbt)
             }
@@ -155,51 +146,35 @@ macro_rules! impl_inventory_for_chest {
             }
 
             fn is_empty(&self) -> bool {
-                let items = self
-                    .items
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                items.iter().all(|s| s.is_empty())
+                self.items.is_empty()
             }
 
             fn get_stack(&self, slot: usize) -> ItemStack {
-                let items = self
-                    .items
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                items[slot].clone()
+                self.items.get_stack(slot)
             }
 
             fn remove_stack(&self, slot: usize) -> ItemStack {
-                let mut items = self
-                    .items
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let removed = std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone());
+                let removed = self.items.with_write(|items| {
+                    std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone())
+                });
                 self.mark_dirty();
                 removed
             }
 
             fn remove_stack_specific(&self, slot: usize, amount: u8) -> ItemStack {
-                let mut items = self
-                    .items
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let res = if !items[slot].is_empty() && amount > 0 {
-                    items[slot].split(amount)
-                } else {
-                    ItemStack::EMPTY.clone()
-                };
+                let res = self.items.with_write(|items| {
+                    if !items[slot].is_empty() && amount > 0 {
+                        items[slot].split(amount)
+                    } else {
+                        ItemStack::EMPTY.clone()
+                    }
+                });
                 self.mark_dirty();
                 res
             }
 
             fn set_stack(&self, slot: usize, stack: ItemStack) {
-                let mut items = self
-                    .items
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                items[slot] = stack;
+                self.items.with_write(|items| items[slot] = stack);
                 self.mark_dirty();
             }
 
@@ -230,11 +205,7 @@ macro_rules! impl_clearable_for_chest {
     ($struct_name:ty) => {
         impl papokin_inventory::Clearable for $struct_name {
             fn clear(&self) {
-                let mut items = self
-                    .items
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                items.fill_with(|| ItemStack::EMPTY.clone());
+                self.items.clear();
                 <$struct_name as papokin_inventory::Inventory>::mark_dirty(self);
             }
         }
@@ -305,7 +276,7 @@ macro_rules! impl_chest_helper_methods {
             }
 
             #[must_use]
-            pub fn new(position: papokin_util::math::position::BlockPos) -> Self {
+            pub const fn new(position: papokin_util::math::position::BlockPos) -> Self {
                 use std::array::from_fn;
                 use std::sync::Mutex as StdMutex;
                 use std::sync::RwLock;
@@ -313,7 +284,7 @@ macro_rules! impl_chest_helper_methods {
 
                 Self {
                     position,
-                    items: RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
+                    items: papokin_inventory::LazyItemSlots::new(),
                     dirty: AtomicBool::new(false),
                     comparator_dirty: AtomicBool::new(false),
                     viewers: $crate::block::viewer::ViewerCountTracker::new(),

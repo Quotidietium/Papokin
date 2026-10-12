@@ -24,7 +24,7 @@ use super::BlockEntity;
 
 pub struct BarrelBlockEntity {
     pub position: BlockPos,
-    pub items: RwLock<[ItemStack; Self::INVENTORY_SIZE]>,
+    pub items: papokin_inventory::LazyItemSlots<{ Self::INVENTORY_SIZE }>,
     pub dirty: AtomicBool,
     pub comparator_dirty: AtomicBool,
 
@@ -45,21 +45,16 @@ impl BlockEntity for BarrelBlockEntity {
     where
         Self: Sized,
     {
-        let mut barrel = Self {
+        let barrel = Self {
             position,
-            items: RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
+            items: papokin_inventory::LazyItemSlots::new(),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
         };
 
-        papokin_inventory::sync_read_items_from_nbt(
-            nbt,
-            barrel
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        // fill 仅在确有物品时物化槽数组（空箱保持零驻留）。
+        barrel.items.fill_from_nbt(nbt);
 
         barrel
     }
@@ -95,9 +90,7 @@ impl BlockEntity for BarrelBlockEntity {
 
     fn chunk_data_nbt(&self) -> Option<NbtCompound> {
         let mut nbt = NbtCompound::new();
-        if let Ok(guard) = self.items.try_read() {
-            sync_write_items_to_nbt(&*guard, &mut nbt);
-        }
+        self.items.try_write_to_nbt(&mut nbt);
         Some(nbt)
     }
 
@@ -123,10 +116,10 @@ impl BarrelBlockEntity {
     pub const ID: &'static str = "minecraft:barrel";
 
     #[must_use]
-    pub fn new(position: BlockPos) -> Self {
+    pub const fn new(position: BlockPos) -> Self {
         Self {
             position,
-            items: RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
+            items: papokin_inventory::LazyItemSlots::new(),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
@@ -173,26 +166,14 @@ impl Inventory for BarrelBlockEntity {
     }
 
     fn is_empty(&self) -> bool {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items.iter().all(ItemStack::is_empty)
+        self.items.is_empty()
     }
 
     fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        f(&items[slot]);
+        self.items.with_stack(slot, f);
     }
     fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = f(&mut items[slot]);
+        let changed = self.items.with_stack_mut(slot, f);
         if changed {
             self.mark_dirty();
         }
@@ -200,43 +181,31 @@ impl Inventory for BarrelBlockEntity {
     }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items[slot].clone()
+        self.items.get_stack(slot)
     }
 
     fn remove_stack(&self, slot: usize) -> ItemStack {
-        let mut items = self
+        let removed = self
             .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let removed = std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone());
+            .with_write(|items| std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone()));
         self.mark_dirty();
         removed
     }
 
     fn remove_stack_specific(&self, slot: usize, amount: u8) -> ItemStack {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let res = if !items[slot].is_empty() && amount > 0 {
-            items[slot].split(amount)
-        } else {
-            ItemStack::EMPTY.clone()
-        };
+        let res = self.items.with_write(|items| {
+            if !items[slot].is_empty() && amount > 0 {
+                items[slot].split(amount)
+            } else {
+                ItemStack::EMPTY.clone()
+            }
+        });
         self.mark_dirty();
         res
     }
 
     fn set_stack(&self, slot: usize, stack: ItemStack) {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items[slot] = stack;
+        self.items.with_write(|items| items[slot] = stack);
         self.mark_dirty();
     }
 
@@ -260,11 +229,7 @@ impl Inventory for BarrelBlockEntity {
 
 impl Clearable for BarrelBlockEntity {
     fn clear(&self) {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items.fill_with(|| ItemStack::EMPTY.clone());
+        self.items.clear();
         self.mark_dirty();
     }
 }

@@ -15,7 +15,7 @@ use papokin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
 
 pub struct ShulkerBoxBlockEntity {
     pub position: BlockPos,
-    pub items: RwLock<[ItemStack; Self::INVENTORY_SIZE]>,
+    pub items: papokin_inventory::LazyItemSlots<{ Self::INVENTORY_SIZE }>,
     pub dirty: AtomicBool,
     pub comparator_dirty: AtomicBool,
 
@@ -36,21 +36,16 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     where
         Self: Sized,
     {
-        let mut shulker_box = Self {
+        let shulker_box = Self {
             position,
-            items: RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
+            items: papokin_inventory::LazyItemSlots::new(),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
         };
 
-        papokin_inventory::sync_read_items_from_nbt(
-            nbt,
-            shulker_box
-                .items
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        // fill 仅在确有物品时物化槽数组（空箱保持零驻留）。
+        shulker_box.items.fill_from_nbt(nbt);
 
         shulker_box
     }
@@ -73,16 +68,16 @@ impl BlockEntity for ShulkerBoxBlockEntity {
     }
 
     fn collect_item_components(&self, stack: &mut ItemStack) {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let contents: Vec<(u8, ItemStack)> = items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| !item.is_empty())
-            .map(|(slot, item)| (slot as u8, item.clone()))
-            .collect();
+        let contents: Vec<(u8, ItemStack)> = self.items.with_read(|items| {
+            items.map_or_else(Vec::new, |items| {
+                items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| !item.is_empty())
+                    .map(|(slot, item)| (slot as u8, item.clone()))
+                    .collect()
+            })
+        });
 
         if !contents.is_empty() {
             stack.set_data_component(ContainerImpl { items: contents });
@@ -94,16 +89,17 @@ impl BlockEntity for ShulkerBoxBlockEntity {
             return;
         };
 
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        for (slot, item) in &container.items {
-            if let Some(target) = items.get_mut(*slot as usize) {
-                *target = item.clone();
-            }
+        if container.items.is_empty() {
+            return;
         }
+
+        self.items.with_write(|items| {
+            for (slot, item) in &container.items {
+                if let Some(target) = items.get_mut(*slot as usize) {
+                    *target = item.clone();
+                }
+            }
+        });
 
         self.mark_dirty();
     }
@@ -130,9 +126,7 @@ impl BlockEntity for ShulkerBoxBlockEntity {
 
     fn chunk_data_nbt(&self) -> Option<NbtCompound> {
         let mut nbt = NbtCompound::new();
-        if let Ok(items) = self.items.try_read() {
-            sync_write_items_to_nbt(items.as_slice(), &mut nbt);
-        }
+        self.items.try_write_to_nbt(&mut nbt);
         Some(nbt)
     }
 
@@ -163,10 +157,10 @@ impl ShulkerBoxBlockEntity {
     pub const ID: &'static str = "minecraft:shulker_box";
 
     #[must_use]
-    pub fn new(position: BlockPos) -> Self {
+    pub const fn new(position: BlockPos) -> Self {
         Self {
             position,
-            items: RwLock::new(from_fn(|_| ItemStack::EMPTY.clone())),
+            items: papokin_inventory::LazyItemSlots::new(),
             dirty: AtomicBool::new(false),
             comparator_dirty: AtomicBool::new(false),
             viewers: ViewerCountTracker::new(),
@@ -195,26 +189,14 @@ impl Inventory for ShulkerBoxBlockEntity {
     }
 
     fn is_empty(&self) -> bool {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items.iter().all(ItemStack::is_empty)
+        self.items.is_empty()
     }
 
     fn with_stack(&self, slot: usize, f: &mut dyn FnMut(&ItemStack)) {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        f(&items[slot]);
+        self.items.with_stack(slot, f);
     }
     fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = f(&mut items[slot]);
+        let changed = self.items.with_stack_mut(slot, f);
         if changed {
             self.mark_dirty();
         }
@@ -222,43 +204,31 @@ impl Inventory for ShulkerBoxBlockEntity {
     }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
-        let items = self
-            .items
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items[slot].clone()
+        self.items.get_stack(slot)
     }
 
     fn remove_stack(&self, slot: usize) -> ItemStack {
-        let mut items = self
+        let removed = self
             .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let removed = std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone());
+            .with_write(|items| std::mem::replace(&mut items[slot], ItemStack::EMPTY.clone()));
         self.mark_dirty();
         removed
     }
 
     fn remove_stack_specific(&self, slot: usize, amount: u8) -> ItemStack {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let res = if !items[slot].is_empty() && amount > 0 {
-            items[slot].split(amount)
-        } else {
-            ItemStack::EMPTY.clone()
-        };
+        let res = self.items.with_write(|items| {
+            if !items[slot].is_empty() && amount > 0 {
+                items[slot].split(amount)
+            } else {
+                ItemStack::EMPTY.clone()
+            }
+        });
         self.mark_dirty();
         res
     }
 
     fn set_stack(&self, slot: usize, stack: ItemStack) {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items[slot] = stack;
+        self.items.with_write(|items| items[slot] = stack);
         self.mark_dirty();
     }
 
@@ -282,11 +252,7 @@ impl Inventory for ShulkerBoxBlockEntity {
 
 impl Clearable for ShulkerBoxBlockEntity {
     fn clear(&self) {
-        let mut items = self
-            .items
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        items.fill_with(|| ItemStack::EMPTY.clone());
+        self.items.clear();
         self.mark_dirty();
     }
 }
