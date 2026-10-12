@@ -1,3 +1,4 @@
+use crate::entity::ai::control::MoveControlTrait;
 use papokin_data::data_component_impl::EquipmentSlot;
 use papokin_data::entity::EntityType;
 use papokin_data::item::Item;

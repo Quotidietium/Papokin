@@ -1101,6 +1101,29 @@ pub(crate) fn read_leash_target(nbt: &NbtCompound) -> Option<LeashTarget> {
     Some(LeashTarget::Knot(BlockPos::new(x, y, z)))
 }
 
+/// 共享的群系 `Arc` 盒缓存。
+///
+/// `current_biome: ArcSwap<&'static Biome>` 需要堆上的 `Arc` 载体
+/// （裸引用无 `RefCnt`，轮次 33 结论），而群系出自 const 静态注册表、
+/// 集合有限：每个群系只建一次 `Arc` 盒，全体实体共享克隆——构造与
+/// 群系切换路径零分配（旧实现每实体一盒、每切换一盒）。
+// `Arc<&'static Biome>` 的堆盒由 ArcSwap 硬性要求（裸引用无
+// RefCnt，轮次 33 结论），clippy 的 redundant_allocation 建议不适用。
+#[allow(clippy::redundant_allocation)]
+fn shared_biome_arc(biome: &'static Biome) -> Arc<&'static Biome> {
+    static BIOME_ARCS: std::sync::OnceLock<
+        std::sync::Mutex<rustc_hash::FxHashMap<usize, Arc<&'static Biome>>>,
+    > = std::sync::OnceLock::new();
+    let cache = BIOME_ARCS.get_or_init(|| std::sync::Mutex::new(rustc_hash::FxHashMap::default()));
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard
+        .entry(std::ptr::from_ref(biome) as usize)
+        .or_insert_with(|| Arc::new(biome))
+        .clone()
+}
+
 impl Entity {
     pub fn new(
         world: Arc<World>,
@@ -1210,7 +1233,7 @@ impl Entity {
 
             riding_cooldown: AtomicI32::new(0),
             age: AtomicI32::new(0),
-            current_biome: ArcSwap::new(Arc::new(current_biome)),
+            current_biome: ArcSwap::new(shared_biome_arc(current_biome)),
             last_biome_update_pos: AtomicCell::new(BlockPos::new(floor_x, floor_y, floor_z)),
             portal_cooldown: AtomicU32::new(0),
             portal_manager: std::sync::Mutex::new(None),
@@ -1270,7 +1293,7 @@ impl Entity {
         // Guard 解引用到 Arc<&Biome>，再解一层才是 &Biome（静态引用
         // 直接比指针身份，不触碰巨大的 Biome 常量数据）。
         if !std::ptr::eq(**self.current_biome.load(), biome) {
-            self.current_biome.store(Arc::new(biome));
+            self.current_biome.store(shared_biome_arc(biome));
         }
         self.last_biome_update_pos.store(block_pos);
     }

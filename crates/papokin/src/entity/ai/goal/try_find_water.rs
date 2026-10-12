@@ -1,3 +1,4 @@
+use crate::entity::ai::control::MoveControlTrait;
 use std::sync::atomic::Ordering;
 
 use papokin_data::fluid::Fluid;

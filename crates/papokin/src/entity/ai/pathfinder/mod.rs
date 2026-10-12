@@ -2561,7 +2561,17 @@ impl PathNavigationTrait for AmphibiousPathNavigation {
 }
 
 pub struct Navigator {
-    inner: Box<dyn PathNavigationTrait>,
+    inner: NavigatorInner,
+}
+
+/// 导航的内联承载（轮次 44）：默认地面导航零堆分配平铺进
+/// 枚举（旧 `Box<dyn>` 每生物一次装盒分配），特殊导航仍按需
+/// 装盒，能力面不变。两变体尺寸差是刻意的：热路径变体内联
+/// （总驻留字节不变，少一次分配与一次间接寻址）。
+#[allow(clippy::large_enum_variant)]
+enum NavigatorInner {
+    Ground(GroundPathNavigation),
+    Custom(Box<dyn PathNavigationTrait>),
 }
 
 impl Default for Navigator {
@@ -2574,13 +2584,15 @@ impl Navigator {
     #[must_use]
     pub fn new<N: PathNavigationTrait + 'static>(nav: N) -> Self {
         Self {
-            inner: Box::new(nav),
+            inner: NavigatorInner::Custom(Box::new(nav)),
         }
     }
 
     #[must_use]
     pub fn ground() -> Self {
-        Self::new(GroundPathNavigation::new())
+        Self {
+            inner: NavigatorInner::Ground(GroundPathNavigation::new()),
+        }
     }
 
     #[must_use]
@@ -2608,13 +2620,19 @@ impl Deref for Navigator {
     type Target = dyn PathNavigationTrait;
 
     fn deref(&self) -> &Self::Target {
-        &*self.inner
+        match &self.inner {
+            NavigatorInner::Ground(nav) => nav,
+            NavigatorInner::Custom(nav) => nav.as_ref(),
+        }
     }
 }
 
 impl DerefMut for Navigator {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.inner
+        match &mut self.inner {
+            NavigatorInner::Ground(nav) => nav,
+            NavigatorInner::Custom(nav) => nav.as_mut(),
+        }
     }
 }
 

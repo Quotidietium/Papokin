@@ -1,3 +1,4 @@
+use crate::entity::ai::control::MoveControlTrait;
 use crate::entity::ai::util::RandomExt;
 use papokin_protocol::java::client::play::CWorldEvent;
 use papokin_util::math::vector3::Vector3;

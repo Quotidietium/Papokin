@@ -58,7 +58,9 @@ impl SlimeEntity {
                 .move_control
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *move_control = Box::new(SlimeMoveControl::new(Arc::downgrade(&mob_arc)));
+            *move_control = crate::entity::ai::control::AnyMoveControl::Slime(
+                SlimeMoveControl::new(Arc::downgrade(&mob_arc)),
+            );
 
             let mut goal_selector = mob_arc
                 .entity
