@@ -7,18 +7,14 @@ use papokin_util::math::vector3::Vector3;
 use papokin_util::random::xoroshiro128::Xoroshiro;
 use papokin_util::random::{RandomImpl, get_seed};
 use std::any::Any;
-use std::sync::RwLock;
-use std::{
-    array::from_fn,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use crate::block::viewer::{ViewerCountListener, ViewerCountTracker, ViewerCountTrackerExt};
 use crate::world::{BlockFlags, World};
-use papokin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
+use papokin_inventory::{Clearable, Inventory};
 
 use super::BlockEntity;
 

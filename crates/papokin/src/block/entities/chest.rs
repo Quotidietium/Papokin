@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex as StdMutex, RwLock, atomic::AtomicBool};
+use std::sync::{Arc, Mutex as StdMutex, atomic::AtomicBool};
 
 use papokin_data::item_stack::ItemStack;
 use papokin_util::math::position::BlockPos;

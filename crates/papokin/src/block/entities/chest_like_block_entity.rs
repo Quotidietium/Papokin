@@ -103,12 +103,7 @@ macro_rules! impl_block_entity_for_chest {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .is_some();
-                if !self
-                    .loot_table
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .is_some()
-                {
+                if !has_loot_table {
                     self.items.try_write_to_nbt(&mut nbt);
                 }
                 Some(nbt)
@@ -277,9 +272,7 @@ macro_rules! impl_chest_helper_methods {
 
             #[must_use]
             pub const fn new(position: papokin_util::math::position::BlockPos) -> Self {
-                use std::array::from_fn;
                 use std::sync::Mutex as StdMutex;
-                use std::sync::RwLock;
                 use std::sync::atomic::AtomicBool;
 
                 Self {

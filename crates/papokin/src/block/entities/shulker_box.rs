@@ -4,14 +4,13 @@ use papokin_data::sound::{Sound, SoundCategory};
 use papokin_nbt::compound::NbtCompound;
 use papokin_util::math::position::BlockPos;
 use std::any::Any;
-use std::sync::RwLock;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{array::from_fn, sync::Arc};
 
 use crate::block::entities::BlockEntity;
 use crate::block::viewer::{ViewerCountListener, ViewerCountTracker, ViewerCountTrackerExt};
 use crate::world::World;
-use papokin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
+use papokin_inventory::{Clearable, Inventory};
 
 pub struct ShulkerBoxBlockEntity {
     pub position: BlockPos,

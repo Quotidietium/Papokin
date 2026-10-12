@@ -1,12 +1,10 @@
 use crate::block::entities::BlockEntity;
 use papokin_data::item_stack::ItemStack;
-use papokin_inventory::{Clearable, Inventory, sync_write_items_to_nbt};
+use papokin_inventory::{Clearable, Inventory};
 use papokin_nbt::compound::NbtCompound;
 use papokin_util::math::position::BlockPos;
 use std::any::Any;
-use std::array::from_fn;
 use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct ShelfBlockEntity {
