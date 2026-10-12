@@ -59,6 +59,54 @@ pub const ARMOR_UPGRADE_MATERIAL_ATTEMPTS: f32 = 3.0;
 /// 来自原版 `Mob.DEFAULT_EQUIPMENT_DROP_CHANCE`。
 pub const DEFAULT_EQUIPMENT_DROP_CHANCE: f32 = 0.085;
 
+/// 装备掉落概率表（8 判别槽直索引）。
+///
+/// 原 `FxHashMap<EquipmentSlot, f32>` 只显式写入少数槽位、
+/// 读取回落 [`DEFAULT_EQUIPMENT_DROP_CHANCE`]——直索引数组以
+/// 默认值铺底后两态合一，且免去逐实体 `Arc<Mutex<..>>` 堆盒
+/// 与逐键 `EquipmentSlot` 克隆（该枚举携 `Cow<str>` 达 56B）。
+/// 序列化（`write_drop_chances`）仍按「非默认值才落盘」过滤，
+/// 存档输出与旧表逐字节一致。
+#[derive(Clone)]
+pub struct DropChances([f32; 8]);
+
+impl Default for DropChances {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DropChances {
+    /// 全默认值的新表。
+    #[must_use]
+    pub const fn new() -> Self {
+        Self([DEFAULT_EQUIPMENT_DROP_CHANCE; 8])
+    }
+
+    /// 读取槽位掉落概率（未显式设置过即默认值，语义与旧表
+    /// 「缺键回落默认」一致）。
+    #[must_use]
+    pub const fn get(&self, slot: &EquipmentSlot) -> f32 {
+        self.0[slot.discriminant() as usize]
+    }
+
+    /// 设置槽位掉落概率。
+    pub const fn set(&mut self, slot: &EquipmentSlot, chance: f32) {
+        self.0[slot.discriminant() as usize] = chance;
+    }
+
+    /// 迭代全部槽位与概率（判别值固定序）。
+    ///
+    /// 旧 `HashMap::iter` 只产出显式写入过的键；消费方
+    /// （存档写入）本就以默认值过滤，全量迭代经同一过滤后
+    /// 输出等价。
+    pub fn iter_entries(&self) -> impl Iterator<Item = (&'static EquipmentSlot, f32)> {
+        (0..8).filter_map(|idx| {
+            EquipmentSlot::from_discriminant(idx as i8).map(|slot| (slot, self.0[idx as usize]))
+        })
+    }
+}
+
 /// 生成时武器获得附魔的基础概率（`specialMultiplier` 之前）。
 /// 来自原版 `Mob.MAX_ENCHANTED_WEAPON_CHANCE`。
 pub const WEAPON_ENCHANT_CHANCE: f32 = 0.25;
@@ -1041,7 +1089,7 @@ pub fn equip_mob_on_spawn(mob: &dyn EntityBase, world: &Arc<crate::world::World>
 
     for (slot, stack, drop_chance) in changes_with_drops {
         equipment.put(&slot, stack.clone());
-        drop_chances.insert(slot.clone(), drop_chance);
+        drop_chances.set(&slot, drop_chance);
         equipment_changes.push((slot, stack));
     }
 

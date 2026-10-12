@@ -86,7 +86,7 @@ impl PiglinAi {
             EquipmentSlot::LEGS,
             EquipmentSlot::FEET,
         ] {
-            if let Some(stack) = guard.equipment.get(&slot)
+            if let Some(stack) = guard.get_opt(&slot)
                 && !stack.is_empty()
                 && (stack.item.has_tag(&tag::Item::MINECRAFT_PIGLIN_SAFE_ARMOR)
                     || stack.item.has_tag(&tag::Item::MINECRAFT_PIGLIN_LOVED))
@@ -103,7 +103,7 @@ impl PiglinAi {
             return false;
         };
         for slot in [EquipmentSlot::MAIN_HAND, EquipmentSlot::OFF_HAND] {
-            if let Some(stack) = guard.equipment.get(&slot)
+            if let Some(stack) = guard.get_opt(&slot)
                 && !stack.is_empty()
                 && Self::is_loved_item(stack)
             {

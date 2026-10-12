@@ -95,7 +95,7 @@ pub struct LivingEntity {
     pub fall_distance: AtomicCell<f32>,
     pub active_effects: std::sync::Mutex<FxHashMap<&'static StatusEffect, Effect>>,
     pub entity_equipment: Arc<std::sync::Mutex<EntityEquipment>>,
-    pub equipment_drop_chances: Arc<std::sync::Mutex<FxHashMap<EquipmentSlot, f32>>>,
+    pub equipment_drop_chances: std::sync::Mutex<crate::entity::mob::equipment::DropChances>,
     pub movement_input: AtomicCell<Vector3<f64>>,
     pub equipment_slots: Arc<FxHashMap<usize, EquipmentSlot>>,
 
@@ -287,7 +287,9 @@ impl LivingEntity {
             livings_flags: AtomicU8::new(0),
             active_effects: std::sync::Mutex::new(FxHashMap::default()),
             entity_equipment: Arc::new(std::sync::Mutex::new(EntityEquipment::new())),
-            equipment_drop_chances: Arc::new(std::sync::Mutex::new(FxHashMap::default())),
+            equipment_drop_chances: std::sync::Mutex::new(
+                crate::entity::mob::equipment::DropChances::new(),
+            ),
             equipment_slots: EQUIPMENT_SLOTS.clone(),
             jumping: AtomicBool::new(false),
             jumping_cooldown: AtomicU8::new(0),
@@ -551,8 +553,7 @@ impl LivingEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard
-            .equipment
-            .iter()
+            .iter_present()
             .map(|(slot, stack)| (slot.clone(), stack.clone()))
             .collect()
     }
@@ -1460,12 +1461,9 @@ impl LivingEntity {
                 .entity_equipment
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            equipment
-                .equipment
-                .get(&EquipmentSlot::FEET)
-                .map_or(0, |boots| {
-                    boots.get_enchantment_level(&Enchantment::FROST_WALKER)
-                })
+            equipment.get_opt(&EquipmentSlot::FEET).map_or(0, |boots| {
+                boots.get_enchantment_level(&Enchantment::FROST_WALKER)
+            })
         };
         if level <= 0 || !self.entity.on_ground.load(SeqCst) {
             return;
@@ -2266,9 +2264,8 @@ impl LivingEntity {
                 .entity_equipment
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .equipment
-                .keys()
-                .cloned()
+                .iter_present()
+                .map(|(slot, _)| slot.clone())
                 .collect();
             for slot in stored {
                 if !slots.contains(&slot) {
@@ -2279,10 +2276,7 @@ impl LivingEntity {
         };
 
         for slot in &slots_to_drop {
-            let mut chance = drop_chances
-                .get(slot)
-                .copied()
-                .unwrap_or(DEFAULT_EQUIPMENT_DROP_CHANCE);
+            let mut chance = drop_chances.get(slot);
             // 高于 1.0 的概率表示必定掉落且完好无损。
             let preserved = chance > 1.0;
             // 原版近似：EnchantmentHelper.processEquipmentDropChance
@@ -2296,7 +2290,6 @@ impl LivingEntity {
                 .entity_equipment
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .equipment
                 .remove(slot)
                 .unwrap_or_else(|| ItemStack::EMPTY.clone());
             if item.is_empty() {
@@ -2573,14 +2566,12 @@ impl LivingEntity {
                         .entity_equipment
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .equipment
-                        .insert(slot, stack);
+                        .put(&slot, stack);
                 } else {
                     self.entity_equipment
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .equipment
-                        .insert(slot, stack);
+                        .put(&slot, stack);
                 }
                 self.set_health(1.0);
                 self.entity
@@ -2643,8 +2634,7 @@ impl LivingEntity {
                 .filter(|(_, slot)| slot.is_armor_slot())
                 .filter_map(|(index, slot)| {
                     equipment_lock
-                        .equipment
-                        .get(slot)
+                        .get_opt(slot)
                         .cloned()
                         .map(|stack| (*index, stack, slot.clone()))
                 })
@@ -2714,8 +2704,7 @@ impl LivingEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         equipment
-            .equipment
-            .get(&EquipmentSlot::MAIN_HAND)
+            .get_opt(&EquipmentSlot::MAIN_HAND)
             .cloned()
             .unwrap_or_else(|| ItemStack::EMPTY.clone())
     }
@@ -2740,7 +2729,7 @@ impl LivingEntity {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match equipment.equipment.get(&EquipmentSlot::MAIN_HAND) {
+        match equipment.get_opt(&EquipmentSlot::MAIN_HAND) {
             Some(stack) => f(stack),
             None => f(ItemStack::EMPTY),
         }
@@ -2773,8 +2762,7 @@ impl LivingEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         equipment
-            .equipment
-            .get(slot)
+            .get_opt(slot)
             .cloned()
             .unwrap_or_else(|| ItemStack::EMPTY.clone())
     }
@@ -2794,7 +2782,7 @@ impl LivingEntity {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match equipment.equipment.get(slot) {
+        match equipment.get_opt(slot) {
             Some(stack) => f(stack),
             None => f(ItemStack::EMPTY),
         }
@@ -3056,7 +3044,7 @@ impl LivingEntity {
                 EquipmentSlot::LEGS,
                 EquipmentSlot::FEET,
             ] {
-                if let Some(stack) = equipment_lock.equipment.get(&slot)
+                if let Some(stack) = equipment_lock.get_opt(&slot)
                     && !stack.is_empty()
                     && let Some(modifiers) = stack.get_data_component::<AttributeModifiersImpl>()
                 {
@@ -3146,7 +3134,7 @@ impl LivingEntity {
                 EquipmentSlot::LEGS,
                 EquipmentSlot::FEET,
             ] {
-                if let Some(stack) = equipment_lock.equipment.get(&slot)
+                if let Some(stack) = equipment_lock.get_opt(&slot)
                     && !stack.is_empty()
                     && let Some(enchantments) = stack.get_data_component::<EnchantmentsImpl>()
                 {
@@ -3401,7 +3389,7 @@ impl LivingEntity {
                             .entity_equipment
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(stack) = equipment_guard.equipment.get_mut(&slot) {
+                        if let Some(stack) = equipment_guard.get_mut(&slot) {
                             let mut event = crate::plugin::api::events::entity::entity_damage_item::EntityDamageItemEvent::new(
                                 self.entity.entity_id,
                                 stack.clone(),

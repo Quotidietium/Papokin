@@ -3115,7 +3115,7 @@ impl World {
                         .entity_equipment
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    for (slot, item_stack) in &equipment_guard.equipment {
+                    for (slot, item_stack) in equipment_guard.iter_present() {
                         equipment_list.push((slot.discriminant(), item_stack.clone()));
                     }
                     equipment_list
@@ -3300,7 +3300,7 @@ impl World {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for (slot, item_stack) in &equipment_guard.equipment {
+        for (slot, item_stack) in equipment_guard.iter_present() {
             equipment_list.push((slot.discriminant(), item_stack.clone()));
         }
         drop(equipment_guard);

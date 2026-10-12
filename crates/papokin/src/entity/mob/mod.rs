@@ -285,8 +285,6 @@ impl MobEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(slot)
-            .copied()
-            .unwrap_or(crate::entity::mob::equipment::DEFAULT_EQUIPMENT_DROP_CHANCE)
     }
 
     pub fn set_guaranteed_drop(&self, slot: &EquipmentSlot) {
@@ -294,7 +292,7 @@ impl MobEntity {
             .equipment_drop_chances
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(slot.clone(), Self::GUARANTEED_DROP_CHANCE);
+            .set(slot, Self::GUARANTEED_DROP_CHANCE);
     }
 
     /// 装备 `stack` 并通知正在追踪的客户端，返回槽位中原有的物品。
@@ -332,9 +330,9 @@ impl MobEntity {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut compound = NbtCompound::new();
-        for (slot, chance) in chances.iter() {
-            if *chance != crate::entity::mob::equipment::DEFAULT_EQUIPMENT_DROP_CHANCE {
-                compound.put_float(slot.to_name(), *chance);
+        for (slot, chance) in chances.iter_entries() {
+            if chance != crate::entity::mob::equipment::DEFAULT_EQUIPMENT_DROP_CHANCE {
+                compound.put_float(slot.to_name(), chance);
             }
         }
         if !compound.child_tags.is_empty() {
@@ -355,7 +353,7 @@ impl MobEntity {
             if let Some(slot) = EquipmentSlot::get_from_name(name)
                 && let Some(chance) = tag.extract_float()
             {
-                chances.insert(slot.clone(), chance);
+                chances.set(slot, chance);
             }
         }
     }
@@ -1185,7 +1183,7 @@ pub trait Mob: EntityBase + Send + Sync {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(stack) = equipment.equipment.get_mut(slot)
+        if let Some(stack) = equipment.get_mut(slot)
             && !stack.is_empty()
             && rand::random::<f32>() < chance * difficulty.special_multiplier
         {

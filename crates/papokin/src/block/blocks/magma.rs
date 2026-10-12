@@ -36,8 +36,7 @@ impl BlockBehaviour for MagmaBlock {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 equipment
-                    .equipment
-                    .get(&EquipmentSlot::FEET)
+                    .get_opt(&EquipmentSlot::FEET)
                     .is_some_and(|boots| {
                         boots.get_enchantment_level(&Enchantment::FROST_WALKER) != 0
                     })

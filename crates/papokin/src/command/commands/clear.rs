@@ -57,7 +57,7 @@ fn clear_player(target: &Player, item: &ItemPredicate, max: i32) -> i32 {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for slot in entity_equipment_lock.equipment.values_mut() {
+        for slot in entity_equipment_lock.iter_present_mut() {
             test_and_clear(&mut count, &mut max, item, slot, &mut is_done);
             if is_done {
                 break;

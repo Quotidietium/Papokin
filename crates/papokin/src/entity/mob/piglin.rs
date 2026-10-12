@@ -987,7 +987,7 @@ impl PiglinEntity {
                     .entity_equipment
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                for (slot, item) in &src_equip.equipment {
+                for (slot, item) in src_equip.iter_present() {
                     dst_equip.put(slot, item.clone());
                 }
             }

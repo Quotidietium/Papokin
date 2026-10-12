@@ -35,8 +35,7 @@ pub(crate) fn can_entity_walk_on_powder_snow(entity: &dyn EntityBase) -> bool {
 
     living.entity_equipment.try_lock().is_ok_and(|equipment| {
         equipment
-            .equipment
-            .get(&EquipmentSlot::FEET)
+            .get_opt(&EquipmentSlot::FEET)
             .is_some_and(|boots| boots.item == &Item::LEATHER_BOOTS)
     })
 }

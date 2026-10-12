@@ -2644,7 +2644,7 @@ impl Entity {
         };
 
         if let Ok(equipment) = living.entity_equipment.try_lock() {
-            for (slot, stack) in &equipment.equipment {
+            for (slot, stack) in equipment.iter_present() {
                 if (*slot == EquipmentSlot::HEAD
                     || *slot == EquipmentSlot::CHEST
                     || *slot == EquipmentSlot::LEGS

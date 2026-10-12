@@ -4662,7 +4662,7 @@ impl Player {
                     .entity_equipment
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                for (slot, item) in &mut equipment.equipment {
+                for (slot, item) in equipment.iter_slots_mut() {
                     if matches!(slot, EquipmentSlot::MainHand(_))
                         || item.is_empty()
                         || item.get_enchantment_level(&Enchantment::BINDING_CURSE) > 0
@@ -6619,7 +6619,7 @@ impl Player {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for stack in equipment.equipment.values() {
+        for stack in equipment.iter_present().map(|(_, stack)| stack) {
             if !stack.is_empty() && stack.item.id == item.id {
                 return true;
             }
@@ -6693,7 +6693,7 @@ impl NBTStorage for PlayerInventory {
                 .entity_equipment
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for (slot, stack) in &equipment_guard.equipment {
+            for (slot, stack) in equipment_guard.iter_present() {
                 if !stack.is_empty() {
                     let mut item_compound = NbtCompound::new();
                     stack.write_item_stack(&mut item_compound);

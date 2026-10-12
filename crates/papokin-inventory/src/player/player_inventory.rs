@@ -340,7 +340,7 @@ impl PlayerInventory {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match equipment.equipment.get(slot) {
+        match equipment.get_opt(slot) {
             Some(stack) => f(stack),
             None => f(ItemStack::EMPTY),
         }

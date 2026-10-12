@@ -581,10 +581,15 @@ impl HostLivingEntity for PluginHostState {
                 papokin_data::data_component_impl::EquipmentSlot,
                 papokin_data::item_stack::ItemStack,
             )> = equipment
-                .equipment
-                .drain()
-                .map(|(slot, _)| (slot, papokin_data::item_stack::ItemStack::EMPTY.clone()))
+                .iter_present()
+                .map(|(slot, _)| {
+                    (
+                        slot.clone(),
+                        papokin_data::item_stack::ItemStack::EMPTY.clone(),
+                    )
+                })
                 .collect();
+            equipment.clear();
             drop(equipment);
 
             living.send_equipment_changes(&slots_to_clear);

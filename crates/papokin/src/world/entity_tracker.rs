@@ -425,7 +425,7 @@ impl TrackedEntity {
             // 锁内以借用直接构造（原时序同样在锁内 serialize；
             // 空槽过滤随迭代进行，免去中间列表的双重深克隆）
             let mut equipment: Vec<(i8, ItemStackSerializer)> = Vec::new();
-            for (slot, item_stack) in &equipment_guard.equipment {
+            for (slot, item_stack) in equipment_guard.iter_present() {
                 if !item_stack.is_empty() {
                     equipment.push((slot.discriminant(), ItemStackSerializer::from(item_stack)));
                 }

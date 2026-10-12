@@ -219,12 +219,12 @@ impl ArmorStandEntity {
             .entity_equipment
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for stack in equipment.equipment.values() {
+        for stack in equipment.iter_present().map(|(_, stack)| stack) {
             if !stack.is_empty() {
                 world.drop_stack(&entity.block_pos.load(), stack.clone());
             }
         }
-        equipment.equipment.clear();
+        equipment.clear();
     }
 
     fn break_and_drop_items(&self) {

@@ -304,7 +304,7 @@ impl CreakingEntity {
     fn is_player_disguised(player: &Player) -> bool {
         let equipment = player.living_entity.entity_equipment.try_lock();
         if let Ok(equipment) = equipment
-            && let Some(head_stack) = equipment.equipment.get(&EquipmentSlot::HEAD)
+            && let Some(head_stack) = equipment.get_opt(&EquipmentSlot::HEAD)
             && !head_stack.is_empty()
         {
             return head_stack.item == &Item::CARVED_PUMPKIN;

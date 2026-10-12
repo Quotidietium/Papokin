@@ -334,8 +334,7 @@ impl CombatTracker {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(stack) = equip_guard
-                    .equipment
-                    .get(&papokin_data::data_component_impl::EquipmentSlot::MAIN_HAND)
+                    .get_opt(&papokin_data::data_component_impl::EquipmentSlot::MAIN_HAND)
                     && !stack.is_empty()
                     && let Some(custom_name) = stack
                         .get_data_component::<papokin_data::data_component_impl::CustomNameImpl>(
