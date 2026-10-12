@@ -2,7 +2,7 @@
 
 > 基线：2026-09-19 由 codebase-analyzer 技能生成（采样深度分析模式），此后随代码演进持续修订。
 > 范围：`F:\Github\repo\Papokin` 全仓库，**排除 `REF/` 参考资料目录**（用户指定）
-> 规模：20 个 workspace 成员（17 生产 crate + benchmark + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2825 个 Rust 文件 · 约 143.8 万行 · 测试基线 1226 通过（2026-10-06）
+> 规模：20 个 workspace 成员（17 生产 crate + benchmark + 2 tools；crates/ 下另有非 Rust 的 papokin-plugin-wit WIT 契约包）· 2826 个 Rust 文件 · 约 143.9 万行 · 测试基线 1266 通过（2026-10-12）
 >
 > **快照说明**：01–06 为架构分析文档，已随 Bedrock 移除与 Papokin 改名同步修订；其中 `文件:行号` 形式的证据标注可能随代码演进漂移，论断以就近代码为准。历史记录类文档（07–11、13–15）按成文时点保留，记录中的旧状态是其历史事实的一部分。
 
@@ -74,6 +74,7 @@
 | [轮次 37](report/perf/round-37-手持读取借用化.md) | held_item/off_hand_item/get_stack_in_hand 三张读脸 86 调用点全量甄别（所有权必须/读改写混合/并发快照/事件入参/攻击摊销/恒 Some/MobEntity 异面/WIT 边界全豁免）后收编纯读白付约 32 点：新增 PlayerInventory+LivingEntity 借用 API 六方法（锁内借用回调，回调体只调 ItemStack 方法守重入约束）；挖掘速度/收获/效率热路径、AI 每 tick 双手探测（beg/tempt/piglin）、统计读取、附魔等级簇、手别选择探测（spear/map/spawn_egg）；living.rs 损伤事件补订阅者先行门；三处语义偏差当场回退并注释（attack 摊销/恒 Some/并发快照） | 内存+CPU | 10 万混合轮（挖掘 3 读+AI 2 读+统计 1 读+每 4 轮损伤事件门，选中方块带 2 组件）：1 875 000 allocs/45.00MB→**0**（−100%）、耗时 6.7×、语义指纹全等；add_one_item RMW/装备广播簇/攻击路径快照分离转下轮；papokin 429 测试绿 |
 | [轮次 38](report/perf/round-38-漏斗传输锁稳定读改写.md) | 轮 34 并发窗口与轮 36 归档的 add_one_item 克隆-改写-set_stack 收口：新增 Inventory::with_stack_mut 锁稳定 RMW（写锁内原位改写，回调返回是否已修改为提交门，false 不得改动；默认回退 get_stack+条件 set_stack）；19 个实现全量覆写逐一复刻各自 set_stack 副作用（mark_dirty/合成器禁用槽前置/讲台回首页/装备槽 notify）；迁移 add_one_item（合并零克隆、满载扫描零克隆、空槽填入仅一次 item 克隆）+ 合成器逐槽扣减 + /loot 分发循环（mem::replace 整栈移入）；屏幕处理器事务引擎挂账另立轮 | 内存+CPU+并发正确性 | 10 万混合轮（每轮合并+每 8 轮满载扫描 5 槽/扣减 3 槽+每 16 轮填入）：618 750 allocs/14.55MB→**3**/72B（−99.9995%）、耗时 23.5×、语义指纹全等；papokin 429 测试绿 |
 | [轮次 39](report/perf/round-39-屏幕处理器插入引擎锁稳定读改写.md) | 轮 38 挂账的事务引擎评估收口：引擎提交粒度本就逐槽（跨槽无原子性无回滚，点击级串行化由条带锁承担），原位改写即逐槽 RMW。Inventory::with_stack_mut 演进返回 bool（19 覆写）；新增 Slot::with_stack_mut（透传物品栏覆写，全部槽位类型即时受益）；insert_item 两趟（合并趟同物原位加/异物与已满槽克隆白付清零、空槽趟借用探测+回调内复查）、can_fully_insert 预检借用化、QuickMove 重试环、insert_stack_count 五处迁移；Swap 快照对调/收纳袋拦截簇/try_take_stack_range 显式豁免并记录理由 | 内存+CPU | 10 万混合轮（每轮合并趟 10 占用槽+空槽置入+重试探测 2；每 8 轮结果取出预检+合并）：4 725 000 allocs/113.40MB→**375 000**/9.00MB（−92.1%）、耗时 7.7×、语义指纹全等；新臂余量为 split 两臂同付成本；papokin 429 测试绿 |
+| [轮次 40](report/perf/round-40-复合标签紧凑映射.md) | NBT 复合标签容器紧凑化：`NbtCompound` 由 `HashMap<Box<str>, NbtTag>`（表槽余量+控制字节+逐键分配、`NbtTag` 因内联 48B 哈希映射达 56B）改插入序 `NbtMap`（Vec 承载，HashMap 兼容门面全仓约百处调用点仅 2 处适配）；相等性键序无关、insert 原位替换后者胜、迭代序由进程任意固定为插入序（NBT 线上格式不定义键序）；`put` 替换路径零键分配 | 内存+CPU | 15000 复合标签三形语料：驻留 60.58→35.60 MB（1.70×，每标签 4039→2373 B）、`NbtTag` 56→32B、空复合内联 48→24B、构建 1.48×/查找 2.88×/序列化回读 1.17×/克隆 1.34× 且分配不增；内容与查找双指纹经生产解析器回读全等；workspace 1266 测试 0 失败 |
 
 ## 核心发现（十件事）
 
