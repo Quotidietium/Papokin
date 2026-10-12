@@ -112,13 +112,15 @@ impl Inventory for EnderChestInventory {
         }
     }
 
-    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
         let mut stacks = self
             .items
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if slot < Self::INVENTORY_SIZE {
-            let _ = f(&mut stacks[slot]);
+            f(&mut stacks[slot])
+        } else {
+            false
         }
     }
 

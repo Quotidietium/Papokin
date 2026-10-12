@@ -65,11 +65,11 @@ impl Inventory for DoubleInventory {
             self.first.with_stack(slot, f);
         }
     }
-    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
         if slot >= self.first.size() {
-            self.second.with_stack_mut(slot - self.first.size(), f);
+            self.second.with_stack_mut(slot - self.first.size(), f)
         } else {
-            self.first.with_stack_mut(slot, f);
+            self.first.with_stack_mut(slot, f)
         }
     }
 

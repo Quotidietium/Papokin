@@ -60,13 +60,17 @@ pub trait Inventory: Send + Sync + Clearable {
     /// - 回调内不得调用同一物品栏的任何方法（覆写方在持锁状态下
     ///   回调，重入可能死锁），只能读写传入的物品堆。
     ///
+    /// 返回回调是否提交了修改（未覆写回退路径下即是否有写入）。
+    ///
     /// 默认实现回退为 `get_stack` + 条件 `set_stack`（语义等价，
     /// 仅失去锁稳定性与省克隆收益）。
-    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
         let mut stack = self.get_stack(slot);
-        if f(&mut stack) {
+        let changed = f(&mut stack);
+        if changed {
             self.set_stack(slot, stack);
         }
+        changed
     }
 
     fn get_stack(&self, slot: usize) -> ItemStack;

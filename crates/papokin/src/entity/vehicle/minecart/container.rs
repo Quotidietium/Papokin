@@ -138,12 +138,12 @@ impl Inventory for MinecartInventory {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         f(&items[slot]);
     }
-    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) {
+    fn with_stack_mut(&self, slot: usize, f: &mut dyn FnMut(&mut ItemStack) -> bool) -> bool {
         let mut items = self
             .items
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = f(&mut items[slot]);
+        f(&mut items[slot])
     }
 
     fn get_stack(&self, slot: usize) -> ItemStack {
