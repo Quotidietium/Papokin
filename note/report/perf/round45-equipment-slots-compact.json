@@ -1,0 +1,55 @@
+{
+  "corpus": {
+    "deaths": 5000,
+    "entities": 20000,
+    "hostile_ratio": "45%",
+    "read_rounds": 20
+  },
+  "gates": [
+    {
+      "detail": "0xb605d2b1ed397b9d vs 0xb605d2b1ed397b9d",
+      "name": "电池指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "9753024 → 4481024 B",
+      "name": "驻留字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "62001 → 29001",
+      "name": "构造+装备分配次数下降",
+      "passed": true
+    },
+    {
+      "detail": "×4.367",
+      "name": "读电池耗时不劣化（≥0.91×）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "battery_ms": 11.7725,
+    "content_fingerprint": "0xb605d2b1ed397b9d",
+    "death_allocs": 4500,
+    "resident_bytes": 4481024,
+    "spawn_allocs": 29001,
+    "spawn_ms": 2.1158
+  },
+  "old": {
+    "battery_ms": 51.4115,
+    "content_fingerprint": "0xb605d2b1ed397b9d",
+    "death_allocs": 4500,
+    "resident_bytes": 9753024,
+    "spawn_allocs": 62001,
+    "spawn_ms": 7.2433000000000005
+  },
+  "outcome": "positive",
+  "round": 45,
+  "sizes": {
+    "new_entity_inline_bytes": 48,
+    "new_equip_inline_bytes": 8,
+    "old_entity_inline_bytes": 24,
+    "old_equip_inline_bytes": 48
+  },
+  "topic": "equipment_slots_compact"
+}
