@@ -1,0 +1,60 @@
+{
+  "corpus": {
+    "battery_ops_per_section": 64,
+    "distribution": {
+      "17-64": "6%",
+      "2-4": "17%",
+      "5-8": "8%",
+      "65-300": "2%",
+      "9-16": "12%",
+      "homogeneous": "55%"
+    },
+    "sections": 2400
+  },
+  "gates": [
+    {
+      "name": "全量迭代+变异指纹全等",
+      "passed": true
+    },
+    {
+      "name": "网络三元组指纹全等",
+      "passed": true
+    },
+    {
+      "detail": "2957408 → 2514016 B",
+      "name": "存活字节下降（主判据）",
+      "passed": true
+    },
+    {
+      "detail": "×0.935",
+      "name": "稳态写电池不劣化（≥0.91×）",
+      "passed": true
+    },
+    {
+      "detail": "13.52 → 24.90 ms（Packed2→Nibble 一次性升级）",
+      "name": "迁移相登记（非闸门，设计内成本）",
+      "passed": true
+    }
+  ],
+  "new": {
+    "battery_ms": 20.951,
+    "build_ms": 173.16819999999998,
+    "live_bytes": 2514016,
+    "qualifying_sections": 433,
+    "transition_ms": 24.8968
+  },
+  "old": {
+    "battery_ms": 19.5865,
+    "build_ms": 171.5034,
+    "live_bytes": 2957408,
+    "qualifying_sections": 433,
+    "transition_ms": 13.516200000000001
+  },
+  "outcome": "positive",
+  "round": 49,
+  "sizes": {
+    "nibble_buffer_bytes": 2048,
+    "packed2_buffer_bytes": 1024
+  },
+  "topic": "palette_packed2"
+}
