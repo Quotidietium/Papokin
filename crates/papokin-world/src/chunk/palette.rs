@@ -34,6 +34,26 @@ enum PaletteStorage<V, const DIM: usize> {
     /// 4 bit 索引，占用恰为 `Indexed` 的一半。缓冲区长度恒为
     /// `DIM * DIM * DIM / 2`。
     Nibble(Box<[u8]>),
+    /// 调色板不超过 4 态时的 2 bit 索引存储：每个字节装四个
+    /// 2 bit 索引，占用恰为 `Nibble` 的一半。缓冲区长度恒为
+    /// `DIM * DIM * DIM / 4`。
+    Packed2(Box<[u8]>),
+}
+
+/// 2 bit 索引读取：每字节装四个索引，低位在先。
+/// 线性索引与 `AbstractCube` 展平顺序一致。
+#[inline]
+const fn packed2_get(buf: &[u8], linear: usize) -> u8 {
+    (buf[linear / 4] >> (2 * (linear % 4))) & 0x03
+}
+
+/// 2 bit 索引写入，`value` 必须不超过 3。
+#[inline]
+fn packed2_set(buf: &mut [u8], linear: usize, value: u8) {
+    debug_assert!(value <= 0x03);
+    let byte = &mut buf[linear / 4];
+    let shift = 2 * (linear % 4);
+    *byte = (*byte & !(0x03 << shift)) | (value << shift);
 }
 
 /// 半字节索引读取：偶数线性索引取低半字节，奇数取高半字节。
@@ -72,7 +92,63 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
             PaletteStorage::Nibble(buf) => {
                 self.palette[nibble_get(buf, (y * DIM + z) * DIM + x) as usize]
             }
+            PaletteStorage::Packed2(buf) => {
+                self.palette[packed2_get(buf, (y * DIM + z) * DIM + x) as usize]
+            }
         }
+    }
+
+    /// 2 bit 索引存储升级为半字节索引存储（调色板超过 4 态）。
+    ///
+    /// 2 bit 存储的调色板至多 4 态，单次新增一项后至多 5 态，
+    /// 必然落在半字节索引区间内。展开走 256 项查找表：每个源
+    /// 字节（四格 2 bit 索引）一次查表得两个半字节字节，比逐格
+    /// 位移写入少四分之三的操作数。
+    fn upgrade_packed2_to_nibble(&mut self, linear: usize, new_index: usize) {
+        static PACKED2_EXPAND: [(u8, u8); 256] = {
+            let mut table = [(0u8, 0u8); 256];
+            let mut b = 0usize;
+            while b < 256 {
+                let byte = b as u8;
+                table[b] = (
+                    (byte & 0x03) | (((byte >> 2) & 0x03) << 4),
+                    ((byte >> 4) & 0x03) | (((byte >> 6) & 0x03) << 4),
+                );
+                b += 1;
+            }
+            table
+        };
+        let mut nib = vec![0u8; DIM * DIM * DIM / 2].into_boxed_slice();
+        if let PaletteStorage::Packed2(buf) = &self.storage {
+            let (front, _tail) = nib.as_chunks_mut::<2>();
+            for (src, pair) in buf.iter().zip(front) {
+                let (lo, hi) = PACKED2_EXPAND[*src as usize];
+                pair[0] = lo;
+                pair[1] = hi;
+            }
+        }
+        nibble_set(&mut nib, linear, new_index as u8);
+        self.storage = PaletteStorage::Nibble(nib);
+    }
+
+    /// 半字节索引存储升级为 u8 索引存储（调色板超过 16 态）。
+    ///
+    /// 半字节存储的调色板至多 16 态，单次新增一项后至多 17 态，
+    /// 必然落在 u8 索引区间内。
+    fn upgrade_nibble_to_indexed(&mut self, linear: usize, new_index: usize) {
+        let mut indices = Box::new([[[0u8; DIM]; DIM]; DIM]);
+        if let PaletteStorage::Nibble(buf) = &self.storage {
+            for (i, v) in indices
+                .as_flattened_mut()
+                .as_flattened_mut()
+                .iter_mut()
+                .enumerate()
+            {
+                *v = nibble_get(buf, i);
+            }
+        }
+        indices[linear / (DIM * DIM)][(linear / DIM) % DIM][linear % DIM] = new_index as u8;
+        self.storage = PaletteStorage::Indexed(indices);
     }
 
     ///返回 Original（原始值）
@@ -132,20 +208,14 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
                 if new_index <= 15 {
                     nibble_set(buf, (y * DIM + z) * DIM + x, new_index as u8);
                 } else {
-                    // 调色板超过 16 态：解包为 u8 索引存储。
-                    // 半字节存储的调色板至多 16 态，单次新增一项后至多
-                    // 17 态，必然落在 u8 索引区间内。
-                    let mut indices = Box::new([[[0u8; DIM]; DIM]; DIM]);
-                    for (i, v) in indices
-                        .as_flattened_mut()
-                        .as_flattened_mut()
-                        .iter_mut()
-                        .enumerate()
-                    {
-                        *v = nibble_get(buf, i);
-                    }
-                    indices[y][z][x] = new_index as u8;
-                    self.storage = PaletteStorage::Indexed(indices);
+                    self.upgrade_nibble_to_indexed((y * DIM + z) * DIM + x, new_index);
+                }
+            }
+            PaletteStorage::Packed2(buf) => {
+                if new_index <= 3 {
+                    packed2_set(buf, (y * DIM + z) * DIM + x, new_index as u8);
+                } else {
+                    self.upgrade_packed2_to_nibble((y * DIM + z) * DIM + x, new_index);
                 }
             }
         }
@@ -182,6 +252,13 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> HeterogeneousPaletteData<V
                     for linear in 0..DIM * DIM * DIM {
                         if nibble_get(buf, linear) as usize == last_index {
                             nibble_set(buf, linear, original_index as u8);
+                        }
+                    }
+                }
+                PaletteStorage::Packed2(buf) => {
+                    for linear in 0..DIM * DIM * DIM {
+                        if packed2_get(buf, linear) as usize == last_index {
+                            packed2_set(buf, linear, original_index as u8);
                         }
                     }
                 }
@@ -225,7 +302,18 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             Self::Homogeneous(palette[0])
         } else {
             // 异构立方体，存储完整数据
-            if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
+            if palette.len() <= 4 && std::mem::size_of::<V>() > 1 {
+                let mut buf = vec![0u8; Self::VOLUME / 4].into_boxed_slice();
+                for (i, v) in cube.as_flattened().as_flattened().iter().enumerate() {
+                    let idx = palette.iter().position(|p| p == v).unwrap_or(0);
+                    packed2_set(&mut buf, i, idx as u8);
+                }
+                Self::Heterogeneous(Box::new(HeterogeneousPaletteData {
+                    storage: PaletteStorage::Packed2(buf),
+                    palette,
+                    counts,
+                }))
+            } else if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
                 let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
                 for (i, v) in cube.as_flattened().as_flattened().iter().enumerate() {
                     let idx = palette.iter().position(|p| p == v).unwrap_or(0);
@@ -289,7 +377,13 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             return Self::Homogeneous(palette[0]);
         }
 
-        let storage = if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
+        let storage = if palette.len() <= 4 && std::mem::size_of::<V>() > 1 {
+            let mut buf = vec![0u8; Self::VOLUME / 4].into_boxed_slice();
+            for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
+                packed2_set(&mut buf, i, *idx);
+            }
+            PaletteStorage::Packed2(buf)
+        } else if palette.len() <= 16 && std::mem::size_of::<V>() > 1 {
             let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
             for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
                 nibble_set(&mut buf, i, *idx);
@@ -375,6 +469,25 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
                             })
                         })
                         .collect(),
+                    PaletteStorage::Packed2(buf) => (0..Self::VOLUME
+                        .div_ceil(blocks_per_i64 as usize))
+                        .map(|word| {
+                            let base = word * blocks_per_i64 as usize;
+                            (0..blocks_per_i64 as usize).fold(0, |acc, index| {
+                                let linear = base + index;
+                                if linear >= Self::VOLUME {
+                                    acc
+                                } else {
+                                    let key_index = packed2_get(buf, linear) as usize;
+                                    debug_assert!((1 << bits_per_entry) > key_index);
+
+                                    let packed_offset_index = (key_index as u64)
+                                        << (bits_per_entry as u64 * index as u64);
+                                    acc | packed_offset_index as i64
+                                }
+                            })
+                        })
+                        .collect(),
                 };
 
                 (data.palette.clone().into_boxed_slice(), packed_indices)
@@ -432,6 +545,17 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
             // 若 counts[0] 在越界情况下被跳过则加以修正（罕见）
             // 但实际上我们应当直接确保它是正确的。
 
+            if palette.len() <= 4 {
+                let mut buf = vec![0u8; Self::VOLUME / 4].into_boxed_slice();
+                for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
+                    packed2_set(&mut buf, i, *idx);
+                }
+                return Self::Heterogeneous(Box::new(HeterogeneousPaletteData {
+                    storage: PaletteStorage::Packed2(buf),
+                    palette: palette.to_vec(),
+                    counts,
+                }));
+            }
             if palette.len() <= 16 {
                 let mut buf = vec![0u8; Self::VOLUME / 2].into_boxed_slice();
                 for (i, idx) in indices.as_flattened().as_flattened().iter().enumerate() {
@@ -554,6 +678,9 @@ impl<V: Hash + Eq + Copy + Default, const DIM: usize> PalettedContainer<V, DIM> 
                 ),
                 PaletteStorage::Nibble(buf) => {
                     Box::new((0..Self::VOLUME).map(|i| data.palette[nibble_get(buf, i) as usize]))
+                }
+                PaletteStorage::Packed2(buf) => {
+                    Box::new((0..Self::VOLUME).map(|i| data.palette[packed2_get(buf, i) as usize]))
                 }
             },
         }
@@ -902,6 +1029,15 @@ mod tests {
         }
     }
 
+    fn storage_is_packed2(palette: &BlockPalette) -> bool {
+        match palette {
+            PalettedContainer::Homogeneous(_) => false,
+            PalettedContainer::Heterogeneous(data) => {
+                matches!(data.storage, PaletteStorage::Packed2(_))
+            }
+        }
+    }
+
     fn storage_is_dense(palette: &BlockPalette) -> bool {
         match palette {
             PalettedContainer::Homogeneous(_) => false,
@@ -981,7 +1117,7 @@ mod tests {
     }
 
     #[test]
-    fn small_palette_uses_nibble_storage_on_all_build_paths() {
+    fn small_palette_uses_packed2_storage_on_all_build_paths() {
         let states = [
             Block::AIR.default_state.id,
             Block::STONE.default_state.id,
@@ -993,11 +1129,11 @@ mod tests {
         for (i, state) in states.iter().enumerate() {
             mutated.set(i, 0, 0, *state);
         }
-        assert!(storage_is_nibble(&mutated));
+        assert!(storage_is_packed2(&mutated));
 
         // 批量构建路径
         let bulk = BlockPalette::from_fn(|x, _, _| states[x % states.len()]);
-        assert!(storage_is_nibble(&bulk));
+        assert!(storage_is_packed2(&bulk));
 
         // 磁盘反序列化路径（3 态调色板 + 4 bit 打包数据）
         let mut packed = vec![0i64; 256];
@@ -1008,8 +1144,56 @@ mod tests {
             }
         }
         let disk = BlockPalette::from_palette_and_packed_data(&states, &packed, 4);
-        assert!(storage_is_nibble(&disk));
+        assert!(storage_is_packed2(&disk));
         assert_eq!(disk.get(5, 0, 0), states[5 % states.len()]);
+    }
+
+    #[test]
+    fn five_state_palette_uses_nibble_storage_on_all_build_paths() {
+        let states: Vec<BlockStateId> = [
+            Block::AIR.default_state.id,
+            Block::STONE.default_state.id,
+            Block::WATER.default_state.id,
+            Block::DIRT.default_state.id,
+            Block::GRAVEL.default_state.id,
+        ]
+        .into_iter()
+        .chain(std::iter::empty())
+        .collect();
+
+        // 逐次变异路径：第 5 态触发 Packed2 → Nibble 升级
+        let mut mutated = BlockPalette::default();
+        for (i, state) in states.iter().enumerate() {
+            mutated.set(i, 0, 0, *state);
+        }
+        assert!(storage_is_nibble(&mutated));
+
+        // 批量构建路径
+        let bulk = BlockPalette::from_fn(|x, _, _| states[x % states.len()]);
+        assert!(storage_is_nibble(&bulk));
+    }
+
+    #[test]
+    fn packed2_upgrades_to_nibble_at_five_states() {
+        let states: Vec<BlockStateId> = (1u16..=5).map(BlockStateId::new_or_air).collect();
+        assert!(
+            states.iter().all(|s| *s != BlockStateId::default()),
+            "测试前提：状态池不含默认（空气）状态"
+        );
+        let mut palette = BlockPalette::default();
+        let mut model = [[[BlockStateId::default(); 16]; 16]; 16];
+
+        // 默认状态 + 3 个相异状态 = 4 态，恰为 2 bit 存储上限
+        for (i, state) in states.iter().take(3).enumerate() {
+            palette.set(i, 0, 0, *state);
+            model[0][0][i] = *state;
+        }
+        assert!(storage_is_packed2(&palette));
+
+        palette.set(0, 1, 0, states[3]);
+        model[1][0][0] = states[3];
+        assert!(storage_is_nibble(&palette));
+        assert_matches_model(&palette, &model);
     }
 
     #[test]
@@ -1081,14 +1265,14 @@ mod tests {
     }
 
     #[test]
-    fn nibble_demotes_to_homogeneous_when_single_state_remains() {
+    fn packed2_demotes_to_homogeneous_when_single_state_remains() {
         let a = BlockStateId::new_or_air(7);
         let b = BlockStateId::new_or_air(9);
         let mut palette = BlockPalette::default();
 
         palette.set(3, 3, 3, a);
         palette.set(4, 4, 4, b);
-        assert!(storage_is_nibble(&palette));
+        assert!(storage_is_packed2(&palette));
 
         palette.set(3, 3, 3, BlockStateId::default());
         palette.set(4, 4, 4, BlockStateId::default());
