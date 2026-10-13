@@ -111,6 +111,7 @@ const FILL_SLOT: u64 = 6;
 struct ModelStack {
     item_id: u32,
     count: u8,
+    #[allow(dead_code)] // 保真复刻：补丁字段随结构驻留但不参与本电池读路径
     patch: Option<Vec<String>>,
 }
 

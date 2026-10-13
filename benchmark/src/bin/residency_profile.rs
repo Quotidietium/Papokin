@@ -21,10 +21,10 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use papokin_data::item_stack::ItemStack;
 use papokin_data::BlockStateId;
 use papokin_data::data_component_impl::EquipmentSlot;
 use papokin_data::item::Item;
+use papokin_data::item_stack::ItemStack;
 use papokin_inventory::entity_equipment::EntityEquipment;
 use papokin_inventory::inventory::LazyItemSlots;
 use papokin_util::text::TextComponent;
@@ -188,9 +188,7 @@ fn main() {
     println!("ItemStack[裸]: {item_plain_b:>10.1} B · {item_plain_a:>5.2} alloc");
 
     // --- 文本面 ---
-    let (text_b, text_a) = measure(N, || {
-        TextComponent::text(String::from("实体名牌"))
-    });
+    let (text_b, text_a) = measure(N, || TextComponent::text(String::from("实体名牌")));
     let (trans_b, trans_a) = measure(N, || {
         TextComponent::translate("entity.minecraft.zombie", vec![])
     });
@@ -201,7 +199,10 @@ fn main() {
     // --- 世界规模投影 ---
     let per_chunk = section_bytes * 24.0 + biome_avg * 24.0 + 296.0 * 3.0 + 64.0;
     println!("\n=== 投影（每实例实测推算） ===");
-    println!("每千区块：区块存储面 ≈ {:.1} MB", per_chunk * 1000.0 / 1024.0 / 1024.0);
+    println!(
+        "每千区块：区块存储面 ≈ {:.1} MB",
+        per_chunk * 1000.0 / 1024.0 / 1024.0
+    );
     println!(
         "每万实体（装备 45% 四槽）：装备面 ≈ {:.1} MB",
         (equip_empty_b * 0.55 + equip_four_b * 0.45) * 10000.0 / 1024.0 / 1024.0

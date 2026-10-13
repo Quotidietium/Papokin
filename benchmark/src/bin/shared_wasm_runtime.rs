@@ -154,6 +154,7 @@ impl CacheWorker {
 
 /// Engine 内部结构模型：固定占用的类型注册表缓冲（结构事实是
 /// N 份 → 1 份；字节量按模型口径，见文件头「模型面」声明）。
+#[allow(dead_code)] // 字节量按模型口径计入驻留，读路径无意义
 struct ModelEngine {
     registry: Vec<u64>,
 }
@@ -168,6 +169,7 @@ impl ModelEngine {
 
 /// Linker 模型：982 条字符串键注册（生产为 WASI p2/p3 + HTTP +
 /// papokin 宿主 API 的全量 `add_to_linker` 注册面）。
+#[allow(dead_code)] // 注册表按模型口径计入驻留
 struct ModelLinker {
     functions: HashMap<Box<str>, u64>,
 }
@@ -183,6 +185,7 @@ impl ModelLinker {
 }
 
 /// 旧臂的单插件底座：各建一套 Engine/缓存线程/Linker + 独立 ticker。
+#[allow(dead_code)] // 底座成员按生产结构保真，守卫字段由 Drop 语义持有
 struct OldPluginBase {
     engine: Arc<ModelEngine>,
     cache_worker: Option<CacheWorker>,
@@ -193,6 +196,7 @@ struct OldPluginBase {
 }
 
 /// 新臂的共享底座：全进程一份，守卫计数随插件增减。
+#[allow(dead_code)] // 同 OldPluginBase：保真持有，经 Drop 释放
 struct SharedBase {
     engine: Arc<ModelEngine>,
     cache_worker: Option<CacheWorker>,

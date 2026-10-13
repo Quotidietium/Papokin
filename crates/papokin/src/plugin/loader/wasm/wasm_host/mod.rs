@@ -300,6 +300,7 @@ pub struct WasmPlugin {
     /// 一次共享 Engine 的 epoch）；守卫随插件存活，最后一个插件
     /// 卸载时定时任务才中止——期间 `set_epoch_budget` 的调用超时
     /// 始终有效。
+    #[allow(dead_code)] // 不变式字段：仅靠 Drop 守卫存活期保证 epoch 有效
     epoch_ticker: TickerGuard,
 }
 

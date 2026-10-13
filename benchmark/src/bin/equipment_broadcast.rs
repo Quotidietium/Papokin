@@ -240,6 +240,7 @@ fn build_and_serialize_new(equipment: &[Option<ItemStack>]) -> Report {
 
 /// 模型事件（复刻 `EntityEquipmentChangedEvent` 的分配面：
 /// 槽位名 `String` + `Option<ItemStack>` 克隆）。
+#[allow(dead_code)] // 字段按生产事件结构保真复刻，读路径在对应基准电池中
 struct ModelEquipmentEvent {
     entity_id: i32,
     slot: String,

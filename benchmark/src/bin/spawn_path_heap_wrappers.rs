@@ -209,6 +209,7 @@ pub struct Nav {
 #[allow(clippy::large_enum_variant)]
 enum NavInner {
     Ground(GroundNav),
+    #[allow(dead_code)] // 保真复刻：生产枚举含该变体，本电池只走地面路径
     Custom(Box<dyn NavRep>),
 }
 
