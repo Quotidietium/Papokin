@@ -1,0 +1,41 @@
+{
+  "clone_samples": 1000,
+  "decode_boundary": {
+    "all_folded_to_none": true,
+    "allocs_per": 11.0005,
+    "bytes_per": 111.0
+  },
+  "gates": {
+    "all_passed": true,
+    "allocs_ok": true,
+    "clone_ratio": 1.929976396538159,
+    "clone_resident_ok": true,
+    "construct_ratio": 2.0139398385913427,
+    "decode_fold_ok": true,
+    "fingerprint_ok": true,
+    "read_ratio": 2.166938997821351,
+    "resident_ok": true,
+    "styled_no_regression": true
+  },
+  "kind": "dual_arm",
+  "new": {
+    "clone_allocs_total": 7001,
+    "clone_bytes_total": 720000,
+    "plain_allocs_per": 2,
+    "plain_bytes_per": 111,
+    "styled_allocs_per": 3,
+    "styled_bytes_per": 279
+  },
+  "old": {
+    "clone_allocs_total": 13001,
+    "clone_bytes_total": 1083000,
+    "plain_allocs_per": 3,
+    "plain_bytes_per": 279,
+    "styled_allocs_per": 4,
+    "styled_bytes_per": 279
+  },
+  "outcome": "adopted",
+  "round": 51,
+  "samples": 2000,
+  "topic": "text_style_option"
+}
