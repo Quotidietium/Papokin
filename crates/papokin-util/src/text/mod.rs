@@ -46,7 +46,7 @@ impl<'de> Deserialize<'de> for TextComponent {
                     content: Box::new(TextContent::Text {
                         text: Cow::from(v.to_string()),
                     }),
-                    style: Box::default(),
+                    style: StyleField(None),
                     extra: vec![],
                 })
             }
@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for TextComponent {
 
                 Ok(TextComponentBase {
                     content: Box::new(TextContent::Text { text: "".into() }),
-                    style: Box::default(),
+                    style: StyleField(None),
                     extra: bases,
                 })
             }
@@ -81,22 +81,123 @@ impl Serialize for TextComponent {
     }
 }
 
+/// 文本组件样式字段的解码边界包装。
+///
+/// 线格式（JSON/经 JSON 的 NBT）未携带样式键时，serde 会物化一个全空样式盒；
+/// 该包装在解码完成时把空盒折叠回 `None`，保证「未设置样式」在内存中只有一种
+/// 表示（轮次 51）。序列化行为与 `Option<Box<Style>>` 完全一致；`Deref`/`DerefMut`
+/// 透传使既有字段访问代码无需感知包装。
+#[derive(Clone, Debug, Default)]
+pub struct StyleField(pub Option<Box<Style>>);
+
+impl std::ops::Deref for StyleField {
+    type Target = Option<Box<Style>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for StyleField {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Serialize for StyleField {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.0 {
+            Some(style) => serializer.serialize_some(style),
+            None => serializer.serialize_none(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for StyleField {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let style = Option::<Box<Style>>::deserialize(deserializer)?;
+        // 空样式盒折叠为 None，与运行时构造的未设置态统一
+        Ok(Self(style.filter(|style| !style.is_empty())))
+    }
+}
+
 /// 文本组件的基础结构，包含内容、样式和子组件。
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextComponentBase {
     /// 此组件的实际内容（文本、翻译等）。
     #[serde(flatten)]
     pub content: Box<TextContent>,
-    /// 应用于此组件的样式（颜色、粗体、点击事件等）。
+    /// 应用于此组件的样式（颜色、粗体、点击事件等）；`None` 表示未设置任何样式。
     #[serde(flatten)]
-    pub style: Box<Style>,
+    pub style: StyleField,
     /// 附加在此组件内容之后的子文本组件。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra: Vec<Self>,
 }
 
+/// 进程级共享的空样式：未设置样式的组件经 [`TextComponentBase::style`] 返回它的引用。
+///
+/// 用真 `const`（而非 `LazyLock`）构造：None 路径的读访问不付出
+/// 一次初始化状态检查，与堆上样式盒的读成本同阶。
+const EMPTY_STYLE: Style = Style {
+    color: None,
+    bold: None,
+    italic: None,
+    underlined: None,
+    strikethrough: None,
+    obfuscated: None,
+    insertion: None,
+    click_event: None,
+    hover_event: None,
+    font: None,
+    shadow_color: None,
+};
+
+impl PartialEq for TextComponentBase {
+    fn eq(&self, other: &Self) -> bool {
+        // 规范化：None 与全空样式盒语义等价，须归一后比较
+        self.content == other.content
+            && self.style_opt() == other.style_opt()
+            && self.extra == other.extra
+    }
+}
+
+impl Eq for TextComponentBase {}
+
+impl std::hash::Hash for TextComponentBase {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // 与 PartialEq 同源规范化，保证相等的值哈希一致
+        self.content.hash(state);
+        self.style_opt().hash(state);
+        self.extra.hash(state);
+    }
+}
+
 impl TextComponentBase {
+    /// 返回此组件的样式；未设置（`None`）时返回共享空样式的引用。
+    // 三行访问器：#[inline] 在跨 crate 依赖方实测未内联（读路径 ×0.86），
+    // always 消除调用开销后才达门（轮次 51 基准）
+    #[expect(clippy::inline_always, reason = "热路径零成本访问器，见轮次 51 基准")]
+    #[inline(always)]
+    #[must_use]
+    pub fn style(&self) -> &Style {
+        self.style.as_deref().unwrap_or(&EMPTY_STYLE)
+    }
+
+    /// 返回规范化样式引用：`None` 与全空样式一律折叠为 `None`。
+    #[inline]
+    #[must_use]
+    pub fn style_opt(&self) -> Option<&Style> {
+        self.style.as_deref().filter(|style| !style.is_empty())
+    }
+
+    /// 可变访问样式；未设置时按需物化空样式盒。
+    #[inline]
+    pub fn style_mut(&mut self) -> &mut Style {
+        self.style.get_or_insert_with(Box::default)
+    }
+
     /// 将此组件转换为最新 Minecraft 版本的 NBT 复合标签。
     #[must_use]
     pub fn to_nbt_compound(&self) -> papokin_nbt::NbtCompound {
@@ -111,6 +212,7 @@ impl TextComponentBase {
         version: &JavaMinecraftVersion,
     ) -> papokin_nbt::NbtCompound {
         let mut compound = papokin_nbt::NbtCompound::new();
+        let style = self.style();
         match &*self.content {
             TextContent::Text { text } => {
                 compound.put_string("text", text.to_string());
@@ -170,7 +272,7 @@ impl TextComponentBase {
             }
         }
 
-        if let Some(ref color) = self.style.color {
+        if let Some(ref color) = style.color {
             let color_str = match color {
                 Color::Reset => Some("reset".to_string()),
                 Color::Named(c) => Some(c.name().to_string()),
@@ -187,35 +289,35 @@ impl TextComponentBase {
             }
         }
 
-        if let Some(bold) = self.style.bold {
+        if let Some(bold) = style.bold {
             compound.put_byte("bold", i8::from(bold));
         }
-        if let Some(italic) = self.style.italic {
+        if let Some(italic) = style.italic {
             compound.put_byte("italic", i8::from(italic));
         }
-        if let Some(underlined) = self.style.underlined {
+        if let Some(underlined) = style.underlined {
             compound.put_byte("underlined", i8::from(underlined));
         }
-        if let Some(strikethrough) = self.style.strikethrough {
+        if let Some(strikethrough) = style.strikethrough {
             compound.put_byte("strikethrough", i8::from(strikethrough));
         }
-        if let Some(obfuscated) = self.style.obfuscated {
+        if let Some(obfuscated) = style.obfuscated {
             compound.put_byte("obfuscated", i8::from(obfuscated));
         }
-        if let Some(ref insertion) = self.style.insertion {
+        if let Some(ref insertion) = style.insertion {
             compound.put_string("insertion", insertion.clone());
         }
-        if let Some(ref font) = self.style.font {
+        if let Some(ref font) = style.font {
             compound.put_string("font", font.clone());
         }
 
         if *version >= JavaMinecraftVersion::V_1_21_4
-            && let Some(ref shadow) = self.style.shadow_color
+            && let Some(ref shadow) = style.shadow_color
         {
             compound.put_int("shadow_color", shadow.to_argb_int());
         }
 
-        if let Some(ref click) = self.style.click_event {
+        if let Some(ref click) = style.click_event {
             let mut click_tag = papokin_nbt::NbtCompound::new();
             match click {
                 ClickEvent::OpenUrl { url } => {
@@ -273,7 +375,7 @@ impl TextComponentBase {
             compound.put_compound(click_key, click_tag);
         }
 
-        if let Some(ref hover) = self.style.hover_event {
+        if let Some(ref hover) = style.hover_event {
             let mut hover_tag = papokin_nbt::NbtCompound::new();
             if *version >= JavaMinecraftVersion::V_1_21_5 {
                 match hover {
@@ -418,7 +520,7 @@ impl TextComponentBase {
         version: &JavaMinecraftVersion,
     ) -> papokin_nbt::tag::NbtTag {
         if *version >= JavaMinecraftVersion::V_1_20_3
-            && self.style.is_empty()
+            && self.style_opt().is_none()
             && self.extra.is_empty()
             && let TextContent::Text { text } = &*self.content
         {
@@ -433,7 +535,7 @@ impl TextComponentBase {
     #[must_use]
     pub fn to_json_value_for_version(&self, version: &JavaMinecraftVersion) -> serde_json::Value {
         if *version >= JavaMinecraftVersion::V_1_20_3
-            && self.style.is_empty()
+            && self.style_opt().is_none()
             && self.extra.is_empty()
             && let TextContent::Text { text } = &*self.content
         {
@@ -441,6 +543,7 @@ impl TextComponentBase {
         }
 
         let mut map = serde_json::Map::new();
+        let style = self.style();
 
         match &*self.content {
             TextContent::Text { text } => {
@@ -522,7 +625,7 @@ impl TextComponentBase {
             }
         }
 
-        if let Some(ref color) = self.style.color {
+        if let Some(ref color) = style.color {
             let color_str = match color {
                 Color::Reset => Some("reset".to_string()),
                 Color::Named(c) => Some(c.name().to_string()),
@@ -539,42 +642,42 @@ impl TextComponentBase {
             }
         }
 
-        if let Some(bold) = self.style.bold {
+        if let Some(bold) = style.bold {
             map.insert("bold".to_string(), serde_json::Value::Bool(bold));
         }
-        if let Some(italic) = self.style.italic {
+        if let Some(italic) = style.italic {
             map.insert("italic".to_string(), serde_json::Value::Bool(italic));
         }
-        if let Some(underlined) = self.style.underlined {
+        if let Some(underlined) = style.underlined {
             map.insert(
                 "underlined".to_string(),
                 serde_json::Value::Bool(underlined),
             );
         }
-        if let Some(strikethrough) = self.style.strikethrough {
+        if let Some(strikethrough) = style.strikethrough {
             map.insert(
                 "strikethrough".to_string(),
                 serde_json::Value::Bool(strikethrough),
             );
         }
-        if let Some(obfuscated) = self.style.obfuscated {
+        if let Some(obfuscated) = style.obfuscated {
             map.insert(
                 "obfuscated".to_string(),
                 serde_json::Value::Bool(obfuscated),
             );
         }
-        if let Some(ref insertion) = self.style.insertion {
+        if let Some(ref insertion) = style.insertion {
             map.insert(
                 "insertion".to_string(),
                 serde_json::Value::String(insertion.clone()),
             );
         }
-        if let Some(ref font) = self.style.font {
+        if let Some(ref font) = style.font {
             map.insert("font".to_string(), serde_json::Value::String(font.clone()));
         }
 
         if *version >= JavaMinecraftVersion::V_1_21_4
-            && let Some(ref shadow) = self.style.shadow_color
+            && let Some(ref shadow) = style.shadow_color
         {
             map.insert(
                 "shadow_color".to_string(),
@@ -582,7 +685,7 @@ impl TextComponentBase {
             );
         }
 
-        if let Some(ref click) = self.style.click_event {
+        if let Some(ref click) = style.click_event {
             let mut click_map = serde_json::Map::new();
             match click {
                 ClickEvent::OpenUrl { url } => {
@@ -691,7 +794,7 @@ impl TextComponentBase {
             map.insert(click_key.to_string(), serde_json::Value::Object(click_map));
         }
 
-        if let Some(ref hover) = self.style.hover_event {
+        if let Some(ref hover) = style.hover_event {
             let mut hover_map = serde_json::Map::new();
             if *version >= JavaMinecraftVersion::V_1_21_5 {
                 match hover {
@@ -999,7 +1102,7 @@ impl TextComponentBase {
                 .get_string("name")
                 .map_or_else(|| "player_sprite".to_string(), ToString::to_string),
         };
-        let style = combine_styles(*self.style, current_styles);
+        let style = combine_styles(*self.style.0.unwrap_or_default(), current_styles);
         let color = style.color;
         if let Some(color) = color {
             text = color.console_color(&text).to_string();
@@ -1154,7 +1257,7 @@ impl TextComponentBase {
                                     )
                                 },
                             }),
-                            style: Box::new(Style::default()),
+                            style: StyleField(None),
                             extra: vec![],
                         });
                     }
@@ -1181,7 +1284,9 @@ impl TextComponentBase {
 
         // 如果存在悬停事件，它也会被翻译
         let mut style = component.style;
-        Self::translate_hover_event(&mut style);
+        if let Some(style) = style.as_mut() {
+            Self::translate_hover_event(style);
+        }
 
         Self {
             content: component.content,
@@ -1222,7 +1327,7 @@ impl TextComponent {
     pub fn text<P: Into<Cow<'static, str>>>(plain: P) -> Self {
         Self(TextComponentBase {
             content: Box::new(TextContent::Text { text: plain.into() }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1242,7 +1347,7 @@ impl TextComponent {
                 translate: key.into(),
                 with: with.into().into_iter().map(|x| x.0).collect(),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1272,7 +1377,7 @@ impl TextComponent {
                 locale,
                 with: with.into().into_iter().map(|x| x.0).collect(),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1295,7 +1400,7 @@ impl TextComponent {
                 selector: selector.into(),
                 separator: separator.map(Into::into),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1313,7 +1418,7 @@ impl TextComponent {
             content: Box::new(TextContent::Keybind {
                 keybind: keybind.into(),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1342,7 +1447,7 @@ impl TextComponent {
     pub fn from_content(content: TextContent) -> Self {
         Self(TextComponentBase {
             content: Box::new(content),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1358,7 +1463,7 @@ impl TextComponent {
     pub fn add_text<P: Into<Cow<'static, str>>>(mut self, text: P) -> Self {
         self.0.extra.push(TextComponentBase {
             content: Box::new(TextContent::Text { text: text.into() }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         });
         self
@@ -1399,7 +1504,7 @@ impl TextComponent {
             content: Box::new(TextContent::Text {
                 text: Cow::Owned(with_resolved_fields),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1424,7 +1529,7 @@ impl TextComponent {
                 profile: ProfileNbt(profile),
                 hat,
             }),
-            style: Box::default(),
+            style: StyleField(None),
             extra: vec![],
         })
     }
@@ -1506,7 +1611,7 @@ impl TextComponent {
     /// 设置了颜色的组件。
     #[must_use]
     pub fn color(mut self, color: Color) -> Self {
-        self.0.style.color = Some(color);
+        self.0.style_mut().color = Some(color);
         self
     }
 
@@ -1519,7 +1624,7 @@ impl TextComponent {
     /// 设置了颜色的组件。
     #[must_use]
     pub fn color_named(mut self, color: color::NamedColor) -> Self {
-        self.0.style.color = Some(Color::Named(color));
+        self.0.style_mut().color = Some(Color::Named(color));
         self
     }
 
@@ -1532,7 +1637,7 @@ impl TextComponent {
     /// 设置了颜色的组件。
     #[must_use]
     pub fn color_rgb(mut self, color: color::RGBColor) -> Self {
-        self.0.style.color = Some(Color::Rgb(color));
+        self.0.style_mut().color = Some(Color::Rgb(color));
         self
     }
 
@@ -1645,14 +1750,14 @@ impl TextComponent {
                 style: self.0.style.clone(),
                 extra: vec![],
             };
-            char_base.style.color = Some(Color::Rgb(rgb));
+            char_base.style_mut().color = Some(Color::Rgb(rgb));
             colored_extra.push(char_base);
         }
 
         self.0.content = Box::new(TextContent::Text { text: "".into() });
         self.0.extra = colored_extra;
-        self.0.style.click_event = None;
-        self.0.style.hover_event = None;
+        self.0.style_mut().click_event = None;
+        self.0.style_mut().hover_event = None;
         self
     }
 
@@ -1672,7 +1777,7 @@ impl TextComponent {
     /// 启用了粗体的组件。
     #[must_use]
     pub fn bold(mut self) -> Self {
-        self.0.style.bold = Some(true);
+        self.0.style_mut().bold = Some(true);
         self
     }
 
@@ -1682,7 +1787,7 @@ impl TextComponent {
     /// 启用了斜体的组件。
     #[must_use]
     pub fn italic(mut self) -> Self {
-        self.0.style.italic = Some(true);
+        self.0.style_mut().italic = Some(true);
         self
     }
 
@@ -1692,7 +1797,7 @@ impl TextComponent {
     /// 启用了下划线的组件。
     #[must_use]
     pub fn underlined(mut self) -> Self {
-        self.0.style.underlined = Some(true);
+        self.0.style_mut().underlined = Some(true);
         self
     }
 
@@ -1702,7 +1807,7 @@ impl TextComponent {
     /// 启用了删除线的组件。
     #[must_use]
     pub fn strikethrough(mut self) -> Self {
-        self.0.style.strikethrough = Some(true);
+        self.0.style_mut().strikethrough = Some(true);
         self
     }
 
@@ -1712,7 +1817,7 @@ impl TextComponent {
     /// 启用了模糊处理的组件。
     #[must_use]
     pub fn obfuscated(mut self) -> Self {
-        self.0.style.obfuscated = Some(true);
+        self.0.style_mut().obfuscated = Some(true);
         self
     }
 
@@ -1729,7 +1834,7 @@ impl TextComponent {
     /// 设置了插入文本的组件。
     #[must_use]
     pub fn insertion(mut self, text: String) -> Self {
-        self.0.style.insertion = Some(text);
+        self.0.style_mut().insertion = Some(text);
         self
     }
 
@@ -1745,7 +1850,7 @@ impl TextComponent {
     /// 设置了点击事件的组件。
     #[must_use]
     pub fn click_event(mut self, event: ClickEvent) -> Self {
-        self.0.style.click_event = Some(event);
+        self.0.style_mut().click_event = Some(event);
         self
     }
 
@@ -1760,7 +1865,7 @@ impl TextComponent {
     /// 设置了悬停事件的组件。
     #[must_use]
     pub fn hover_event(mut self, event: HoverEvent) -> Self {
-        self.0.style.hover_event = Some(event);
+        self.0.style_mut().hover_event = Some(event);
         self
     }
 
@@ -1779,7 +1884,7 @@ impl TextComponent {
     /// 设置了字体的组件。
     #[must_use]
     pub fn font(mut self, resource_location: String) -> Self {
-        self.0.style.font = Some(resource_location);
+        self.0.style_mut().font = Some(resource_location);
         self
     }
 
@@ -1792,7 +1897,7 @@ impl TextComponent {
     /// 设置了阴影颜色的组件。
     #[must_use]
     pub fn shadow_color(mut self, color: ARGBColor) -> Self {
-        self.0.style.shadow_color = Some(color);
+        self.0.style_mut().shadow_color = Some(color);
         self
     }
 }
@@ -1908,10 +2013,68 @@ pub enum TextContent {
 /// 文本组件实现的测试。
 #[cfg(test)]
 mod test {
+    use crate::text::StyleField;
     use crate::text::click::ClickEvent;
     use crate::text::{TextComponent, color::NamedColor, hover::HoverEvent};
     use crate::version::JavaMinecraftVersion;
     use std::borrow::Cow;
+
+    /// 轮次 51：空样式两态（`None` 与 `Some(空盒)`）必须语义等价且哈希一致。
+    #[test]
+    fn empty_style_none_and_empty_box_are_equivalent() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let none_style = TextComponent::text("消息".to_string());
+        let mut boxed_empty = TextComponent::text("消息".to_string());
+        boxed_empty.0.style = StyleField(Some(Box::default()));
+
+        assert_eq!(none_style, boxed_empty);
+        let hash_of = |comp: &TextComponent| {
+            let mut hasher = DefaultHasher::new();
+            comp.hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_eq!(hash_of(&none_style), hash_of(&boxed_empty));
+
+        // 规范化访问器把两态都折叠为 None
+        assert!(none_style.0.style_opt().is_none());
+        assert!(boxed_empty.0.style_opt().is_none());
+        // 读访问器仍给出空样式视图
+        assert!(none_style.0.style().is_empty());
+    }
+
+    /// 轮次 51：serde 往返后未设样式的组件不得物化样式盒，
+    /// 带样式的组件往返保持样式无损。
+    #[test]
+    fn serde_roundtrip_preserves_style_option() {
+        let plain: TextComponent = serde_json::from_str("\"纯文本\"").unwrap();
+        assert!(plain.0.style.is_none());
+        let back: TextComponent =
+            serde_json::from_str(&serde_json::to_string(&plain).unwrap()).unwrap();
+        assert_eq!(back, plain);
+        assert!(back.0.style.is_none());
+
+        let styled: TextComponent =
+            serde_json::from_str("{\"text\":\"彩色\",\"color\":\"red\"}").unwrap();
+        assert_eq!(
+            styled.0.style.as_ref().unwrap().color,
+            styled.0.style().color
+        );
+        let styled_back: TextComponent =
+            serde_json::from_str(&serde_json::to_string(&styled).unwrap()).unwrap();
+        assert_eq!(styled, styled_back);
+        assert!(styled_back.0.style.is_some());
+    }
+
+    /// 轮次 51：`style_mut` 首次写入时按需物化样式盒。
+    #[test]
+    fn style_mut_materializes_on_demand() {
+        let mut comp = TextComponent::text("按需".to_string());
+        assert!(comp.0.style.is_none());
+        comp.0.style_mut().bold = Some(true);
+        assert_eq!(comp.0.style.as_ref().unwrap().bold, Some(true));
+    }
 
     #[test]
     fn serialize_text_component() {

@@ -254,7 +254,7 @@ impl SignText {
                 continue;
             }
             if let Ok(component) = serde_json::from_str::<TextComponent>(msg)
-                && let Some(ClickEvent::RunCommand { .. }) = &component.0.style.click_event
+                && let Some(ClickEvent::RunCommand { .. }) = &component.0.style().click_event
             {
                 return true;
             }

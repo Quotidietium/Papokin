@@ -667,8 +667,8 @@ fn is_plain_or_empty_text(text: &str) -> bool {
     }
     match serde_json::from_str::<TextComponent>(text) {
         Ok(component) => {
-            component.0.style.click_event.is_none()
-                && component.0.style.hover_event.is_none()
+            component.0.style().click_event.is_none()
+                && component.0.style().hover_event.is_none()
                 && component.0.extra.is_empty()
                 && matches!(
                     *component.0.content,
@@ -701,7 +701,7 @@ fn execute_click_commands_if_present(
             continue;
         }
         if let Ok(component) = serde_json::from_str::<TextComponent>(msg)
-            && let Some(ClickEvent::RunCommand { command }) = &component.0.style.click_event
+            && let Some(ClickEvent::RunCommand { command }) = &component.0.style().click_event
         {
             // 让插件预处理（并可选择取消/重写）该
             // 告示牌的点击命令，然后才运行。

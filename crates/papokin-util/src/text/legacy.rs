@@ -221,9 +221,10 @@ impl TextComponent {
         locale: Locale,
     ) -> String {
         let mut text = String::new();
+        let style = self.0.style();
 
         // 1. 颜色格式化
-        if let Some(color) = &self.0.style.color {
+        if let Some(color) = &style.color {
             match color {
                 Color::Named(named) => {
                     let _ = write!(text, "{code_symbol}{}", named.to_legacy_char());
@@ -247,19 +248,19 @@ impl TextComponent {
         }
 
         // 2. 样式格式化
-        if self.0.style.bold == Some(true) {
+        if style.bold == Some(true) {
             let _ = write!(text, "{code_symbol}l");
         }
-        if self.0.style.italic == Some(true) {
+        if style.italic == Some(true) {
             let _ = write!(text, "{code_symbol}o");
         }
-        if self.0.style.underlined == Some(true) {
+        if style.underlined == Some(true) {
             let _ = write!(text, "{code_symbol}n");
         }
-        if self.0.style.strikethrough == Some(true) {
+        if style.strikethrough == Some(true) {
             let _ = write!(text, "{code_symbol}m");
         }
-        if self.0.style.obfuscated == Some(true) {
+        if style.obfuscated == Some(true) {
             let _ = write!(text, "{code_symbol}k");
         }
 
@@ -314,7 +315,7 @@ mod test {
         } else {
             panic!("Expected Text content");
         }
-        assert_eq!(comp.0.extra[0].style.color, Color::from_hex_str("fc0000"));
+        assert_eq!(comp.0.extra[0].style().color, Color::from_hex_str("fc0000"));
     }
 
     #[test]
@@ -322,10 +323,10 @@ mod test {
         let comp = TextComponent::from_legacy_string_with_code("&cRed &lBold", '&');
         assert_eq!(comp.0.extra.len(), 2);
         assert_eq!(
-            comp.0.extra[0].style.color,
+            comp.0.extra[0].style().color,
             Some(Color::Named(NamedColor::Red))
         );
-        assert_eq!(comp.0.extra[1].style.bold, Some(true));
+        assert_eq!(comp.0.extra[1].style().bold, Some(true));
     }
 
     #[test]

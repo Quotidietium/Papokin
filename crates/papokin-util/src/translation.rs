@@ -12,7 +12,7 @@ use std::{
 /// - 支持对命令描述进行翻译
 /// - 将自定义翻译与插件 API 集成
 /// - 尝试优化 '`to_translated`' 的代码
-use crate::text::{TextComponentBase, TextContent, style::Style};
+use crate::text::{StyleField, TextComponentBase, TextContent};
 
 static VANILLA_EN_US_JSON: &str = include_str!("../../../assets/en_us_java.json");
 static PAPOKIN_EN_US_JSON: &str = include_str!("../../../assets/translations/en_us.json");
@@ -199,7 +199,7 @@ pub fn reorder_substitutions(
     fn literal(text: &'static str) -> TextComponentBase {
         TextComponentBase {
             content: Box::new(TextContent::Text { text: text.into() }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         }
     }
@@ -709,14 +709,14 @@ impl FromStr for Locale {
 #[cfg(test)]
 mod tests {
     use super::{Locale, TRANSLATIONS, get_translation_text, reorder_substitutions};
-    use crate::text::{TextComponentBase, TextContent, style::Style};
+    use crate::text::{StyleField, TextComponentBase, TextContent};
 
     fn arg(text: &str) -> TextComponentBase {
         TextComponentBase {
             content: Box::new(TextContent::Text {
                 text: text.to_string().into(),
             }),
-            style: Box::new(Style::default()),
+            style: StyleField(None),
             extra: vec![],
         }
     }

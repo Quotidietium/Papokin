@@ -25055,10 +25055,10 @@ impl Advancement {
             Some(display) => {
                 let mut over = display.get_title();
                 let color = Color::Named(display.frame_type.get_color());
-                *over.0.style = Style::default().color(color);
+                *over.0.style_mut() = Style::default().color(color);
                 over = over.add_text("\n").add_child(display.get_description());
                 let mut text = display.get_title();
-                text.0.style.hover_event = Some(HoverEvent::show_text(over));
+                text.0.style_mut().hover_event = Some(HoverEvent::show_text(over));
                 Some(text.wrap_in_square_brackets().color(color))
             }
             None => None,

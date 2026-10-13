@@ -238,7 +238,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         color: NamedColor,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.color =
+        self.get_text_mut(&res)?.provider.0.style_mut().color =
             Some(Color::Named(map_named_color(color)));
         Ok(())
     }
@@ -248,7 +248,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         color: RgbColor,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.color =
+        self.get_text_mut(&res)?.provider.0.style_mut().color =
             Some(Color::Rgb(color::RGBColor::new(color.r, color.g, color.b)));
         Ok(())
     }
@@ -285,12 +285,12 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
     }
 
     async fn bold(&mut self, res: Resource<TextComponent>, value: bool) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.bold = Some(value);
+        self.get_text_mut(&res)?.provider.0.style_mut().bold = Some(value);
         Ok(())
     }
 
     async fn italic(&mut self, res: Resource<TextComponent>, value: bool) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.italic = Some(value);
+        self.get_text_mut(&res)?.provider.0.style_mut().italic = Some(value);
         Ok(())
     }
 
@@ -299,7 +299,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         value: bool,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.underlined = Some(value);
+        self.get_text_mut(&res)?.provider.0.style_mut().underlined = Some(value);
         Ok(())
     }
 
@@ -308,7 +308,11 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         value: bool,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.strikethrough = Some(value);
+        self.get_text_mut(&res)?
+            .provider
+            .0
+            .style_mut()
+            .strikethrough = Some(value);
         Ok(())
     }
 
@@ -317,7 +321,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         value: bool,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.obfuscated = Some(value);
+        self.get_text_mut(&res)?.provider.0.style_mut().obfuscated = Some(value);
         Ok(())
     }
 
@@ -326,12 +330,12 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         text: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.insertion = Some(text);
+        self.get_text_mut(&res)?.provider.0.style_mut().insertion = Some(text);
         Ok(())
     }
 
     async fn font(&mut self, res: Resource<TextComponent>, font: String) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.font = Some(font);
+        self.get_text_mut(&res)?.provider.0.style_mut().font = Some(font);
         Ok(())
     }
 
@@ -340,7 +344,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         color: ArgbColor,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.shadow_color =
+        self.get_text_mut(&res)?.provider.0.style_mut().shadow_color =
             Some(color::ARGBColor::new(color.a, color.r, color.g, color.b));
         Ok(())
     }
@@ -350,7 +354,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         url: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event = Some(ClickEvent::OpenUrl {
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event = Some(ClickEvent::OpenUrl {
             url: Cow::Owned(url),
         });
         Ok(())
@@ -361,7 +365,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         path: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event = Some(ClickEvent::OpenFile {
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event = Some(ClickEvent::OpenFile {
             path: Cow::Owned(path),
         });
         Ok(())
@@ -372,9 +376,10 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         command: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event = Some(ClickEvent::RunCommand {
-            command: Cow::Owned(command),
-        });
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event =
+            Some(ClickEvent::RunCommand {
+                command: Cow::Owned(command),
+            });
         Ok(())
     }
 
@@ -383,9 +388,10 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         command: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event = Some(ClickEvent::SuggestCommand {
-            command: Cow::Owned(command),
-        });
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event =
+            Some(ClickEvent::SuggestCommand {
+                command: Cow::Owned(command),
+            });
         Ok(())
     }
 
@@ -394,7 +400,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         page: u32,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event =
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event =
             Some(ClickEvent::ChangePage { page });
         Ok(())
     }
@@ -404,9 +410,10 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         text: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.click_event = Some(ClickEvent::CopyToClipboard {
-            value: Cow::Owned(text),
-        });
+        self.get_text_mut(&res)?.provider.0.style_mut().click_event =
+            Some(ClickEvent::CopyToClipboard {
+                value: Cow::Owned(text),
+            });
         Ok(())
     }
 
@@ -416,7 +423,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         text: Resource<TextComponent>,
     ) -> wasmtime::Result<()> {
         let hover_tc = self.take_text(&text)?.provider;
-        self.get_text_mut(&res)?.provider.0.style.hover_event = Some(HoverEvent::ShowText {
+        self.get_text_mut(&res)?.provider.0.style_mut().hover_event = Some(HoverEvent::ShowText {
             value: vec![hover_tc.0],
         });
         Ok(())
@@ -427,7 +434,7 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
         res: Resource<TextComponent>,
         item: String,
     ) -> wasmtime::Result<()> {
-        self.get_text_mut(&res)?.provider.0.style.hover_event = Some(HoverEvent::ShowItem {
+        self.get_text_mut(&res)?.provider.0.style_mut().hover_event = Some(HoverEvent::ShowItem {
             id: Cow::Owned(item),
             count: None,
         });
@@ -445,11 +452,12 @@ impl papokin::plugin::text::HostTextComponent for PluginHostState {
             Some(r) => Some(vec![self.take_text(&r)?.provider.0]),
             None => None,
         };
-        self.get_text_mut(&res)?.provider.0.style.hover_event = Some(HoverEvent::ShowEntity {
-            id: Cow::Owned(entity_type),
-            uuid: Cow::Owned(id),
-            name: name_val,
-        });
+        self.get_text_mut(&res)?.provider.0.style_mut().hover_event =
+            Some(HoverEvent::ShowEntity {
+                id: Cow::Owned(entity_type),
+                uuid: Cow::Owned(id),
+                name: name_val,
+            });
         Ok(())
     }
 
