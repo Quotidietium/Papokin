@@ -1,0 +1,24 @@
+{
+  "kind": "recon",
+  "outcome": "recon",
+  "per_instance_bytes": {
+    "biome_palette_avg": 31.200000000000003,
+    "block_palette_weighted": 1008.56,
+    "chest_empty": 24.0,
+    "chest_full": 1104.0,
+    "chest_half": 1104.0,
+    "equipment_empty": 8.0,
+    "equipment_four_slots": 328.0,
+    "item_stack_plain": 40.0,
+    "text_component_text": 276.0,
+    "text_component_translate": 264.0
+  },
+  "projections": {
+    "per_1000_chunks_mb": 24.706115722656246,
+    "per_1000_empty_chests_mb": 0.02288818359375,
+    "per_10k_entities_equipment_mb": 1.4495849609375
+  },
+  "round": 50,
+  "samples": 2000,
+  "topic": "residency_profile"
+}
